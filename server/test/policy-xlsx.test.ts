@@ -72,3 +72,34 @@ test('XLSX controls resolve x14 cache ids and purge hidden source timeline dates
   expect(await pkg.text('xl/slicerCaches/slicerCache1.xml')).toContain('VISIBLE')
   expect(await pkg.text('xl/timelineCaches/timelineCache1.xml')).not.toContain('SECRET_DATE')
 })
+
+// Ruling B2 (Task 6 fix round 1): a sheet view's pane `state` is layout (ECMA-376 §18.3.1.66), not visibility.
+const paneSheet = (pane: string) => ({
+  'xl/workbook.xml': '<workbook xmlns:r="rel"><sheets><sheet name="Visible" sheetId="1" r:id="s1"/></sheets></workbook>',
+  'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="s1" Target="worksheets/sheet1.xml"/></Relationships>',
+  'xl/worksheets/sheet1.xml': `<worksheet><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>VISIBLE</t></is></c></row></sheetData></worksheet>`,
+})
+test.each(['frozen', 'frozenSplit', 'split'])('a pane with state="%s" opens under visible-only and survives projection', async (state) => {
+  const pane = `<pane xSplit="2" ySplit="3" topLeftCell="C4" activePane="bottomRight" state="${state}"/>`
+  const { pkg, diagnostics } = await projected(paneSheet(pane))
+  const sheet = await pkg.text('xl/worksheets/sheet1.xml')
+  expect(sheet).toContain(pane)
+  expect(sheet).toContain('VISIBLE')
+  expect(diagnostics.filter((d) => d.code === 'hidden-unrecognised')).toEqual([])
+})
+test('control: an unknown pane state, and an unknown state flag on a drawable, are still treated as before', async () => {
+  // A pane state outside the schema's three is not owned: there is no drawable to remove, so the part refuses.
+  let refused: unknown
+  try { await projected(paneSheet('<pane xSplit="1" state="hidden"/>')) } catch (e) { refused = e }
+  expect(String(refused)).toContain('unowned visibility flag pane state=hidden')
+  // An unknown state flag on a drawable (a row) removes the drawable, exactly as before the pane rule.
+  const { pkg, diagnostics } = await projected({
+    ...paneSheet('<pane ySplit="1" state="frozen"/>'),
+    'xl/worksheets/sheet1.xml': '<worksheet><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" state="frozen"/></sheetView></sheetViews><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>VISIBLE</t></is></c></row><row r="2" state="hidden"><c r="A2" t="inlineStr"><is><t>SECRET_STATE</t></is></c></row></sheetData></worksheet>',
+  })
+  const sheet = await pkg.text('xl/worksheets/sheet1.xml')
+  expect(sheet).not.toContain('SECRET_STATE')
+  expect(sheet).toContain('VISIBLE')
+  expect(sheet).toContain('state="frozen"')
+  expect(diagnostics.some((d) => d.code === 'hidden-unrecognised' && d.attr === 'state' && d.value === 'hidden')).toBe(true)
+})

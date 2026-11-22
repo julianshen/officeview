@@ -52,6 +52,12 @@ export function projectXlsx(ctx: Context): void {
         ranges.push(range); sheet?.cols.push(range)
         ctx.handled.add(col); diagnostic(ctx, part, col, 'hidden')
       }
+      // Ruling B2 (ECMA-376 §18.3.1.66): a sheet view's `<pane state="frozen|frozenSplit|split">` describes layout, not
+      // visibility, so the generic `state` flag scan (visibility-scan.ts) does not apply to it. Any other pane state
+      // value is left to the scan, which still refuses it.
+      for (const view of all(root, 'sheetView')) for (const pane of view.children) {
+        if (local(pane.name) === 'pane' && ['frozen', 'frozenSplit', 'split'].includes(attr(pane, 'state') ?? 'split')) ctx.handled.add(pane)
+      }
       let rowIndex = 0
       for (const row of all(root, 'row')) {
         rowIndex = Number(attr(row, 'r') ?? rowIndex + 1)

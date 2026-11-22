@@ -74,9 +74,7 @@ const rect = (m: { minRow: number; maxRow: number; minCol: number; maxCol: numbe
 describe('sheet-layout (S4 §6.4)', () => {
   test('layout round-trips and matches the server geometry', async () => {
     const rowsAt = [0, 1, 2, 9, 10, 20, 499, 65_535, 1_048_575], colsAt = [0, 1, 99, 16_383]
-    // FINDING (pre-existing, Task 6 report): a frozen pane's `state="frozen"` fails the visible-only projection's
-    // visibility scan (`unowned visibility flag pane state=frozen`), so the frozen fixture is served under 'full'.
-    const cases: Array<[() => Promise<Uint8Array>, Policy, boolean]> = [[grid500x100, 'visible-only', true], [millionRows, 'visible-only', false], [frozenMerges, 'full', false]]
+    const cases: Array<[() => Promise<Uint8Array>, Policy, boolean]> = [[grid500x100, 'visible-only', true], [millionRows, 'visible-only', false], [frozenMerges, 'visible-only', false]]
     for (const [make, policy, unvalidated] of cases) {
       const bytes = await make()
       const layout = decoded(await layoutOf(bytes, { policy, unvalidated }))
@@ -92,7 +90,7 @@ describe('sheet-layout (S4 §6.4)', () => {
       expect(client.drawingsIn(0, 0, 1e6, 1e6, 1000)).toEqual([])
     }
     // The fixtures really exercise sizes, frozen panes and merges.
-    const fm = decoded(await layoutOf(await frozenMerges(), { policy: 'full' }))
+    const fm = decoded(await layoutOf(await frozenMerges()))
     expect(fm.frozen).toEqual({ rows: 3, cols: 2, topRow: 3, leftCol: 2 })
     expect(fm.merges).toHaveLength(FROZEN_MERGES.length)
     expect(fm.rows.length).toBeGreaterThan(0)
