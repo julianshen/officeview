@@ -223,3 +223,33 @@ describe('session clock (R9)', () => {
     await b.stop()
   }, 60_000)
 })
+
+describe('a workbook a tiles manifest cannot list is served in units mode (fix round 1)', () => {
+  const unitsUnderTiles = async (doc: Uint8Array) => {
+    const h = await start({ doc })
+    const { c, m } = await open(h, TILES)
+    expect(m.kind).toBe('xlsx')
+    expect(Object.keys(m).sort()).toEqual(STAGE3_KEYS)
+    // Fixed per sid: units ops are served.
+    c.unit(80, 0, 1)
+    expect((await c.unitMessages(80)).unit.unitId).toBe(0)
+    c.close(); await h.stop()
+  }
+  test('257 sheets', async () => {
+    const doc = await buildXlsx(Array.from({ length: 257 }, (_, i) => ({ name: `S${i}`, rows: [{ r: 1, cells: [{ ref: 'A1', v: i }] }] })), [])
+    await unitsUnderTiles(doc)
+  }, 120_000)
+  test('a 32-character sheet name', async () => {
+    const doc = await buildXlsx([{ name: 'N'.repeat(32), rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }] }], [])
+    await unitsUnderTiles(doc)
+  }, 60_000)
+  test('256 sheets and a 31-character name still get tiles', async () => {
+    const doc = await buildXlsx(Array.from({ length: 256 }, (_, i) => ({ name: i === 0 ? 'N'.repeat(31) : `S${i}`, rows: [{ r: 1, cells: [{ ref: 'A1', v: i }] }] })), [])
+    const h = await start({ doc })
+    const { c, m } = await open(h, TILES)
+    expect(m.sheetMode).toBe('tiles')
+    expect(m.sheets!.length).toBe(256)
+    expect(m.sheets![0]!.name).toBe('N'.repeat(31))
+    c.close(); await h.stop()
+  }, 120_000)
+})

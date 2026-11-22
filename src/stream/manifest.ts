@@ -1,7 +1,7 @@
 /** The §6.2 rule-3 MANIFEST JSON (inside a kind-1 OVSD frame) and its
  * fail-closed client validation: numbers range-checked, unit sizes 1..8192,
  * enums closed, token ≤ 512 chars, unknown fields ignored. */
-import { TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from './sheet-wire'
+import { MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from './sheet-wire'
 
 export interface Manifest {
   v: 1
@@ -39,8 +39,6 @@ export interface ManifestUnit { w: number; h: number; hidden?: true; anim?: true
 /** Piece 5 (spec §6): the audio limits, verbatim (30 min, 32 MiB). */
 export const MEDIA_AUDIO_CAPS = Object.freeze({ maxSeconds: 1800, maxBytes: 33554432 } as const)
 export interface MediaCaps { audio: { maxSeconds: 1800; maxBytes: 33554432 } }
-/** Tiles mode: at most 256 sheets, each name at most 31 characters (Excel's own bound). */
-export const MAX_SHEETS = 256, SHEET_NAME_CHARS = 31
 export type ManifestResult = { ok: true; manifest: Manifest } | { ok: false; field: string }
 
 export const MANIFEST_CAP = 256 * 1024

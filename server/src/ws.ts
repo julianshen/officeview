@@ -46,7 +46,7 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
+import { MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -338,7 +338,7 @@ export function createStreamServer(o: StreamServerOptions) {
     // R9: the session clock, before anything is charged or issued; an invalid zone refuses the open.
     let clock: SheetClock
     try { clock = sheetClockAt(now(), zoneOf(decision) as string) } catch { return close(ws, 'policy-refused') }
-    const sheetMode = sheetModeOf(admitted.format, features)
+    const requestedMode = sheetModeOf(admitted.format, features)
     const docRef = await docRefOf(o.keys.kDoc, resolved.bytes)
     if (gone(ws)) return
     // Charge the document BEFORE parsing; one that cannot fit is refused at admission.
@@ -347,10 +347,14 @@ export function createStreamServer(o: StreamServerOptions) {
     let committed = false
     try {
       let opened
-      try { opened = admitted.format === 'xlsx' ? await o.pool.open(docRef, resolved.bytes, policy.contentPolicy, { sheetMode }) : await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
+      try { opened = admitted.format === 'xlsx' ? await o.pool.open(docRef, resolved.bytes, policy.contentPolicy, { sheetMode: requestedMode }) : await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
         return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
       }
       if (gone(ws)) return
+      // Fix round 1: a workbook a tiles manifest cannot list (over 256 sheets, or a name over 31 characters) is served
+      // in units mode; its paintables build on first units use (R5).
+      const sheets = opened.sheets ?? []
+      const sheetMode: SheetMode = requestedMode === 'tiles' && (sheets.length > MAX_SHEETS || sheets.some((n) => n.length > SHEET_NAME_CHARS)) ? 'units' : requestedMode
       let forensic: Issued | undefined
       if (policy.forensicMark) {
         try { forensic = audit.issue(o.keys.kMsg, o.keys.keyGeneration) } catch (e) {

@@ -17,3 +17,6 @@ export const TILE_ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3,
 export type TilePalette = typeof TILE_PALETTES[number]
 /** HELLO `features`: at most 16 entries, each at most 32 characters (R12). */
 export const HELLO_FEATURES_MAX = 16, HELLO_FEATURE_CHARS = 32
+/** A tiles manifest lists at most 256 sheets, each name at most 31 characters (Excel's own bound). A workbook past
+ * either bound is served in units mode. */
+export const MAX_SHEETS = 256, SHEET_NAME_CHARS = 31
