@@ -34,8 +34,16 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   const server = Bun.serve({ port: config.port, fetch: stream.fetch as never, websocket: stream.websocket as never })
   return {
     server, stream, pool, origins, media,
-    /** Stops serving at once; the returned promise settles once the media queues, cache and temp dir are gone. */
-    stop(): Promise<void> { server.stop(true); pool.dispose(); clearInterval(expiry); store.close(); return media.close() },
+    /** Stops serving at once; the returned promise settles once the pool's workers have closed and then the media
+     * queues, cache and temp dir are gone (media closes after the workers, which may still hold staged media files). */
+    async stop(): Promise<void> {
+      server.stop(true)
+      const workersClosed = pool.dispose()
+      clearInterval(expiry)
+      await workersClosed
+      store.close()
+      await media.close()
+    },
   }
 }
 
