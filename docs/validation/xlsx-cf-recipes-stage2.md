@@ -726,3 +726,61 @@ The capture cannot be retried, and nothing here is edited after it. Whatever Exc
   - The case now has 73 exact cells and 122 withheld.
   - The predictions file's production column is regenerated.
 - **Findings, the reach table and the refined hypotheses R1–R4:** `docs/validation/xlsx-cf.md` §14.z.16.
+
+## 10. The upper-segment window follow-up (`stage2-scale-upper-window`)
+
+**Why.** PR #99 widened the upper-segment whole-product withhold (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`) from `Number.isInteger(f·d)` to production's 1e-11 truncation-guard window: a channel counts as whole when k = round(f·d), 0 < k < d and |f·d − k| ≤ 1e-11. That ruling came from literal-num evidence (§9.5). The only statistical-bound cells inside the window are E4 of `stage2-scale-thresholds` and its replica D19, both drawn at guarded truncation. So the window's withhold of statistical shapes is unmeasured, and today it costs E4 and D19. This case measures it.
+
+### 10.1 Census and candidate search (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/upper-window-candidates.ts` (about 40 s; pinned by `tests/xlsx-cf-scale-upper-window-candidates.test.ts`).
+
+**Cells.** The harness of §8.1 (`collectSegmentCells`, every measured case, both follow-up captures included): 1101 captured colour-scale cells. 155 are in the **integer shape** (an upper-segment interior cell of a 3-colour scale with an IEEE-integer whole product on some channel). These stay withheld whatever a window reading says, so they are not scored. 946 are scored.
+
+**The census.** Every captured interior cell with a channel inside the window and no IEEE-integer channel. Every product below was computed, not reasoned about.
+
+| Cell | Scale | Bounds | Value | lo .. hi | f (production) | f·d per channel (class) | Excel | Guarded | Raw floor | Outcome |
+|---|---|---|---|---|---|---|---|---|---|---|
+| thresholds:E4 | 3-colour, upper | percentile / max | 3 | 2.2 .. 10 | 0.10256410256410255 | 156: 15.999999999999996 (below); 45, 9: not whole | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:D19 | 3-colour, upper | percentile / max | 3 | 2.2 .. 10 | 0.10256410256410255 | as E4 | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:F8 | 3-colour, upper | num / num | 3 | 2.2 .. 10 | 0.10256410256410255 | as E4 | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:F11 | 3-colour, upper | num / num | 7.4 | 2.2 .. 10 | 0.6666666666666667 | 104.00000000000001, 30.000000000000004, 6.000000000000001 (above) | FF97CD7E | FF97CD7E | = | both |
+| upper-whole:F12 | 3-colour, upper | num / num | 0.6 | 0.4 .. 1 | 0.33333333333333326 | 210: 69.99999999999999 (below) | FFA163B5 | FFA064B4 | FFA163B5 | raw floor |
+| upper-whole:F13 | 3-colour, upper | num / num | 0.8 | 0.4 .. 1 | 0.6666666666666667 | 210: 140.00000000000003 (above) | FF5AAA6E | FF5AAA6E | = | both |
+| upper-whole:F15 | 3-colour, upper | num / num | 0.44 | 0.4 .. 1 | 0.06666666666666664 | 210: 13.999999999999995 (below) | FFD92BED | FFD82CEC | FFD92BED | raw floor |
+| upper-whole:F16 | 3-colour, upper | num / num | 0.5 | 0.4 .. 1 | 0.16666666666666663 | 210: 34.99999999999999 (below) | FFC440D8 | FFC341D7 | FFC440D8 | raw floor |
+| upper-whole:F18 | 3-colour, upper | num / num | 1.48 | 1.3 .. 2.2 | 0.1999999999999999 | 210: 41.99999999999998 (below) | FFBD47D1 | FFBC48D0 | FFBD47D1 | raw floor |
+| upper-whole:F19 | 3-colour, upper | num / num | 1.36 | 1.3 .. 2.2 | 0.06666666666666672 | 210: 14.00000000000001 (above) | FFD92BED | FFD82CEC | = | **neither** (one smaller than both) |
+| num-segment:K15 | 2-colour | num / num | 29 | 0 .. 210 | 0.1380952380952381 | 210: 29.000000000000004 (above) | FF31D345 | FF31D345 | = | both |
+| cfvo-scope-v2:W17 | 2-colour | num / num | −25 | −40 .. 45 | 0.17647058823529413 | 85: 15.000000000000002 (above) | FFDE786D | FFDE786D | = | both |
+| cfvo-scope-v2:W20 | 2-colour | num / num | 20 | −40 .. 45 | 0.7058823529411765 | 85: 60.00000000000001 (above) | FF8FA576 | FF8FA576 | = | both |
+
+"Guarded" is production's `interpolateChannel` (floor(f·d + 1e-11)); "raw floor" is floor(f·d). They differ only where a product is just below an integer.
+
+- **The window shape** (the cells a window reading paints) is the ten upper-segment 3-colour cells. Two are statistical-bound (E4, D19), both at guarded truncation. The eight literal ones are withheld as the num-segment shape anyway.
+- **Below an integer:** the 4/39 cells (E4, D19, F8) are at guarded truncation; F12, F15, F16 and F18 are one smaller (raw floor). **Above an integer:** F11 and F13 are at k; F19 is one smaller than both readings.
+- **No captured 2-colour or lower-segment cell lies below an integer inside the window.** The three 2-colour cells are above it, where both readings agree.
+
+**Scopes.** A candidate replaces production's arithmetic strictly inside a scope, and elsewhere guarded truncation stands: `window` (the 10 window cells), `upper` (every upper-segment interior 3-colour cell, 47 scored), `3-colour` (138), `all` (667). A survivor reproduces Excel at every one of the 946 scored cells. Evaluation fails closed on any non-finite intermediate or invalid channel.
+
+**Families** (48,603 candidates):
+- the 48,345 of the extended search (§9.1: `origin`, `f32`, `precision`, `rational`);
+- `form` (208): the step product in 13 other operation orders (product before division, reciprocal multiplies, from the maximum, split quotients and products, percent round trips, a 15-digit fraction). The differences v − lo, hi − lo and hi − v are optionally snapped to 15, 16 or 17 significant decimals. The step is floor, guarded floor, floor of the 15-digit product, or strictly below the product;
+- `threshold` (48): Excel's statistical threshold modelled as another double. Each statistical bound (never a literal num) is moved by up to two ulps either way, with guarded or raw-floor steps. This covers any PERCENTILE or percent arithmetic that lands within two ulps of production's result;
+- the two readings the case pre-registers whatever the search finds (`reading/guarded`, `reading/raw-floor`).
+
+**Survivors: 0, at every scope, in every family.**
+
+| Family | Best at `window` (10 cells) | Its mismatches |
+|---|---|---|
+| `origin` | 1 | F19 (`origin/g-reverse-difference/step-truncate`) |
+| `f32` | 1 (23 candidates) | F13 (all `f32/g-remap[0001x]/…`) |
+| `precision` | 1 (1171) | F19, F12 or F16 |
+| `rational` | 3 | F16, F18, F19 |
+| `form` | 1 (4) | F19 (`form/none/reciprocal-span/floor`, `form/none/percent-roundtrip/floor`, …) |
+| `threshold` | 2 | F8, F19 |
+| `reading` | guarded 5, raw floor 4 | guarded: F12, F15, F16, F18, F19; raw floor: E4, D19, F8, F19 |
+
+- **The near misses.** 1199 candidates miss exactly one window cell, and that cell is always a literal-num one (F19 184, F13 23, F12 856, F16 136). None misses E4 or D19. They are not survivors, so none is pre-registered.
+- **F19 separates the readings from any per-product rule.** It is above an integer (14.00000000000001), yet Excel drew it one smaller, like F12, F15, F16 and F18 below an integer. F11 and F13, also above, did not move, and E4, D19 and F8, below, did not either.
+- **Both pre-registered readings are contradicted by captured cells.** Guarded truncation is contradicted at five literal cells, which are withheld anyway. Raw floor is contradicted at E4 and D19, the only statistical-bound window cells. §10.3 covers what that means for the case.
