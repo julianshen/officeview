@@ -721,4 +721,8 @@ The capture cannot be retried, and nothing here is edited after it. Whatever Exc
   - 74 cells are painted, each at Excel's exact ARGB.
   - 121 are withheld and justified: 120 as num-segment and D20 as an upper whole product.
   - `cf-compare` passes interactive and paged.
-- **Findings, the latent `upperSegmentWholeProduct` gap (F12, F15, F16, F18, F19), and the refined hypotheses R1–R4:** `docs/validation/xlsx-cf.md` §14.z.16.
+- **Owner ruling after the capture:** the upper-segment withhold now uses production's 1e-11 truncation-guard window instead of `Number.isInteger`. F12, F15, F16, F18 and F19 moved with non-integer double products.
+  - D19 and `stage2-scale-thresholds` E4 are newly withheld.
+  - The case now has 73 exact cells and 122 withheld.
+  - The predictions file's production column is regenerated.
+- **Findings, the reach table and the refined hypotheses R1–R4:** `docs/validation/xlsx-cf.md` §14.z.16.

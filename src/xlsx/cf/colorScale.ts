@@ -85,6 +85,13 @@ export function percentileOrderStatistic(
  * 'truncate' mirrors Excel's measured display-format behavior:
  * floor towards target when increasing, floor towards start when decreasing.
  */
+/**
+ * The truncating interpolation's guard: a step product within this of the next whole number truncates up to it
+ * (`floor(f·d + guard)`). The upper-segment whole-product withhold uses the same window, and
+ * scripts/cf-refs/upper-whole-justify.ts mirrors it as `JUSTIFY_TRUNCATION_GUARD` (pinned equal by a test).
+ */
+export const CF_TRUNCATION_GUARD = 1e-11
+
 export function interpolateChannel(
   c0: number,
   c1: number,
@@ -93,11 +100,11 @@ export function interpolateChannel(
 ): number {
   const f = Math.max(0, Math.min(1, fraction))
   if (rounding === 'truncate') {
-    // 1e-11 guard absorbs floating-point representation error from threshold division
+    // CF_TRUNCATION_GUARD (1e-11) absorbs floating-point representation error from threshold division
     if (c1 >= c0) {
-      return c0 + Math.floor(f * (c1 - c0) + 1e-11)
+      return c0 + Math.floor(f * (c1 - c0) + CF_TRUNCATION_GUARD)
     } else {
-      return c0 - Math.floor(f * (c0 - c1) + 1e-11)
+      return c0 - Math.floor(f * (c0 - c1) + CF_TRUNCATION_GUARD)
     }
   } else if (rounding === 'half-up') {
     return Math.round(c0 + f * (c1 - c0))
@@ -500,15 +507,21 @@ const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && 
  * withheld UPPER-segment shape. The cell's segment is the upper one (between the second and third thresholds after the
  * midpoint-above-max re-sort), whatever the bound kinds (literal num, min/max/percent/percentile, mixed or formula-resolved);
  * the value is strictly inside it; and the step product is a whole number: for some RGB channel whose endpoints differ by
- * d != 0, `fraction * d` (production's `safeFraction` double times the integer d, one IEEE multiplication) is an integer
- * (`Number.isInteger`). Excel 16.115 drew 19 such cells of that capture (and T4/V3 of e448d831) one unit smaller per step
- * than truncation, by a rule the pre-registered readings did not explain; no other cell moved.
+ * d != 0, `fraction * d` (production's `safeFraction` double times the integer d, one IEEE multiplication) lies within
+ * CF_TRUNCATION_GUARD of a whole number k with 0 < k < d. Excel 16.115 drew 19 such cells of that capture (and T4/V3 of
+ * e448d831) one unit smaller per step than truncation, by a rule the pre-registered readings did not explain; no other
+ * cell moved. The window (owner ruling after capture 54fc3388, stage2-scale-upper-whole) replaced `Number.isInteger`:
+ * F12, F15, F16, F18 and F19 of that capture moved with exact whole products whose doubles are not integers (F16:
+ * 34.99999999999999, which the guard truncates to 35; Excel drew 34). It also takes stage2-scale-thresholds E4 and its
+ * replica D19 (15.999999999999996), which Excel drew at truncation: fail-closed.
  */
 export function upperSegmentWholeProduct(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
   if (!(value > tLo && value < tHi)) return false
   for (const shift of [16, 8, 0]) {
     const d = Math.abs(((c2 >>> shift) & 0xff) - ((c1 >>> shift) & 0xff))
-    if (d !== 0 && Number.isInteger(fraction * d)) return true
+    if (d === 0) continue
+    const p = fraction * d, k = Math.round(p)
+    if (k > 0 && k < d && Math.abs(p - k) <= CF_TRUNCATION_GUARD) return true
   }
   return false
 }

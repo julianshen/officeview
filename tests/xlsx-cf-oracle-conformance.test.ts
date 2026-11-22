@@ -618,13 +618,15 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
     // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
-    // withhold (owner ruling A), 172 exact. The upper-segment withhold also takes 5 earlier confirmed-exact cells:
-    // stage2-scale-interpolation E8, E9, E10, stage2-scale-thresholds E5 and stage2-scale-scope-disjoint U4.
-    // stage2-scale-upper-whole (exploratory): 120 literal cells withheld by the num-segment finding, D20 by the
-    // upper-segment whole-product withhold, 74 exact (D19, the 2-colour twins, the twin line, the controls).
-    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([227, 19])
-    expect(r.exact).toBe(364 + 77 - 5 + 172 + 74 + r.stubCompared)
-    expect(r.withheld).toBe(34 + 11 + 5 + 109 + 121 - r.stubCompared)
+    // withhold (owner ruling A), 172 exact. The upper-segment withhold also takes 6 earlier confirmed-exact cells:
+    // stage2-scale-interpolation E8, E9, E10, stage2-scale-thresholds E4 (the 1e-11 window) and E5, and
+    // stage2-scale-scope-disjoint U4.
+    // stage2-scale-upper-whole (exploratory): 120 literal cells withheld by the num-segment finding, D19 and D20 by the
+    // upper-segment whole-product withhold, 73 exact (the 2-colour twins, the twin line, the controls).
+    // The 1e-11 window (owner ruling after 54fc3388) also withholds stage2-scale-thresholds E4, confirmed-exact before.
+    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([227, 21])
+    expect(r.exact).toBe(364 + 77 - 6 + 172 + 73 + r.stubCompared)
+    expect(r.withheld).toBe(34 + 11 + 6 + 109 + 122 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

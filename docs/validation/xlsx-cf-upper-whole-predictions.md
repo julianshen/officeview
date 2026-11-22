@@ -95,7 +95,7 @@ Channels list d = c1 − c0 per R, G, B; `*` marks an exactly-whole product. Pro
 | D14 | control | control-two-colour | 301 | L | 1/5 | -210* +210* -210* | FFBC48D0 (twin:G23) | FFBD47D1 | = | painted |
 | D15 | control | control-two-colour | 277 | L | 1/7 | -210* +210* -210* | FFC83CDC (twin:H3) | FFC93BDD | = | painted |
 | D16 | control | control-two-colour | 245 | L | 1/15 | -210* +210* -210* | FFD82CEC (twin:H7) | FFD92BED | = | painted |
-| D19 | e4 | e4-replica | 3 | U | 4/39 | -156* -45 -9 | FFEFE784 | FFF0E784 | FFF0E784 | painted |
+| D19 | e4 | e4-replica | 3 | U | 4/39 | -156* -45 -9 | FFEFE784 | FFF0E784 | FFF0E784 | withheld (upper whole product) |
 | D20 | e4 | e4-replica | 4 | U | 3/13 | -156* -45 -9 | FFDBE182 | FFDCE182 | = | withheld (upper whole product) |
 | E2 | h3 | h3-mixed | 357 | U | 1/3 | +210* -105* +42* | FF5ACD36 | FF59CE35 | FF59CE35 | withheld (num-segment) |
 | E3 | h3 | h3-mixed | 301 | U | 1/5 | +210* -105* +42 | FF3EDB30 | FF3DDC30 | FF3DDC30 | withheld (num-segment) |

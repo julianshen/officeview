@@ -10,8 +10,8 @@
  *    every exactly-whole upper-segment channel) and the float32 near miss are recorded as formula-hypothesis-none; it fails
  *    closed on broken controls;
  * 4. the rehearsal on a synthetic measured capture through the real verifier, audit, conformance pass and cf-compare:
- *    nothing is ever verified or registered, whatever the world, and production is unchanged; a move at D19 (the one painted
- *    upper-segment cell, E4's replica) is caught as a disagreement, as it must be.
+ *    nothing is ever verified or registered, whatever the world, and production is unchanged. Before the 1e-11 window
+ *    (owner ruling after the capture) a move at D19 (E4's replica) was a disagreement; D19 is now withheld, so it is not.
  * This checks the pipeline, not Excel.
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -190,7 +190,7 @@ describe('stage2-scale-upper-whole: the case (exploratory)', () => {
     }
     const expectWithheld = [...predictions.values()].filter(p => p.production !== 'painted').map(p => p.ref)
     expect(withheld.sort()).toEqual(expectWithheld.sort())
-    expect([...predictions.values()].filter(p => p.production === 'painted').map(p => p.ref)).toEqual(['D12', 'D13', 'D14', 'D15', 'D16', 'D19'])
+    expect([...predictions.values()].filter(p => p.production === 'painted').map(p => p.ref)).toEqual(['D12', 'D13', 'D14', 'D15', 'D16'])
     for (const cell of s2UpperWholeCells().filter(x => x.designated)) expect(predictions.get(cell.ref)!.truncate).toBe(s2UpperWholeTruncation(cell))
   }, HEAVY)
 })
@@ -310,13 +310,13 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
     }, HEAVY)
   }
 
-  it('the conformance pass and cf-compare (interactive, paged): truncation and the departure away from D19 pass, withheld cells justified (121 of 195)', async () => {
+  it('the conformance pass and cf-compare (interactive, paged): truncation and the departure away from D19 pass, withheld cells justified (122 of 195)', async () => {
     const { compareCfCase } = await import('../scripts/cf-compare')
     for (const world of ['truncate', 'minus-one-except-D19'] as const) {
       const { root, manifest: m } = syntheticRoot(plantedFills(caseOf(), world))
       const r = await stage2Conformance(m, root, [ID])
       expect(r.violations, world).toEqual([])
-      expect([r.total, r.withheld], world).toEqual([195, 121])
+      expect([r.total, r.withheld], world).toEqual([195, 122])
       for (const mode of ['interactive', 'paged'] as const) {
         const res = await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })
         expect(`${world} ${mode}:${res.outcome} ${res.outcome === 'pass' ? '' : res.reason}`).toBe(`${world} ${mode}:pass `)
@@ -324,15 +324,17 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
     }
   }, 900_000)
 
-  it('a move at D19 (E4\'s replica, painted today; the minus-one world and the near miss both move it) is caught as a disagreement: production does not follow the world', async () => {
+  it('a move at D19 (E4\'s replica; the minus-one world and the near miss both move it) is no longer a disagreement: the 1e-11 window withholds D19, justified', async () => {
     const { compareCfCase } = await import('../scripts/cf-compare')
+    expect(predictions.get('D19')!.production).toBe('withheld (upper whole product)')
     for (const world of ['minus-one', 'near-miss'] as const) {
       const fills = plantedFills(caseOf(), world)
       expect(fills.get('D19'), world).toBe(predictions.get('D19')!.minusOne)
       const { root, manifest: m } = syntheticRoot(fills)
       const r = await stage2Conformance(m, root, [ID])
-      expect(r.violations, world).toEqual([`${ID}:D19: production ${predictions.get('D19')!.truncate} is not Excel's ${predictions.get('D19')!.minusOne}`])
-      for (const mode of ['interactive', 'paged'] as const) expect((await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })).outcome, `${world} ${mode}`).toBe('fail')
+      expect(r.violations, world).toEqual([])
+      expect([r.total, r.withheld, r.upperWholeWithheld], world).toEqual([195, 122, 2])
+      for (const mode of ['interactive', 'paged'] as const) expect((await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })).outcome, `${world} ${mode}`).toBe('pass')
     }
   }, 900_000)
 })
@@ -371,7 +373,7 @@ describe('the capture (Excel 16.115, 54fc3388): recorded, nothing registered, pr
     for (const o of sc.observedCells) expect(`FF${o.bgRgb.map(x => x.toString(16).padStart(2, '0')).join('')}`.toUpperCase(), o.ref).toBe(o.fillRgb.toUpperCase())
   })
 
-  it('every designated cell is exactly truncation or truncation minus one step; 79 moved, every control and D19 at truncation', () => {
+  it('every designated cell is exactly truncation or truncation minus one step; 79 moved, every control and D19 at truncation (D19 is withheld since the 1e-11 window)', () => {
     const excel = excelFills()
     const moved: string[] = []
     for (const p of predictions.values()) {
@@ -388,10 +390,10 @@ describe('the capture (Excel 16.115, 54fc3388): recorded, nothing registered, pr
     expect([excel.get('D19'), excel.get('D20')]).toEqual([thFill('E4'), thFill('E5')])
   })
 
-  it('the shared conformance pass on the capture: no violation; 74 exact, 121 withheld and justified (120 num-segment, D20 upper whole product)', async () => {
+  it('the shared conformance pass on the capture: no violation; 73 exact, 122 withheld and justified (120 num-segment; D19 and D20 upper whole product)', async () => {
     const r = await stage2Conformance(manifest, REPO_ROOT, [ID])
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([195, 74, 121, 120, 1])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([195, 73, 122, 120, 2])
   }, HEAVY)
 
   it('the interactive and paged comparisons (scripts/cf-compare.ts) pass on the capture', async () => {
