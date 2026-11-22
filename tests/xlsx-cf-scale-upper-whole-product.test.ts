@@ -20,9 +20,11 @@ import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { s2NumSegmentColour, s2NumSegmentRules, s2NumSegmentValueAt, type CfManifest } from '../scripts/cf-refs/cases'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { collectSegmentCells } from '../scripts/cf-refs/num-segment-candidates'
-import { STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS } from '../scripts/cf-refs/stage5-withhold'
-import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
-import { cfvoNonNumericTreatmentOf } from '../src/xlsx/cf/formulaReadings'
+import { stage5JustifiedRefusals, stage5SheetCells, stage5CounterfactualOf } from '../scripts/cf-refs/stage5-withhold'
+import { stage2NumSegmentShape, stage2UpperSegmentWholeProductShape } from '../scripts/cf-refs/stage2-withhold'
+import { caseNowOf, caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
+import { injectCfScaleSegmentProbe } from '../src/xlsx/cf/colorScale'
+import type { XlsxSheet } from '../src/xlsx/types'
 
 const REPO_ROOT = resolve(__dirname, '..')
 const RED = 0xfff8696b, YELLOW = 0xffffeb84, GREEN = 0xff63be7b
@@ -144,9 +146,80 @@ describe('the reach: every newly withheld cell of every measured case is the sha
       'stage2-scale-num-segment': ['B26', 'C26', 'E17', 'E18', 'E19', 'E20', 'E21', 'E22', 'E23', 'E24', 'E25', 'E26', 'E28'].sort(),
       'stage5-cfvo-nonnumeric-v2': ['E4', 'E5', 'S4', 'S5'],
     })
-    // Stage 5: the enumerated justification is exactly the derived set under the published readings.
-    const listed = STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS.filter(e => e.midpointKind === undefined || cfvoNonNumericTreatmentOf(e.midpointKind, id => VERIFIED_CAPABILITIES.has(id)) === 'zero').flatMap(e => e.refs).sort()
-    expect(listed).toEqual(byCase['stage5-cfvo-nonnumeric-v2']!.sort())
+    // The justifications, recomputed independently of production, name exactly these cells, case by case.
+    for (const c of manifest.cases.filter(x => x.status === 'measured' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
+      const { sheet } = await parsed(c)
+      const cellsOf = stage5SheetCells(sheet)
+      const numbers = new Map([...cellsOf].filter(([, v]) => typeof v.value === 'number' && !v.error).map(([k, v]) => [k, v.value as number]))
+      const justified = c.expected.cells.map(e => e.ref).filter(ref => c.stage === 5
+        ? stage5JustifiedRefusals(c, ref, undefined, cellsOf).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')
+        : !stage2NumSegmentShape(c.markers, ref, cellsOf.get(ref)?.value) && stage2UpperSegmentWholeProductShape(c.markers, ref, cellsOf.get(ref)?.value, numbers))
+      expect(justified.sort(), c.id).toEqual([...(byCase[c.id] ?? [])].sort())
+    }
   }, 300_000)
 })
+
+async function parsed(c: CfManifest['cases'][number], file = c.saved): Promise<{ sheet: XlsxSheet; doc: Awaited<ReturnType<typeof parseXlsx>> }> {
+  const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(REPO_ROOT, file)))), c.stage === 5 ? caseParseOptionsOf(c) : {})
+  return { doc, sheet: doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]! }
+}
+
+describe('negative mutations: an out-of-shape refusal is never justified (codex full-branch review P2)', () => {
+  const V2 = 'stage5-cfvo-nonnumeric-v2'
+  const caseV2 = (): CfManifest['cases'][number] => manifest.cases.find(x => x.id === V2)!
+  const upper = (c: CfManifest['cases'][number], ref: string, cells: ReturnType<typeof stage5SheetCells>): boolean => stage5JustifiedRefusals(c, ref, undefined, cells).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')
+  const withValue = (cells: ReturnType<typeof stage5SheetCells>, ref: string, value: number) => new Map([...cells, [ref, { value, error: false }]])
+
+  it('Stage 5: S4 and E4 are justified as captured; S4 8 -> 9, a changed threshold, a palette with no whole product, a lower-segment cell and a 2-colour scale are not', async () => {
+    const c = caseV2()
+    const cells = stage5SheetCells((await parsed(c)).sheet)
+    expect([upper(c, 'S4', cells), upper(c, 'S5', cells), upper(c, 'E4', cells), upper(c, 'E5', cells)]).toEqual([true, true, true, true])
+    // The reviewer's mutation: S4 = 9 (9/32 of spans 156, 45, 9: no integer product).
+    expect(upper(c, 'S4', withValue(cells, 'S4', 9))).toBe(false)
+    // A changed threshold: num 0 -> num 1 (S4 = 8 sits at 7/31 of 1..32).
+    const thresholdMoved = { ...c, markers: c.markers.map(m => (m.sqref === 'S2:S6' ? { ...m, scale: { ...m.scale!, cfvo: m.scale!.cfvo.map((x, i) => (i === 1 ? { ...x, val: '1' } : x)) } } : m)) }
+    expect(upper(thresholdMoved, 'S4', cells)).toBe(false)
+    // A changed palette: midpoint FFFEEB84, so the spans are 155, 45, 9 and no f·d at 1/4 or 1/2 is whole.
+    const repainted = { ...c, markers: c.markers.map(m => (m.sqref === 'S2:S6' ? { ...m, scale: { ...m.scale!, colors: [m.scale!.colors[0]!, 'FFFEEB84', m.scale!.colors[2]!] } } : m)) }
+    expect([upper(repainted, 'S4', cells), upper(repainted, 'S5', cells)]).toEqual([false, false])
+    // A lower-segment cell (S3 = -8 in -32..0) and a 2-colour scale (P: num 0 / max, P4 = 8).
+    expect(upper(c, 'S3', cells)).toBe(false)
+    expect(upper(c, 'P4', cells)).toBe(false)
+    // A formula midpoint whose kind does not read zero resolves nothing (H: text, withheld): no justification.
+    expect(upper(c, 'H4', cells)).toBe(false)
+  }, 300_000)
+
+  it('Stage 5, end to end: an erroneous refusal planted at a mutated S4 (= 9) is reported unjustified by the counterfactual', async () => {
+    const c = caseV2()
+    const { doc, sheet } = await parsed(c)
+    const row = sheet.rows.find(r => r.index === 3)!
+    const s4 = row.cells.find(x => x.col === 18)!
+    s4.value = 9
+    injectCfScaleSegmentProbe(seg => (seg.value === 9 && seg.colours === 3 ? { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' } : undefined))
+    try {
+      const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: ['S4'], now: caseNowOf(c) })
+      expect(truths.get('S4')!.unjustified.length).toBeGreaterThan(0)
+    } finally { injectCfScaleSegmentProbe(null) }
+  }, 300_000)
+
+  it('Stage 2: the same mutations refuse (stage2-scale-scope-disjoint U4 and stage2-scale-interpolation E8)', async () => {
+    const sd = manifest.cases.find(x => x.id === 'stage2-scale-scope-disjoint')!
+    const cells = stage5SheetCells((await parsed(sd)).sheet)
+    const numbers = new Map([...cells].filter(([, v]) => typeof v.value === 'number').map(([k, v]) => [k, v.value as number]))
+    const shape = (markers: typeof sd.markers, ref: string, value: number, vals = numbers): boolean => stage2UpperSegmentWholeProductShape(markers, ref, value, vals)
+    expect(shape(sd.markers, 'U4', 70)).toBe(true)
+    expect(shape(sd.markers, 'U4', 71)).toBe(false) // a changed value
+    expect(shape(sd.markers.map(m => (isU(m.sqref) ? { ...m, scale: { ...m.scale!, cfvo: m.scale!.cfvo.map((x, i) => (i === 1 ? { ...x, val: '62' } : x)) } } : m)), 'U4', 70)).toBe(false) // a changed threshold
+    expect(shape(sd.markers.map(m => (isU(m.sqref) ? { ...m, scale: { ...m.scale!, colors: [m.scale!.colors[0]!, 'FFFEEB84', m.scale!.colors[2]!] } } : m)), 'U4', 70)).toBe(false) // a changed palette
+    expect(shape(sd.markers, 'U3', 50)).toBe(false) // the lower segment
+    expect(shape(sd.markers, 'L3', 20)).toBe(false) // a 2-colour scale
+    const ip = manifest.cases.find(x => x.id === 'stage2-scale-interpolation')!
+    const ipCells = stage5SheetCells((await parsed(ip)).sheet)
+    const ipNumbers = new Map([...ipCells].filter(([, v]) => typeof v.value === 'number').map(([k, v]) => [k, v.value as number]))
+    expect(stage2UpperSegmentWholeProductShape(ip.markers, 'E8', 6, ipNumbers)).toBe(true)
+    // A changed scope value moves the percentile/max thresholds: E8 no longer sits at a whole product.
+    expect(stage2UpperSegmentWholeProductShape(ip.markers, 'E8', 6, new Map([...ipNumbers, ['E11', 9.25]]))).toBe(false)
+  }, 300_000)
+})
+const isU = (sqref: string): boolean => sqref === 'U2:U5'
 

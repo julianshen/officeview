@@ -9,7 +9,7 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { safeFraction, upperSegmentWholeProduct } from '../../src/xlsx/cf/colorScale'
+import { upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -87,37 +87,13 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
   })
 }
 
-/** PERCENTILE.INC (Ruling S2-L) over ascending values. */
-function percentileInc(sorted: readonly number[], p: number): number {
-  const rank = (p / 100) * (sorted.length - 1)
-  const lo = Math.floor(rank)
-  return lo + 1 < sorted.length ? sorted[lo]! + (rank - lo) * (sorted[lo + 1]! - sorted[lo]!) : sorted[lo]!
-}
-
 /**
- * The upper-segment whole-product shape (owner ruling A after capture stage2-scale-num-segment; production's
- * `upperSegmentWholeProduct`, reason `cf-unmeasured-upper-segment-whole-product`), recomputed from the marker and the saved
- * numbers: a 3-colour cell strictly inside the UPPER segment (after the midpoint-above-max re-sort), any bound kind,
- * where some RGB channel's span d != 0 gives an integer f·d. Thresholds: literal num, or min / max / percent / percentile
- * over the rule's numeric cells (Stage 2 holds no formula bound: a formula bound justifies nothing here).
+ * The upper-segment whole-product shape (owner ruling A after capture stage2-scale-num-segment; production's reason
+ * `cf-unmeasured-upper-segment-whole-product`), recomputed independently of production from the marker and the saved
+ * numbers (`upperWholeShapeAt`, scripts/cf-refs/upper-whole-justify.ts): a 3-colour cell strictly inside the UPPER segment
+ * (after the midpoint-above-max re-sort), any bound kind, where some RGB channel's span d != 0 gives an integer f·d.
+ * Stage 2 holds no formula bound: a formula bound justifies nothing here.
  */
 export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return false
-  return markers.some(m => {
-    if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
-    if (m.scale.cfvo.some(x => x.f !== undefined || x.type === 'formula')) return false
-    const scope = [...values].filter(([k]) => isCellInSqref(k, m.sqref)).map(([, v]) => v).sort((x, y) => x - y)
-    if (scope.length === 0) return false
-    const min = scope[0]!, max = scope[scope.length - 1]!
-    const at = (x: { type: string; val?: string }): number | undefined =>
-      x.type === 'min' ? min : x.type === 'max' ? max : x.type === 'num' ? Number(x.val) : x.type === 'percent' ? min + (Number(x.val) / 100) * (max - min) : x.type === 'percentile' ? percentileInc(scope, Number(x.val)) : undefined
-    const t = m.scale.cfvo.map(at)
-    if (t.some(x => x === undefined || !Number.isFinite(x))) return false
-    const [t0, t1, t2] = t as [number, number, number]
-    const [mid, top] = t1 > t2 ? [t2, t1] : [t1, t2]
-    if (!(t0 < mid && mid < top) || value <= mid) return false
-    const f = safeFraction(value, mid, top)
-    const colours = m.scale.colors.map(x => Number.parseInt(x, 16) >>> 0)
-    return f !== undefined && upperSegmentWholeProduct(colours[1]!, colours[2]!, value, mid, top, f)
-  })
+  return markers.some(m => upperWholeShapeAt(m, ref, value, values))
 }

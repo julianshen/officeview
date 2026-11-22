@@ -3127,7 +3127,7 @@ The definition covers all 19 moved cells, plus T4 and V3 (tests/xlsx-cf-scale-up
 | `stage2-scale-scope-disjoint` | 1 (U4: literal, f = 1/4) | 1 |
 | `stage5-cfvo-nonnumeric-v2` | 4 (E4, E5, S4, S5: f = 1/4, 1/2) | 4 |
 
-Stage 2 is justified by `stage2UpperSegmentWholeProductShape`, recomputed from the marker and the saved numbers, in cf-compare and the shared conformance pass. Stage 5 is justified by `STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS`, derived and checked against the workbooks by tests. The conformance pass over the 9 measured Stage 2 cases reports 767 cells: 612 exact (4 of them the S5-STUB cells now compared), and 155 withheld, all justified (30 findings, 107 num-segment, 18 upper-segment whole product).
+Both stages recompute the justification independently of production (`scripts/cf-refs/upper-whole-justify.ts`; it imports neither `safeFraction` nor `upperSegmentWholeProduct`). The inputs are the marker's cfvo and colours, the sheet's own numbers and, for a formula midpoint, the published treatment of its result kind (only `zero` resolves). The checks are the strict upper-segment interior after the re-sort, the fraction with the same IEEE operations, and an integer f·d on some channel. Stage 2 uses it through `stage2UpperSegmentWholeProductShape` (cf-compare and the shared conformance pass); Stage 5 through `stage5JustifiedRefusals` with the sheet's cells (no list). Negative mutations must refuse: the review's S4 8 → 9, a moved threshold, a palette with no whole product, a lower-segment cell, a 2-colour scale, and an erroneous refusal planted at the mutated S4 (reported unjustified). The justified set is exactly the 22-cell reach. The conformance pass over the 9 measured Stage 2 cases reports 767 cells: 612 exact (4 of them the S5-STUB cells now compared), and 155 withheld, all justified (30 findings, 107 num-segment, 18 upper-segment whole product).
 
 **Nothing registered.**
 - `scale:num-segment-fraction` and `scale:num-segment-fraction-statistical` stay in `CF_STAGE2_NONDISCRIMINATING` as recorded findings. Their texts now record `formula-hypothesis-none`.
@@ -3138,7 +3138,8 @@ Stage 2 is justified by `stage2UpperSegmentWholeProductShape`, recomputed from t
 **Audits.**
 - Stage 2: ok, `stageComplete`, 12 unverified-nondiscriminating.
 - Stage 5: ok, 0 disagreeing.
-- cf-compare: interactive and paged pass for every Stage 2 case, this case included. The only failures are the 2 known date-dependent `stage1-timeperiod` failures in interactive mode.
+- cf-compare, Stage 1–2 run: interactive and paged pass for every Stage 2 case, this case included. In that run the only failures are the 2 known date-dependent `stage1-timeperiod` failures in interactive mode. `stage5-cfvo-nonnumeric-v2` passes in both modes.
+- A full Stage 1–5 run is not clean, but the extra failures are pre-existing: they reproduce on `f85afce2`, before this branch, and are not addressed here. They are `stage3-bar-participation` B4 and `stage3-bar-composition` F2 (both modes), the Stage 4 glyph-key cases in interactive mode (`CF text preparation exceeds its admitted batch`), and the pending `stage5-cross-sheet-missing` B5 (both modes).
 
 **Hypotheses for a future pre-registered case** (none may be registered from this capture):
 - **H1:** Excel computes the upper segment from another origin or quantity, for example the position from the scale's minimum or from the maximum backwards, through an operation the search did not enumerate.

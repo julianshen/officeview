@@ -37,13 +37,14 @@ import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import type { CfCellState, CfOutcome, CfRule } from '../../src/xlsx/cf/model'
 import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
 import { isCellInSqref } from './verify'
+import { upperWholeShapeAt } from './upper-whole-justify'
 import type { CfOracleCase } from './cases'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
 type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; priority?: number; stopIfTrue?: boolean; formulas?: readonly string[]
   formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>
   dxf?: Readonly<{ fillRgb?: string; fontRgb?: string; bold?: boolean; italic?: boolean; underline?: unknown; strikethrough?: boolean; numFmt?: unknown; borderTop?: unknown; borderBottom?: unknown }>
-  scale?: Readonly<{ cfvo?: readonly Cfvo[] }>; bar?: Readonly<{ cfvo?: readonly Cfvo[] }>; icon?: Readonly<{ cfvo?: readonly Cfvo[] }> }>
+  scale?: Readonly<{ cfvo?: readonly Cfvo[]; colors?: readonly string[] }>; bar?: Readonly<{ cfvo?: readonly Cfvo[] }>; icon?: Readonly<{ cfvo?: readonly Cfvo[] }> }>
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
 /** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
@@ -77,22 +78,27 @@ export const STAGE5_A1_BLANK_BOUND_REFUSALS: ReadonlyArray<Readonly<{ caseId: st
   reason: 'anchor-a1: =A2 written on K2, read from A1, lands ten columns left of A; wrapped (formula:relative-wrap) it reads the blank XEU1, a non-numeric bound',
 }]
 
+/** A Stage 5 sheet's cells for the recomputed justifications: ref -> value (numbers, text, booleans) and its error flag. */
+export type Stage5SheetCells = ReadonlyMap<string, Readonly<{ value: string | number | boolean | null; error: boolean }>>
+/** The cells of a parsed sheet, keyed by A1 ref. */
+export function stage5SheetCells(sheet: XlsxSheet): Stage5SheetCells {
+  const out = new Map<string, { value: string | number | boolean | null; error: boolean }>()
+  for (const row of sheet.rows) for (const cell of row.cells) out.set(refOf(row.index, cell.col), { value: cell.value, error: cell.valueIsError === true })
+  return out
+}
 /**
- * The num-segment follow-up (owner ruling A after capture stage2-scale-num-segment): Stage 5 cells production withholds
- * as the upper-segment whole-product shape (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`): a
- * 3-colour cell strictly inside the upper segment where some channel's f·d is an integer. Enumerated per case, rule and
- * rows: the 3-colour rules of stage5-cfvo-nonnumeric-v2 over -32, -8, 8, 16, 32, whose midpoint is 0 (rows 4 and 5 sit at
- * f = 1/4 and 1/2 of 0..32 under FFFFEB84 -> FF63BE7B: step 39 and 78, whole). A formula midpoint is 0 only when its
- * kind's treatment reads `zero` (`midpointKind`); a literal num 0 always. tests/xlsx-cf-scale-num-segment-case.test.ts
- * derives this from every measured Stage 5 workbook (the segment production evaluates, through its probe seam).
+ * The number a colour-scale formula cfvo resolves to, recomputed from the sheet: an absolute one-cell reference (`$A$1`)
+ * on the same sheet reads that cell; a number is itself, and a blank, text, empty-string or error result follows the
+ * published treatment of its kind (`zero` reads 0; any other treatment resolves nothing). Any other formula: undefined.
  */
-export const STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; refs: readonly string[]; midpointKind?: CfNonNumericBoundKind; reason: string }>> = [
-  ...([['E', 'blank'], ['H', 'text'], ['K', 'empty-string'], ['N', 'error']] as const).map(([col, kind]) => ({
-    caseId: 'stage5-cfvo-nonnumeric-v2', sqref: `${col}2:${col}6`, refs: [`${col}4`, `${col}5`], midpointKind: kind as CfNonNumericBoundKind,
-    reason: `upper segment 0..32 of min / formula (${kind}, read as 0) / max at f = 1/4 and 1/2: the first channel's steps 39 and 78 are whole products (stage2-scale-num-segment withhold)`,
-  })),
-  { caseId: 'stage5-cfvo-nonnumeric-v2', sqref: 'S2:S6', refs: ['S4', 'S5'], reason: 'upper segment 0..32 of min / num 0 / max at f = 1/4 and 1/2: the first channel\'s steps 39 and 78 are whole products (stage2-scale-num-segment withhold)' },
-]
+function stage5FormulaBound(cfvo: Readonly<{ f?: string; val?: string }>, cells: Stage5SheetCells, published: (id: string) => boolean): number | undefined {
+  const m = /^=?\$?([A-Z]+)\$?(\d+)$/.exec((cfvo.f ?? cfvo.val ?? '').trim())
+  if (!m) return undefined
+  const cell = cells.get(`${m[1]}${m[2]}`)
+  if (cell && typeof cell.value === 'number' && !cell.error) return cell.value
+  const kind: CfNonNumericBoundKind | undefined = !cell || cell.value === null ? 'blank' : cell.error ? 'error' : cell.value === '' ? 'empty-string' : typeof cell.value === 'string' ? 'text' : undefined
+  return kind !== undefined && cfvoNonNumericTreatmentOf(kind, published) === 'zero' ? 0 : undefined
+}
 
 type CfvoPosition = 'first' | 'last' | 'middle'
 /**
@@ -225,7 +231,7 @@ function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string)
 }
 
 /** Step 1: the justified-refusal set at `ref` of `c`, from independent evidence only (see the module comment). */
-export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): Stage5Refusal[] {
+export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id), cells?: Stage5SheetCells): Stage5Refusal[] {
   const cs = c as unknown as CaseLike
   const covering = cs.markers.filter(m => isCellInSqref(ref, m.sqref))
   const out: Stage5Refusal[] = []
@@ -264,10 +270,17 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
     if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
     for (const m of covering.filter(x => x.ruleType === 'dataBar' && x.sqref === e.sqref)) add(m, { reason: e.reason, refused: e.refused })
   }
-  for (const e of STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS) {
-    if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
-    if (e.midpointKind !== undefined && cfvoNonNumericTreatmentOf(e.midpointKind, published) !== 'zero') continue
-    for (const m of covering.filter(x => x.ruleType === 'colorScale' && x.sqref === e.sqref)) add(m, { reason: e.reason, refused: 'cf-unmeasured-upper-segment-whole-product' })
+  // The num-segment follow-up (owner ruling A after capture stage2-scale-num-segment): a 3-colour cell strictly inside the
+  // upper segment at a whole step product, recomputed from the sheet's cells, the marker and the formula treatment
+  // (`upperWholeShapeAt`, independent of production). Without the sheet's cells nothing is justified (fail closed).
+  if (cells) {
+    const numbers = new Map<string, number>()
+    for (const [k, v] of cells) if (typeof v.value === 'number' && !v.error) numbers.set(k, v.value)
+    const value = cells.get(ref)?.error ? undefined : cells.get(ref)?.value
+    for (const m of covering.filter(x => x.ruleType === 'colorScale')) {
+      const marker = { ruleType: m.ruleType, sqref: m.sqref, scale: { cfvo: m.scale?.cfvo ?? [], colors: m.scale?.colors ?? [] } }
+      if (upperWholeShapeAt(marker, ref, value, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'upper segment of a 3-colour scale, strictly inside, at a whole step product (recomputed from the sheet; the stage2-scale-num-segment withhold)', refused: 'cf-unmeasured-upper-segment-whole-product' })
+    }
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {
     if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
@@ -372,7 +385,7 @@ export async function stage5CounterfactualOf(input: { c: CaseLike | CfOracleCase
   const out = new Map<string, Stage5Truth>()
   const cf = sheet.conditionalFormatting
   if (!cf) {
-    for (const ref of input.refs) out.set(ref, { counterfactual: stage5TokenOf(undefined), refusals: stage5JustifiedRefusals(c, ref, input.published), unjustified: [], overResolved: [] })
+    for (const ref of input.refs) out.set(ref, { counterfactual: stage5TokenOf(undefined), refusals: stage5JustifiedRefusals(c, ref, input.published, stage5SheetCells(sheet)), unjustified: [], overResolved: [] })
     return out
   }
   let current: { ref: string; forced: Map<CfRule, Stage5Refusal>; unjustified: string[]; overResolved: string[] } | undefined
@@ -395,8 +408,9 @@ export async function stage5CounterfactualOf(input: { c: CaseLike | CfOracleCase
   const stamp = { owner: 'stage5-counterfactual', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
   try {
     const source = residentSource(sheet, stamp, memory, 'engine')
+    const sheetCells = stage5SheetCells(sheet)
     for (const ref of input.refs) {
-      const refusals = stage5JustifiedRefusals(c, ref, input.published)
+      const refusals = stage5JustifiedRefusals(c, ref, input.published, sheetCells)
       const forced = new Map<CfRule, Stage5Refusal>()
       for (const r of refusals) { const rule = ruleOf(r, cf.rules.filter(x => x.ranges.some(g => { const p = rc(ref); return p.row >= g.firstRow && p.row <= g.lastRow && p.col >= g.firstCol && p.col <= g.lastCol })), cs.id, ref); if (!forced.has(rule)) forced.set(rule, r) }
       current = { ref, forced, unjustified: [], overResolved: [] }

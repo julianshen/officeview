@@ -34,7 +34,7 @@ import { decodePngSync, ICON_NO_ICON_MEMBER, iconTwinSetClass, iconTwinSetMember
 import { CF_ICON_GLYPH_CLASSES } from '../src/xlsx/cf/iconGlyphs'
 import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 import { stage2Conformance } from './helpers/cf-stage2-conformance'
-import { stage5JustifiedRefusals } from '../scripts/cf-refs/stage5-withhold'
+import { stage5JustifiedRefusals, stage5SheetCells } from '../scripts/cf-refs/stage5-withhold'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -252,9 +252,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               expect(verdict.violation, cellKey).toBeUndefined()
               if (verdict.withheld) { stage5Withheld++; continue }
               stage5FormulaCompared++
-            } else if (!gotMatched && stage5JustifiedRefusals(c, exp.ref).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')) {
+            } else if (!gotMatched && stage5JustifiedRefusals(c, exp.ref, undefined, stage5SheetCells(sheet)).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')) {
               // The num-segment follow-up (owner ruling A): a literal 3-colour cell in the upper-segment whole-product shape
-              // is withheld, justified by STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS (stage5-cfvo-nonnumeric-v2 S4, S5).
+              // is withheld, justified by the shape recomputed from the sheet (stage5-cfvo-nonnumeric-v2 S4, S5).
               stage5Withheld++
               continue
             } else stage5Compared++

@@ -265,7 +265,7 @@ const resolves = (t: Treatment | undefined, position: Position): boolean => t ==
 /**
  * The num-segment follow-up (owner ruling A): a resolved midpoint of 0 puts rows 4 and 5 (8 and 16) strictly inside the upper
  * segment 0..32 at whole step products, which production withholds (cf-unmeasured-upper-segment-whole-product, justified by
- * STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS). The resolving checks read row 3 (-8, lower segment) for a midpoint instead.
+ * the shape recomputed from the sheet). The resolving checks read row 3 (-8, lower segment) for a midpoint instead.
  */
 const upperWhole = (position: Position, r: number): boolean => position === 'middle' && (r === 4 || r === 5)
 const probeRow = (position: Position): number => (position === 'middle' ? 3 : 4)
