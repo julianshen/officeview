@@ -29,7 +29,7 @@ import { stage5CellAgreement, stage5Conflicts, stage5CounterfactualOf, stage5Sca
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, readZipPartsSync, verifyCfCase } from './cf-refs/verify'
-import { STAGE2_WITHHELD_FINDINGS, stage2NumSegmentShape } from './cf-refs/stage2-withhold'
+import { STAGE2_WITHHELD_FINDINGS, stage2NumSegmentShape, stage2UpperSegmentWholeProductShape } from './cf-refs/stage2-withhold'
 import { CF_ICON_SET_NAMES } from '../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseNowOf, caseParseOptionsOf, withCaseZone } from './cf-refs/case-clock'
 import {
@@ -439,8 +439,8 @@ export function verifyCaseCells(
       if (c.stage === 2) {
         if (actual.style?.fillColor) return `Cell ${ref} is reported withheld but paints fill ${String(actual.style.fillColor).toUpperCase()}`
         // Where Excel shows no fill the withheld cell renders the same base, so nothing needs justifying there.
-        if (want !== 'FFFFFFFF' && STAGE2_WITHHELD_FINDINGS[`${c.id}:${ref}`] === undefined && !stage2NumSegmentShape(c.markers, ref, values?.get(ref))) {
-          return `Cell ${ref} is withheld with no recorded justification (Excel fill ${want}): neither a typed Stage 2 finding nor the num-segment condition`
+        if (want !== 'FFFFFFFF' && STAGE2_WITHHELD_FINDINGS[`${c.id}:${ref}`] === undefined && !stage2NumSegmentShape(c.markers, ref, values?.get(ref)) && !stage2UpperSegmentWholeProductShape(c.markers, ref, values?.get(ref), values ?? new Map())) {
+          return `Cell ${ref} is withheld with no recorded justification (Excel fill ${want}): neither a typed Stage 2 finding, the num-segment condition nor the upper-segment whole-product withhold`
         }
       }
       continue

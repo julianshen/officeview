@@ -999,10 +999,11 @@ describe('CF oracle verifier', () => {
   it('stage filtering in generate, build, and capture touches only the specified stage', async () => {
     // 1. filterCasesForStage enforces that --stage 2 returns strictly stage 2 buildable cases
     const stage2Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 2)
-    expect(stage2Cases.length).toBe(8)
+    // + stage2-scale-num-segment (the num-segment follow-up, appended last).
+    expect(stage2Cases.length).toBe(9)
     expect(stage2Cases.every(c => c.stage === 2)).toBe(true)
     expect(stage2Cases.some(c => c.stage === 1)).toBe(false)
-    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 2)).toHaveLength(9)
+    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 2)).toHaveLength(10)
 
     // 2. filterCasesForStage with --stage 1 returns strictly stage 1 buildable cases
     const stage1Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 1)
@@ -1072,7 +1073,14 @@ describe('CF oracle verifier', () => {
     expect(probeRefChunks(refs.slice(0, 88))).toEqual([refs.slice(0, 88)])
     expect(probeRefChunks([])).toEqual([[]])
     // Every Stage 1-3 case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones.
-    for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
+    // (The num-segment follow-up: stage2-scale-num-segment postdates it too and spans several chunks, checked below.)
+    for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.id !== 'stage2-scale-num-segment' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
+    {
+      const refs = CF_CASES.find(x => x.id === 'stage2-scale-num-segment')!.expected.cells.map(x => x.ref)
+      expect(refs.length).toBeGreaterThan(PROBE_CHUNK_CELLS)
+      expect(probeRefChunks(refs).flat()).toEqual(refs)
+      expect(probeRefChunks(refs).every(chunk => chunk.length <= PROBE_CHUNK_CELLS)).toBe(true)
+    }
     // Stage 4 postdates the chunking: exactly these cases span several chunks, and each still probes every cell in order.
     // (fix round 3: stage4-icon-degenerate lost its H column and now fits one chunk.)
     // (Task 28 round 2: stage4-icon-rows holds 64 designated cells and their 64 controls.)
@@ -3252,10 +3260,11 @@ describe('CF oracle verifier', () => {
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1 and 2 catalogs and capability ids are exactly what Stage 2 shipped.
     expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
-    // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(48)
+    // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint), and the num-segment follow-up's
+    // two questions, 2-colour comparison and twin-line ids (stage2-scale-num-segment, appended last).
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(52)
     expect(CF_STAGE1_CASES).toHaveLength(13)
-    expect(CF_STAGE2_CASES).toHaveLength(9)
+    expect(CF_STAGE2_CASES).toHaveLength(10)
     // Stage 4 (Task 24) appends its own registry after Stage 3's.
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
@@ -4136,14 +4145,15 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-3 catalogues and capability ids are exactly what Stage 3 shipped.
     expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
-    // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(48)
+    // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint), and the num-segment follow-up's
+    // two questions, 2-colour comparison and twin-line ids (stage2-scale-num-segment, appended last).
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(52)
     expect(CF_STAGE3_CAPABILITIES).toHaveLength(73)
     expect(CF_STAGE1_CASES).toHaveLength(13)
-    expect(CF_STAGE2_CASES).toHaveLength(9)
+    expect(CF_STAGE2_CASES).toHaveLength(10)
     // 16 since stage3-bar-bounds-num (the bar:bounds-num follow-up, appended last).
     expect(CF_STAGE3_CASES).toHaveLength(16)
-    expect(CF_CASES.slice(0, 38).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
+    expect(CF_CASES.slice(0, 39).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     for (const c of manifest.cases.filter(x => x.stage < 4)) expect(c.markers.some(m => m.icon !== undefined), c.id).toBe(false)
@@ -5449,17 +5459,17 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const manifest = loadManifest()
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
-    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 48, 73, 145])
-    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 9, 16, 20])
-    expect(CF_CASES.slice(0, 58).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
-    expect(CF_CASES.slice(58).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
+    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 52, 73, 145])
+    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 10, 16, 20])
+    expect(CF_CASES.slice(0, 59).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
+    expect(CF_CASES.slice(59).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     // Stage 1-4 generated inputs are byte-identical to fc61c6c6's generator (digest of every case's archive hash).
     const all = createHash('sha256')
-    // The centred glyph key (appended after them), stage3-bar-bounds-num and stage2-scale-scope-disjoint (later case
-    // versions) are pinned on their own, so the earlier digest still holds.
-    const later = ['stage4-icon-glyph-key-centred', 'stage3-bar-bounds-num', 'stage2-scale-scope-disjoint']
+    // The centred glyph key (appended after them), stage3-bar-bounds-num, stage2-scale-scope-disjoint and
+    // stage2-scale-num-segment (later case versions) are pinned on their own, so the earlier digest still holds.
+    const later = ['stage4-icon-glyph-key-centred', 'stage3-bar-bounds-num', 'stage2-scale-scope-disjoint', 'stage2-scale-num-segment']
     for (const c of CF_CASES.filter(x => x.stage < 5 && !later.includes(x.id))) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
     expect(all.digest('hex')).toBe('c1daae80753c0dea2a10f782ac118a221f2df7fe1de83156e1a4bc08bcd89b36')
     for (const id of later) expect(sha256(await generateCaseArchive(id)), id).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, `tests/fixtures/xlsx-cf/inputs/${id}.xlsx`)))))

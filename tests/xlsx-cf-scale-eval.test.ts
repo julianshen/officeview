@@ -351,17 +351,21 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       const eThresholds = resolveScaleThresholds(ePoints, eStats)
       expect(eThresholds.kind).toBe('ready')
       if (eThresholds.kind === 'ready') {
+        const upper: string[] = []
         for (const cell of interpFixture.observedCells) {
           if (!cell.ref.match(/^E([2-9]|1[0-1])$/)) continue
           if (cell.fillSource !== 'excel-display-format' || cell.hidden === true) continue
           const val = Number(cell.formattedText)
           const color = scaleColorAt(val, ePoints, eThresholds.value)
+          // The num-segment follow-up (owner ruling A): upper-segment whole products are withheld, never a wrong colour.
+          if (color.kind === 'unresolved' && color.reason === 'cf-unmeasured-upper-segment-whole-product') { upper.push(cell.ref); continue }
           expect(color.kind).toBe('ready')
           if (color.kind === 'ready') {
             const hex = color.value.toString(16).toUpperCase().padStart(8, '0')
             expect(hex, `Cell ${cell.ref}`).toBe(cell.fillRgb)
           }
         }
+        expect(upper).toEqual(['E8', 'E9', 'E10'])
       }
     })
 
@@ -431,17 +435,20 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       const eThresholds = resolveScaleThresholds(ePoints, bStats)
       expect(eThresholds.kind).toBe('ready')
       if (eThresholds.kind === 'ready') {
+        const upper: string[] = []
         for (const cell of threshFixture.observedCells) {
           if (!cell.ref.match(/^E[2-6]$/)) continue
           if (cell.fillSource !== 'excel-display-format' || cell.hidden === true) continue
           const val = Number(cell.formattedText)
           const color = scaleColorAt(val, ePoints, eThresholds.value)
+          if (color.kind === 'unresolved' && color.reason === 'cf-unmeasured-upper-segment-whole-product') { upper.push(cell.ref); continue }
           expect(color.kind).toBe('ready')
           if (color.kind === 'ready') {
             const hex = color.value.toString(16).toUpperCase().padStart(8, '0')
             expect(hex, `Cell ${cell.ref}`).toBe(cell.fillRgb)
           }
         }
+        expect(upper).toEqual(['E5'])
       }
     })
 

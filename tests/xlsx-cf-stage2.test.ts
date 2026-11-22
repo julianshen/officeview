@@ -97,9 +97,10 @@ describe('every enabled scale capability has verified evidence', () => {
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(true)
     // 35 verified, scale:scope-disjoint included since stage2-scale-scope-disjoint (e448d831, union); 6 are measured but
-    // NON-DISCRIMINATING (Ruling F-2) and reported unverified, plus that case's twin and control ids (never a question).
+    // NON-DISCRIMINATING (Ruling F-2) and reported unverified, plus that case's twin and control ids (never a question),
+    // plus stage2-scale-num-segment's two questions (registered until its capture), its 2-colour and twin-line ids.
     expect(report.summary.verifiedCapabilities).toBe(35)
-    expect(report.summary.unverifiedCapabilities).toBe(8)
+    expect(report.summary.unverifiedCapabilities).toBe(12)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 

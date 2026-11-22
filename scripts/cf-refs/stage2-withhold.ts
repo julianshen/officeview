@@ -4,10 +4,12 @@
  * (scripts/cf-compare.ts). A withheld cell is accepted only when it carries no painted fill and is justified here:
  * - `STAGE2_WITHHELD_FINDINGS`: the typed, separately justified findings (Ruling F-2, S2-I, S2-J, Stage 5 stubs);
  * - `stage2NumSegmentShape`: the num-segment finding (capture e448d831, a87121e8), recomputed from the case's own marker
- *   and the cell's value, never a cell list.
+ *   and the cell's value, never a cell list;
+ * - `stage2UpperSegmentWholeProductShape`: the upper-segment whole-product withhold (owner ruling after stage2-scale-num-segment).
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
+import { upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -60,7 +62,7 @@ export const STAGE2_WITHHELD_FINDINGS: Readonly<Record<string, Stage2Finding>> =
     'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
 }
 
-type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { type: string; val?: string; f?: string }[] } }
+type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { type: string; val?: string; f?: string }[]; colors: readonly string[] } }
 
 /**
  * The num-segment finding (production's `numSegmentUnmeasured`, recomputed independently from the marker): a 3-colour
@@ -73,7 +75,7 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
   return markers.some(m => {
     if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
     const literal = (x: { type: string; val?: string; f?: string }): number | undefined =>
-      x.type === 'num' && x.f === undefined && x.val !== undefined && /^-?\d+(\.\d+)?$/.test(x.val) ? Number(x.val) : undefined
+      x.type === 'num' && x.f === undefined && x.val !== undefined && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(x.val) ? Number(x.val) : undefined
     const t = m.scale.cfvo.map(literal)
     // Positional thresholds: the midpoint above the maximum swaps the last two (as production re-sorts them).
     const idx = t[1] !== undefined && t[2] !== undefined && t[1] > t[2] ? [0, 2, 1] : [0, 1, 2]
@@ -83,4 +85,15 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
     if (lo === undefined || hi === undefined || !(value > lo && value < hi)) return false
     return !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)
   })
+}
+
+/**
+ * The upper-segment whole-product shape (owner ruling A after capture stage2-scale-num-segment; production's reason
+ * `cf-unmeasured-upper-segment-whole-product`), recomputed independently of production from the marker and the saved
+ * numbers (`upperWholeShapeAt`, scripts/cf-refs/upper-whole-justify.ts): a 3-colour cell strictly inside the UPPER segment
+ * (after the midpoint-above-max re-sort), any bound kind, where some RGB channel's span d != 0 gives an integer f·d.
+ * Stage 2 holds no formula bound: a formula bound justifies nothing here.
+ */
+export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
+  return markers.some(m => upperWholeShapeAt(m, ref, value, values))
 }

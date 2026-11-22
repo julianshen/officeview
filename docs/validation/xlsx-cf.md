@@ -3073,3 +3073,78 @@ The twins render as their literal rules, and every control is white. Both findin
   - **A `skipped` treatment at a midpoint.** No published kind reads `skipped`, so this does not arise today.
 
 **Audits.** Stage 5: `structural=35/35 unsupported=9 pending=5 unverifiedNonDiscriminating=13 stageComplete=true blocked=0`. 3,194 records over 35 cases (21 measured): 963 formula cells, of which 730 paint as Excel and 260 have justified unresolved slots, and 0 disagree.
+
+### 14.z.15 The num-segment follow-up: no reading matched; upper-segment whole products withheld (2026-11-22)
+
+**Why a new case.** Capture e448d831 (§14.z.13) drew T4 and V3 of `stage2-scale-scope-disjoint` one unit higher per channel than truncation: a 3-colour literal num 0 / 30 / 60 scale, upper segment, f = 1/3 and 2/3. The shape was withheld pending a pre-registered case. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §8. Interpretation: `.superpowers/sdd/cf-numseg/phase2-interpretation.md`.
+
+**Ordering, in git.** The registration rule needs both the hypotheses and production's behaviour committed before the capture.
+1. **The candidate search and readings:** f15a6540, 677ce6dd.
+2. **The case:** 4874ecdf, 533dd7a7.
+3. **Pre-capture fix rounds** (codex): 6791913c, 0aede4de and b11e5d6c (class consensus, separators, the statistical fail-closed path), then 5a490bb7 and 186352b8 (fail-closed candidate evaluation).
+4. **Capture:** 377564e0 (Excel 16.115). The coordinator built and captured it.
+
+**The case.** `stage2-scale-num-segment`, 281 cells over `A1:N30`:
+- 3-colour num 7 / 217 / 637 in both colour orders, with 12 fractions per segment and 13 separators;
+- a midpoint-above-max copy, and an exact replica of T4 and V3;
+- the same values under min / percentile 50 / max (`scale:num-segment-fraction-statistical`) and under 2-colour num (a negative control);
+- a 2-colour twin line, and 8 literal positive controls.
+
+126 readings were pre-registered for `scale:num-segment-fraction`: `truncate`, plus one per class of the 857 survivors of the candidate search over every earlier capture. 2 were pre-registered for the statistical id (`truncate`, `percent-roundtrip`).
+
+**The capture.**
+- `verifyCfCase`: **`formula-hypothesis-none` for both questions.** No pre-registered reading matches. The 2-colour and twin-line ids are non-discriminating comparisons.
+- **The capture is sound.** Every control is white, every positive control shows its dxf fill, and every twin-line cell equals its model P + k·(1, −1, 1). Every 2-colour twin is at truncation, and every DisplayFormat fill equals its pixel exactly. The minimum contrast is 125.
+- **Excel equals truncation at every designated cell except 19.** At each of those, the step from the segment's start colour is one unit smaller on every channel.
+
+| Cells | Scale | Upper-segment f |
+|---|---|---|
+| B17, B18, B21, B24, B28 | literal num 7 / 217 / 637, P/Q/P | 1/3, 2/3, 1/5, 1/7, 1/15 |
+| C17, C18, C21, C24, C28 | literal num 7 / 217 / 637, Q/P/Q | 1/3, 2/3, 1/5, 1/7, 1/15 |
+| D7, D8 | num 7 / 637 / 217 (midpoint above max, re-sorted) | 1/3, 2/3 |
+| D12, D13 | the T4/V3 replica (num 0 / 30 / 60) | 1/3, 2/3 (= T4, V3) |
+| E17, E18, E21, E24, E28 | min / percentile 50 / max (a published shape) | 1/3, 2/3, 1/5, 1/7, 1/15 |
+
+- **Where it moved:** every moved cell is in the upper segment of a 3-colour scale, at a whole product.
+- **Where it did not:** no lower-segment cell moved, at any fraction, 1/3, 2/3, 1/5, 1/7 and 1/15 included. Neither did any 2-colour cell or any non-whole product. Upper-segment whole products at 1/6, 5/6, 1/10, 3/10, 7/10, 6/7, 1/2 and 1/4 did not move either.
+- **No candidate in the search explains the split**, even scoped to upper segments.
+- **Default production mispainted E17, E18, E21, E24 and E28.** It painted truncation there, on a published shape that earlier captures had confirmed only at other fractions.
+
+**Owner ruling (A): withhold.** Production withholds a 3-colour colour-scale cell when all of these hold (`upperSegmentWholeProduct`, colorScale.ts; reason `cf-unmeasured-upper-segment-whole-product`):
+- it is strictly inside the **upper** segment (after the midpoint-above-max re-sort);
+- the bounds are of any kind: literal, min/max/percent/percentile, mixed or formula-resolved;
+- the step product is a whole number: for some RGB channel whose endpoints differ by d ≠ 0, `fraction · d` is an integer (`Number.isInteger`). Here `fraction` is production's `safeFraction` double, and the product is one IEEE multiplication.
+
+The definition covers all 19 moved cells, plus T4 and V3 (tests/xlsx-cf-scale-upper-whole-product.test.ts). The literal-num withhold (`numSegmentUnmeasured`, f·2^20) is unchanged and takes precedence for its cells. Nothing was narrowed.
+
+**Reach** (newly withheld; every other cell unchanged):
+
+| Case | Newly withheld | Of which confirmed-exact before |
+|---|---|---|
+| `stage2-scale-num-segment` | 13 (B26, C26, E17–E26, E28) | 8 (B26, C26, E19, E20, E22, E23, E25, E26); E17, E18, E21, E24, E28 were mispainted |
+| `stage2-scale-interpolation` | 3 (E8, E9, E10: percentile / max, f = 1/4, 1/2, 3/4) | 3 |
+| `stage2-scale-thresholds` | 1 (E5: percentile / max, product 36) | 1 |
+| `stage2-scale-scope-disjoint` | 1 (U4: literal, f = 1/4) | 1 |
+| `stage5-cfvo-nonnumeric-v2` | 4 (E4, E5, S4, S5: f = 1/4, 1/2) | 4 |
+
+Both stages recompute the justification independently of production (`scripts/cf-refs/upper-whole-justify.ts`; it imports neither `safeFraction` nor `upperSegmentWholeProduct`). The inputs are the marker's cfvo and colours, the sheet's own numbers and, for a formula midpoint, the published treatment of its result kind (only `zero` resolves). The checks are the strict upper-segment interior after the re-sort, the fraction with the same IEEE operations, and an integer f·d on some channel. Stage 2 uses it through `stage2UpperSegmentWholeProductShape` (cf-compare and the shared conformance pass); Stage 5 through `stage5JustifiedRefusals` with the sheet's cells (no list). Negative mutations must refuse: the review's S4 8 → 9, a moved threshold, a palette with no whole product, a lower-segment cell, a 2-colour scale, and an erroneous refusal planted at the mutated S4 (reported unjustified). The justified set is exactly the 22-cell reach. The conformance pass over the 9 measured Stage 2 cases reports 767 cells: 612 exact (4 of them the S5-STUB cells now compared), and 155 withheld, all justified (30 findings, 107 num-segment, 18 upper-segment whole product).
+
+**Nothing registered.**
+- `scale:num-segment-fraction` and `scale:num-segment-fraction-statistical` stay in `CF_STAGE2_NONDISCRIMINATING` as recorded findings. Their texts now record `formula-hypothesis-none`.
+- `CF_STAGE2_PRODUCTION_READINGS` is back to `scale:scope-disjoint` alone.
+- The pre-capture reading machinery (class consensus, the reading seam, the statistical fail-closed path) is removed from production. The candidate formulas and the class membership remain as documentation of the search, in `scripts/cf-refs/num-segment-formulas.ts` and `num-segment-classes.ts`, still pinned by tests.
+- `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `788a4d1e…`). The set is unchanged: 345 ids.
+
+**Audits.**
+- Stage 2: ok, `stageComplete`, 12 unverified-nondiscriminating.
+- Stage 5: ok, 0 disagreeing.
+- cf-compare, Stage 1–2 run: interactive and paged pass for every Stage 2 case, this case included. In that run the only failures are the 2 known date-dependent `stage1-timeperiod` failures in interactive mode. `stage5-cfvo-nonnumeric-v2` passes in both modes.
+- A full Stage 1–5 run is not clean, but the extra failures are pre-existing: they reproduce on `f85afce2`, before this branch, and are not addressed here. They are `stage3-bar-participation` B4 and `stage3-bar-composition` F2 (both modes), the Stage 4 glyph-key cases in interactive mode (`CF text preparation exceeds its admitted batch`), and the pending `stage5-cross-sheet-missing` B5 (both modes).
+
+**Hypotheses for a future pre-registered case** (none may be registered from this capture):
+- **H1:** Excel computes the upper segment from another origin or quantity, for example the position from the scale's minimum or from the maximum backwards, through an operation the search did not enumerate.
+  - Discriminate it with upper-segment whole products at the same p/q under different spans and midpoint positions.
+- **H2:** the moved set depends on the fraction's denominator. The moved denominators are 3, 5, 7 and 15. The unmoved ones are 2, 4, 6 and 10; 6/7 did not move, which contradicts "odd denominator".
+  - Probe more numerators per denominator in the upper segment.
+- **H3:** the upper segment's colour is computed from the maximum's end and rounded toward the midpoint colour, with a floating-point step not in the search.
+  - Test it with the inputs for H1, plus palettes whose upper-segment channel spans differ.
