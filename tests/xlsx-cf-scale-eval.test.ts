@@ -448,7 +448,8 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
             expect(hex, `Cell ${cell.ref}`).toBe(cell.fillRgb)
           }
         }
-        expect(upper).toEqual(['E5'])
+        // E4 (15.999999999999996, within the 1e-11 window since the owner ruling after 54fc3388) and E5 (product 36).
+        expect(upper).toEqual(['E4', 'E5'])
       }
     })
 

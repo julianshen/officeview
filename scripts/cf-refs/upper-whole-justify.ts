@@ -9,8 +9,8 @@
  * - the value is strictly inside it;
  * - f = (v - lo) / (hi - lo), with both differences halved first when either overflows (as production normalises), clamped
  *   to [0, 1];
- * - some RGB channel of the upper segment's colours (cfvo colours 2 and 3, positional) has d = |c2 - c1| != 0 with
- *   Number.isInteger(f * d).
+ * - some RGB channel of the upper segment's colours (cfvo colours 2 and 3, positional) has d = |c2 - c1| != 0 with f * d
+ *   within JUSTIFY_TRUNCATION_GUARD of a whole number k, 0 < k < d (owner ruling after capture 54fc3388).
  */
 import { isCellInSqref } from './verify'
 
@@ -32,11 +32,19 @@ export function independentFraction(v: number, lo: number, hi: number): number |
   return Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : undefined
 }
 
-/** Whether some RGB channel of `from` -> `to` (ARGB hex) has a non-zero span d with an integer f·d. */
+/**
+ * Production's truncation guard (`CF_TRUNCATION_GUARD` in src/xlsx/cf/colorScale.ts, `floor(f·d + 1e-11)`), restated here
+ * rather than imported so the justification stays independent; a test pins the two equal.
+ */
+export const JUSTIFY_TRUNCATION_GUARD = 1e-11
+
+/** Whether some RGB channel of `from` -> `to` (ARGB hex) has a non-zero span d with f·d within the guard of a whole k, 0 < k < d. */
 export function independentWholeProduct(from: string, to: string, f: number): boolean {
-  for (const k of [2, 4, 6]) {
-    const d = Math.abs(Number.parseInt(to.slice(k, k + 2), 16) - Number.parseInt(from.slice(k, k + 2), 16))
-    if (d !== 0 && Number.isInteger(f * d)) return true
+  for (const i of [2, 4, 6]) {
+    const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16))
+    if (d === 0) continue
+    const p = f * d, k = Math.round(p)
+    if (k > 0 && k < d && Math.abs(p - k) <= JUSTIFY_TRUNCATION_GUARD) return true
   }
   return false
 }

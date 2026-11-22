@@ -31374,6 +31374,2839 @@
       }
     },
     {
+      "id": "stage2-scale-upper-whole",
+      "stage": 2,
+      "question": "EXPLORATORY (nothing registrable): the upper-segment whole-product follow-up of capture 377564e0 (19 upper-segment whole products of 3-colour scales one unit smaller per channel than truncation, by no pre-registered rule). The extended search found no candidate, so only the control reading truncate is pre-registered and the capture is a measurement. 41 H2 cells (more numerators per denominator; denominators 9, 11, 12, 13, 17, 23, 31), 35 H1 cells (the same fractions over other origins, spans and midpoint positions), 26 H3 cells (asymmetric palettes, the T4/V3 replica), 14 E4 cells (decimal thresholds, exact products whole, double products not) and 11 controls (lower-segment mirrors, 2-colour twins). A 2-colour twin line shows every predicted P-line fill; literal cellIs positive controls the others.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage2-scale-upper-whole.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage2-scale-upper-whole.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:J27",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "A2:A25",
+          "ruleType": "colorScale",
+          "priority": 1,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B2:B5",
+          "ruleType": "colorScale",
+          "priority": 2,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE61EFA",
+              "FF14F028",
+              "FFE61EFA"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B6:B11",
+          "ruleType": "colorScale",
+          "priority": 3,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "396"
+              },
+              {
+                "type": "num",
+                "val": "792"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFDA2AEE",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B12:B16",
+          "ruleType": "colorScale",
+          "priority": 4,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "312"
+              },
+              {
+                "type": "num",
+                "val": "624"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFB054C4",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B17:B19",
+          "ruleType": "colorScale",
+          "priority": 5,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "374"
+              },
+              {
+                "type": "num",
+                "val": "748"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFCF35E3",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B20:B22",
+          "ruleType": "colorScale",
+          "priority": 6,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "414"
+              },
+              {
+                "type": "num",
+                "val": "828"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE321F7",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "B23:B24",
+          "ruleType": "colorScale",
+          "priority": 7,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "372"
+              },
+              {
+                "type": "num",
+                "val": "744"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFCE36E2",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "C2:C6",
+          "ruleType": "colorScale",
+          "priority": 8,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "210"
+              },
+              {
+                "type": "num",
+                "val": "420"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "C7:C11",
+          "ruleType": "colorScale",
+          "priority": 9,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "2000"
+              },
+              {
+                "type": "num",
+                "val": "2210"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "C12:C16",
+          "ruleType": "colorScale",
+          "priority": 10,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "10"
+              },
+              {
+                "type": "num",
+                "val": "220"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "C17:C21",
+          "ruleType": "colorScale",
+          "priority": 11,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-210"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "210"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "C22:C26",
+          "ruleType": "colorScale",
+          "priority": 12,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "1000000"
+              },
+              {
+                "type": "num",
+                "val": "1000210"
+              },
+              {
+                "type": "num",
+                "val": "1000420"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "D2:D6",
+          "ruleType": "colorScale",
+          "priority": 13,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "4200000"
+              },
+              {
+                "type": "num",
+                "val": "8400000"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "D7:D11",
+          "ruleType": "colorScale",
+          "priority": 14,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-1050"
+              },
+              {
+                "type": "num",
+                "val": "-630"
+              },
+              {
+                "type": "num",
+                "val": "-420"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product-control",
+          "sqref": "D12:D16",
+          "ruleType": "colorScale",
+          "priority": 15,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "D17:D21",
+          "ruleType": "colorScale",
+          "priority": 16,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "percentile",
+                "val": "30"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "E2:E6",
+          "ruleType": "colorScale",
+          "priority": 17,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE68752",
+              "FF14F028",
+              "FFE68752"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "E7:E11",
+          "ruleType": "colorScale",
+          "priority": 18,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FF825579",
+              "FF646464",
+              "FF825579"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "E12:E16",
+          "ruleType": "colorScale",
+          "priority": 19,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FF28DC17",
+              "FFFA0A80",
+              "FF28DC17"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "E17:E21",
+          "ruleType": "colorScale",
+          "priority": 20,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE13C0F",
+              "FF3C3C3C",
+              "FFE13C0F"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "F2:F3",
+          "ruleType": "colorScale",
+          "priority": 21,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "F4:F7",
+          "ruleType": "colorScale",
+          "priority": 22,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "180"
+              },
+              {
+                "type": "num",
+                "val": "360"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "F8:F11",
+          "ruleType": "colorScale",
+          "priority": 23,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "1"
+              },
+              {
+                "type": "num",
+                "val": "2.2"
+              },
+              {
+                "type": "num",
+                "val": "10"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "F12:F16",
+          "ruleType": "colorScale",
+          "priority": 24,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0.1"
+              },
+              {
+                "type": "num",
+                "val": "0.4"
+              },
+              {
+                "type": "num",
+                "val": "1"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "sqref": "F17:F19",
+          "ruleType": "colorScale",
+          "priority": 25,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0.7"
+              },
+              {
+                "type": "num",
+                "val": "1.3"
+              },
+              {
+                "type": "num",
+                "val": "2.2"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product-twin",
+          "sqref": "G2:G26",
+          "ruleType": "colorScale",
+          "priority": 26,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "210"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:upper-segment-whole-product-twin",
+          "sqref": "H2:H8",
+          "ruleType": "colorScale",
+          "priority": 27,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "210"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "c9e972b8ec0b8a84f396edbda8779c89572cf7fe7f544ec22671fdae0b586e98",
+        "savedSha256": "559e4c72ba7ea2042d19f21e252211c04eaace18384bbc5b93c1dd330a116241",
+        "provenance": "excel-observed",
+        "positiveRefs": [
+          "A2",
+          "A3",
+          "A4",
+          "A5",
+          "A6",
+          "A7",
+          "A8",
+          "A9",
+          "A10",
+          "A11",
+          "A12",
+          "A13",
+          "A14",
+          "A15",
+          "A16",
+          "A17",
+          "A18",
+          "A19",
+          "A20",
+          "A21",
+          "A22",
+          "A23",
+          "A24",
+          "A25",
+          "B2",
+          "B3",
+          "B4",
+          "B5",
+          "B6",
+          "B7",
+          "B8",
+          "B9",
+          "B10",
+          "B11",
+          "B12",
+          "B13",
+          "B14",
+          "B15",
+          "B16",
+          "B17",
+          "B18",
+          "B19",
+          "B20",
+          "B21",
+          "B22",
+          "B23",
+          "B24",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12",
+          "C13",
+          "C14",
+          "C15",
+          "C16",
+          "C17",
+          "C18",
+          "C19",
+          "C20",
+          "C21",
+          "C22",
+          "C23",
+          "C24",
+          "C25",
+          "C26",
+          "D2",
+          "D3",
+          "D4",
+          "D5",
+          "D6",
+          "D7",
+          "D8",
+          "D9",
+          "D10",
+          "D11",
+          "D12",
+          "D13",
+          "D14",
+          "D15",
+          "D16",
+          "D19",
+          "D20",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E6",
+          "E7",
+          "E8",
+          "E9",
+          "E10",
+          "E11",
+          "E12",
+          "E13",
+          "E14",
+          "E15",
+          "E16",
+          "E17",
+          "E18",
+          "E19",
+          "E20",
+          "E21",
+          "F2",
+          "F3",
+          "F4",
+          "F5",
+          "F6",
+          "F7",
+          "F8",
+          "F9",
+          "F10",
+          "F11",
+          "F12",
+          "F13",
+          "F14",
+          "F15",
+          "F16",
+          "F17",
+          "F18",
+          "F19",
+          "G2",
+          "G3",
+          "G4",
+          "G5",
+          "G6",
+          "G7",
+          "G8",
+          "G9",
+          "G10",
+          "G11",
+          "G12",
+          "G13",
+          "G14",
+          "G15",
+          "G16",
+          "G17",
+          "G18",
+          "G19",
+          "G20",
+          "G21",
+          "G22",
+          "G23",
+          "G24",
+          "G25",
+          "G26",
+          "H2",
+          "H3",
+          "H4",
+          "H5",
+          "H6",
+          "H7",
+          "H8",
+          "I2",
+          "I3",
+          "I4",
+          "I5",
+          "I6",
+          "I7",
+          "I8",
+          "I9",
+          "I10",
+          "I11",
+          "I12",
+          "I13",
+          "I14",
+          "I15",
+          "I16",
+          "I17",
+          "I18",
+          "I19",
+          "I20",
+          "I21",
+          "I22",
+          "I23",
+          "I24",
+          "I25",
+          "I26",
+          "J2",
+          "J3",
+          "J4"
+        ],
+        "negativeRefs": [
+          "A27",
+          "B27",
+          "C27",
+          "D27",
+          "E27",
+          "F27",
+          "G27",
+          "I27"
+        ],
+        "cells": [
+          {
+            "ref": "A2",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A3",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A4",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A5",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A6",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A7",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A8",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A9",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A10",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A11",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A12",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A13",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A14",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A15",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A16",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A17",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A18",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A19",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A20",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A21",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A22",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A23",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A24",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "A25",
+            "controlRef": "A27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B2",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B13",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B15",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B16",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B17",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B18",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B19",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B20",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B21",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B22",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B23",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B24",
+            "controlRef": "B27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C10",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C13",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C14",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C15",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C16",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C17",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C18",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C19",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C20",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C21",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C22",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C23",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C24",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C25",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C26",
+            "controlRef": "C27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D9",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D10",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D11",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D12",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D13",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D14",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D15",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D16",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D19",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D20",
+            "controlRef": "D27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E2",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E3",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E4",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E6",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E7",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E8",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E9",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E10",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E11",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E12",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E13",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E14",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E15",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E16",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E17",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E18",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E19",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E20",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E21",
+            "controlRef": "E27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F6",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F9",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F10",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F13",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F14",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F15",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F16",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F17",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F18",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "F19",
+            "controlRef": "F27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G2",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G3",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G4",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G5",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G7",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G8",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G9",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G10",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G11",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G12",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G13",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G14",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G15",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G16",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G17",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G18",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G19",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G20",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G21",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G22",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G23",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G24",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G25",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "G26",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H5",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "H8",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "I2",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF22E92A",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I3",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF32E12E",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I4",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF37DF2F",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I5",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF3EDB30",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF473C39",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I7",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF533C36",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I8",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF573C35",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I9",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF5ACD36",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I10",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF5D3C33",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I11",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF666365",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I12",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF686267",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I13",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF696267",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I14",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF6A6168",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I15",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF6E5F6B",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I16",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF733C2D",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I17",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF97CD7E",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I18",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFB4505D",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I19",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFCBDC81",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I20",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD0346B",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I21",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD72D6F",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I22",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFDBE182",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I23",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFDC2871",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I24",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFE0E283",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I25",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFE5E483",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I26",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFEC1879",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFEEE683",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFEFE784",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "I27",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFF2E884",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "A27",
+            "controlRef": "A2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B27",
+            "controlRef": "B2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C27",
+            "controlRef": "C2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D27",
+            "controlRef": "D2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E27",
+            "controlRef": "E2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F27",
+            "controlRef": "F2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G27",
+            "controlRef": "G2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I27",
+            "controlRef": "I2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          }
+        ]
+      },
+      "scaleReadings": [
+        {
+          "id": "h2",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "observable": "fill",
+          "refs": [
+            "A2",
+            "A3",
+            "A4",
+            "A5",
+            "A6",
+            "A7",
+            "A8",
+            "A9",
+            "A10",
+            "A11",
+            "A12",
+            "A13",
+            "A14",
+            "A15",
+            "A16",
+            "A17",
+            "A18",
+            "A19",
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B9",
+            "B10",
+            "B11",
+            "B12",
+            "B13",
+            "B14",
+            "B15",
+            "B16",
+            "B17",
+            "B18",
+            "B19",
+            "B20",
+            "B21",
+            "B22",
+            "B23",
+            "B24"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "A2": "twin:G16",
+              "A3": "twin:G6",
+              "A4": "twin:G23",
+              "A5": "twin:G14",
+              "A6": "twin:G7",
+              "A7": "twin:G4",
+              "A8": "twin:H3",
+              "A9": "twin:G19",
+              "A10": "twin:G13",
+              "A11": "twin:G8",
+              "A12": "twin:G5",
+              "A13": "twin:G3",
+              "A14": "twin:H7",
+              "A15": "twin:H4",
+              "A16": "twin:G20",
+              "A17": "twin:G12",
+              "A18": "twin:G26",
+              "A19": "twin:H6",
+              "B2": "twin:G6",
+              "B3": "twin:G4",
+              "B4": "twin:G3",
+              "B5": "twin:G2",
+              "B6": "twin:H2",
+              "B7": "twin:G20",
+              "B8": "twin:G11",
+              "B9": "twin:H3",
+              "B10": "twin:G21",
+              "B11": "twin:G15",
+              "B12": "twin:G17",
+              "B13": "twin:G9",
+              "B14": "twin:G18",
+              "B15": "twin:G15",
+              "B16": "twin:G10",
+              "B17": "twin:H2",
+              "B18": "twin:G22",
+              "B19": "twin:G24",
+              "B20": "twin:H8",
+              "B21": "twin:H6",
+              "B22": "twin:H5",
+              "B23": "twin:H3",
+              "B24": "twin:G25"
+            }
+          },
+          "twinExpect": {
+            "G10": "visual",
+            "G11": "visual",
+            "G12": "visual",
+            "G13": "visual",
+            "G14": "visual",
+            "G15": "visual",
+            "G16": "visual",
+            "G17": "visual",
+            "G18": "visual",
+            "G19": "visual",
+            "G2": "visual",
+            "G20": "visual",
+            "G21": "visual",
+            "G22": "visual",
+            "G23": "visual",
+            "G24": "visual",
+            "G25": "visual",
+            "G26": "visual",
+            "G3": "visual",
+            "G4": "visual",
+            "G5": "visual",
+            "G6": "visual",
+            "G7": "visual",
+            "G8": "visual",
+            "G9": "visual",
+            "H2": "visual",
+            "H3": "visual",
+            "H4": "visual",
+            "H5": "visual",
+            "H6": "visual",
+            "H7": "visual",
+            "H8": "visual"
+          }
+        },
+        {
+          "id": "h1",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "observable": "fill",
+          "refs": [
+            "C2",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C10",
+            "C11",
+            "C12",
+            "C13",
+            "C14",
+            "C15",
+            "C16",
+            "C17",
+            "C18",
+            "C19",
+            "C20",
+            "C21",
+            "C22",
+            "C23",
+            "C24",
+            "C25",
+            "C26",
+            "D2",
+            "D3",
+            "D4",
+            "D5",
+            "D6",
+            "D7",
+            "D8",
+            "D9",
+            "D10",
+            "D11"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "C2": "twin:G16",
+              "C3": "twin:G23",
+              "C4": "twin:H3",
+              "C5": "twin:H7",
+              "C6": "twin:G26",
+              "C7": "twin:G16",
+              "C8": "twin:G23",
+              "C9": "twin:H3",
+              "C10": "twin:H7",
+              "C11": "twin:G26",
+              "C12": "twin:G16",
+              "C13": "twin:G23",
+              "C14": "twin:H3",
+              "C15": "twin:H7",
+              "C16": "twin:G26",
+              "C17": "twin:G16",
+              "C18": "twin:G23",
+              "C19": "twin:H3",
+              "C20": "twin:H7",
+              "C21": "twin:G26",
+              "C22": "twin:G16",
+              "C23": "twin:G23",
+              "C24": "twin:H3",
+              "C25": "twin:H7",
+              "C26": "twin:G26",
+              "D2": "twin:G16",
+              "D3": "twin:G23",
+              "D4": "twin:H3",
+              "D5": "twin:H7",
+              "D6": "twin:G26",
+              "D7": "twin:G16",
+              "D8": "twin:G23",
+              "D9": "twin:H3",
+              "D10": "twin:H7",
+              "D11": "twin:G26"
+            }
+          },
+          "twinExpect": {
+            "G16": "visual",
+            "G23": "visual",
+            "G26": "visual",
+            "H3": "visual",
+            "H7": "visual"
+          }
+        },
+        {
+          "id": "h3",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "observable": "fill",
+          "refs": [
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "E9",
+            "E10",
+            "E11",
+            "E12",
+            "E13",
+            "E14",
+            "E15",
+            "E16",
+            "E17",
+            "E18",
+            "E19",
+            "E20",
+            "E21",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "E2": "FF5ACD36",
+              "E3": "FF3EDB30",
+              "E4": "FF32E12E",
+              "E5": "FF22E92A",
+              "E6": "FF37DF2F",
+              "E7": "FF6E5F6B",
+              "E8": "FF6A6168",
+              "E9": "FF686267",
+              "E10": "FF666365",
+              "E11": "FF696267",
+              "E12": "FFB4505D",
+              "E13": "FFD0346B",
+              "E14": "FFDC2871",
+              "E15": "FFEC1879",
+              "E16": "FFD72D6F",
+              "E17": "FF733C2D",
+              "E18": "FF5D3C33",
+              "E19": "FF533C36",
+              "E20": "FF473C39",
+              "E21": "FF573C35",
+              "F2": "FFCBDC81",
+              "F3": "FF97CD7E",
+              "F4": "FFE0E283",
+              "F5": "FFEEE683",
+              "F6": "FFF2E884",
+              "F7": "FFE5E483"
+            }
+          },
+          "twinExpect": {},
+          "positiveControls": {
+            "I2": "FF22E92A",
+            "I3": "FF32E12E",
+            "I4": "FF37DF2F",
+            "I5": "FF3EDB30",
+            "I6": "FF473C39",
+            "I7": "FF533C36",
+            "I8": "FF573C35",
+            "I9": "FF5ACD36",
+            "I10": "FF5D3C33",
+            "I11": "FF666365",
+            "I12": "FF686267",
+            "I13": "FF696267",
+            "I14": "FF6A6168",
+            "I15": "FF6E5F6B",
+            "I16": "FF733C2D",
+            "I17": "FF97CD7E",
+            "I18": "FFB4505D",
+            "I19": "FFCBDC81",
+            "I20": "FFD0346B",
+            "I21": "FFD72D6F",
+            "I23": "FFDC2871",
+            "I24": "FFE0E283",
+            "I25": "FFE5E483",
+            "I26": "FFEC1879",
+            "J2": "FFEEE683",
+            "J4": "FFF2E884"
+          }
+        },
+        {
+          "id": "e4",
+          "capabilityId": "scale:upper-segment-whole-product",
+          "observable": "fill",
+          "refs": [
+            "D19",
+            "D20",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "F13",
+            "F14",
+            "F15",
+            "F16",
+            "F17",
+            "F18",
+            "F19"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "D19": "FFEFE784",
+              "D20": "FFDBE182",
+              "F8": "FFEFE784",
+              "F9": "FFDBE182",
+              "F10": "FFCBDC81",
+              "F11": "FF97CD7E",
+              "F12": "twin:G16",
+              "F13": "twin:G6",
+              "F14": "twin:G23",
+              "F15": "twin:H7",
+              "F16": "twin:G26",
+              "F17": "twin:G16",
+              "F18": "twin:G23",
+              "F19": "twin:H7"
+            }
+          },
+          "twinExpect": {
+            "G16": "visual",
+            "G23": "visual",
+            "G26": "visual",
+            "G6": "visual",
+            "H7": "visual"
+          },
+          "positiveControls": {
+            "I17": "FF97CD7E",
+            "I19": "FFCBDC81",
+            "I22": "FFDBE182",
+            "J3": "FFEFE784"
+          }
+        },
+        {
+          "id": "control",
+          "capabilityId": "scale:upper-segment-whole-product-control",
+          "observable": "fill",
+          "refs": [
+            "A20",
+            "A21",
+            "A22",
+            "A23",
+            "A24",
+            "A25",
+            "D12",
+            "D13",
+            "D14",
+            "D15",
+            "D16"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "A20": "twin:G6",
+              "A21": "twin:G16",
+              "A22": "twin:G4",
+              "A23": "twin:G7",
+              "A24": "twin:G3",
+              "A25": "twin:G2",
+              "D12": "twin:G16",
+              "D13": "twin:G6",
+              "D14": "twin:G23",
+              "D15": "twin:H3",
+              "D16": "twin:H7"
+            }
+          },
+          "twinExpect": {
+            "G16": "visual",
+            "G2": "visual",
+            "G23": "visual",
+            "G3": "visual",
+            "G4": "visual",
+            "G6": "visual",
+            "G7": "visual",
+            "H3": "visual",
+            "H7": "visual"
+          }
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-upper-whole.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-upper-whole.json",
+          "pngSha256": "1bf2772ae8a11292c7ce40b48b37aec6fe513a3cd7fe55490bb6220dc4fcb8c3"
+        }
+      ],
+      "status": "measured",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-22T07:12:18.904Z",
+        "excelVersion": "16.115",
+        "inputSha256": "c9e972b8ec0b8a84f396edbda8779c89572cf7fe7f544ec22671fdae0b586e98",
+        "savedSha256": "559e4c72ba7ea2042d19f21e252211c04eaace18384bbc5b93c1dd330a116241",
+        "openedRepairFree": true
+      }
+    },
+    {
       "id": "stage3-bar-settings-probe",
       "stage": 3,
       "question": "S3-A precondition probe. One bar is authored against every default (axis middle, solid, border 1, x14 minLength 0 / maxLength 100, direction rightToLeft, showValue 0, negative colour distinct from positive); a default-valued control rule sits beside it. Calibration columns of 10, 30 and 60 characters, and one solid DXF-filled cell, give pixel calibration. Gridlines stay on here so gridline-to-gridline widths can be measured.",

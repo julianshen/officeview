@@ -437,7 +437,9 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
         const actualF = actualVal ?? textOf(actual.f) ?? textOf(actual['xm:f'])
         if (actualF === undefined || normalizeCfFormula(actualF) !== normalizeCfFormula(exp.f)) return false
       } else if (exp.val !== undefined) {
-        if (actualVal !== exp.val) {
+        // A literal bound compares by double, as bar bounds do: Excel 16.115 may resave val="2.2" as
+        // "2.2000000000000002", the same IEEE double (stage2-scale-upper-whole.rejected.xlsx).
+        if (!sameBarBound(actualVal, exp.val)) {
           // Excel drops val on min and max when canonicalizing (e.g. min val="0")
           if (!((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) {
             return false

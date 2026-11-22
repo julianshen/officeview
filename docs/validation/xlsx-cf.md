@@ -3115,7 +3115,7 @@ The twins render as their literal rules, and every control is white. Both findin
 - the bounds are of any kind: literal, min/max/percent/percentile, mixed or formula-resolved;
 - the step product is a whole number: for some RGB channel whose endpoints differ by d ≠ 0, `fraction · d` is an integer (`Number.isInteger`). Here `fraction` is production's `safeFraction` double, and the product is one IEEE multiplication.
 
-The definition covers all 19 moved cells, plus T4 and V3 (tests/xlsx-cf-scale-upper-whole-product.test.ts). The literal-num withhold (`numSegmentUnmeasured`, f·2^20) is unchanged and takes precedence for its cells. Nothing was narrowed.
+The definition covers all 19 moved cells, plus T4 and V3 (tests/xlsx-cf-scale-upper-whole-product.test.ts). *Since 2026-11-22 (§14.z.16), the whole-number test is the 1e-11 truncation-guard window instead of `Number.isInteger`. That adds `stage2-scale-thresholds` E4 to the reach below.* The literal-num withhold (`numSegmentUnmeasured`, f·2^20) is unchanged and takes precedence for its cells. Nothing was narrowed.
 
 **Reach** (newly withheld; every other cell unchanged):
 
@@ -3148,3 +3148,105 @@ Both stages recompute the justification independently of production (`scripts/cf
   - Probe more numerators per denominator in the upper segment.
 - **H3:** the upper segment's colour is computed from the maximum's end and rounded toward the midpoint colour, with a floating-point step not in the search.
   - Test it with the inputs for H1, plus palettes whose upper-segment channel spans differ.
+
+### 14.z.16 The upper-segment whole-product follow-up: captured, exploratory, nothing registered (2026-11-22)
+
+**Why.** §14.z.15 left three hypotheses for the 19 upper-segment whole products that capture 377564e0 drew one step smaller per channel. The extended search (recipe §9.1, 48,345 candidates) found no survivor. So `stage2-scale-upper-whole` was built as an **exploratory** case: only the `truncate` control was pre-registered, and nothing is registrable from it. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §9. Interpretation: `.superpowers/sdd/cf-upperwhole/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The search:** 581fea11.
+2. **The case:** 01295139, 72224243.
+3. **A verifier fix:** f2cfaaa6. Excel resaved `val="2.2"` as `2.2000000000000002`, the same double. The structural check had compared the text, so it rejected the first build, which is kept as `stage2-scale-upper-whole.rejected.xlsx`. Colour-scale literal cfvo values now compare by double, as bar bounds do.
+4. **Capture:** 54fc3388 (Excel 16.115). The rebuild opened repair-free.
+
+**The capture.**
+- **`verifyCfCase`:**
+  - `formula-hypothesis-none` for `scale:upper-segment-whole-product`;
+  - `truncate` matched for `scale:upper-segment-whole-product-control`;
+  - the twin line is a non-discriminating comparison.
+- **The audit verifies none of the three ids** (all `unverified-nondiscriminating`), and the verified Stage 2 set is unchanged.
+- **The capture is sound:**
+  - all 8 controls are white;
+  - all 28 positive controls show their dxf fill;
+  - all 32 twin-line cells equal P + k·(1, −1, 1);
+  - every pixel equals its DisplayFormat fill, and the minimum contrast is 123;
+  - the lower-segment mirrors and the 2-colour twins are at truncation;
+  - the E4/E5 replica D19/D20 equals `stage2-scale-thresholds` E4/E5, and F2/F3 equal T4/V3.
+- **Every designated cell is exactly truncation or "truncation minus one"** (one unit smaller on every exactly-whole channel). 79 moved and 48 did not.
+
+| Group | Cells | Moved | At truncation |
+|---|---|---|---|
+| `h2` | 41 | 24 | 17 |
+| `h1` | 35 | 28 | 7 |
+| `h3` | 26 | 19 | 7 |
+| `e4` | 14 | 8 | 6 |
+| `control` | 11 | 0 | 11 |
+
+**The hypotheses.**
+- **H1, origin: refuted in its full-span form.**
+  - With integer operands, 1/3, 1/5, 1/7 and 1/15 moved and 1/6 did not, in all 7 origin, span and midpoint blocks (zero minimum, midpoint near the max or the min, crossing zero, 10⁶ offsets, a 4.2·10⁶ span, negative values), and in both colour orders.
+  - The full-span position differs by orders of magnitude across those blocks, so a rule from the scale minimum cannot fit. The best `origin` candidate now fails 55 cells.
+  - Integer operands give the same segment doubles in every block, so this invariance does not separate p/q from the doubles.
+  - Decimal operands do: at the same p/q the outcome flips with the computed double. 2/3 stayed unmoved at F11 and F13 (f = fl(2/3) + 1 ulp). 1/6 moved at F16 (f below fl(1/6)).
+  - In every capture, cells with the same production double f had the same outcome: 40 distinct doubles, 0 inconsistent.
+- **H2, denominators: refuted as a rational rule.**
+  - Moved: 1/3, 2/3, 1/5, 2/5, 1/7, 2/7, 1/11, 1/12, 1/13, 2/13, 1/15, 2/15, 4/15, 1/23, 2/23, 1/31 and 2/31.
+  - Not moved: 3/5, 4/5, 3/7 … 6/7, 1/9, 2/9, 4/9, 2/11, 5/12, 7/15, 1/17 and 2/17, plus 1/6, 1/10 and the dyadics.
+  - This rules out denominator, odd-denominator, numerator-1 and threshold-on-f rules.
+  - It also rules out any rule on f's significand alone. 1/12 moved and 1/6 did not; 1/5 and 2/5 moved, 1/10 and 4/5 did not; 1/7 and 2/7 moved, 4/7 did not. Each set shares one significand.
+- **H3, per channel: per cell, and independent of d.**
+  - In each moved cell, every exactly-whole channel moved and no other channel did. Examples: E3 R and G, not B (42/5); E9 B only; F4 G only; F6 R only.
+  - At a given double f, no fraction's outcome changed with |d|, from 9 to 210, of either sign.
+  - "Per channel" is the per-cell move made visible only where the product is whole.
+
+**The search with this capture** (`npx tsx scripts/cf-refs/upper-whole-candidates.ts`; `--pre-capture` reproduces §9.1):
+- 1101 cells; production's truncation misses 100 of them (21 earlier and 79 new);
+- **0 survivors** at every scope;
+- best at the upper 3-colour scope: `origin` 55, `f32` 20, `precision` 13, `rational` 14;
+- **the float32-from-max near miss fails 20 cells**: E4, then 12 cells where it predicts a move Excel did not draw, and 7 where it predicts none and Excel moved. The family is refuted as a mechanism.
+
+**Production: consistent; nothing changes.**
+- At capture time, production painted 74 of the 195 cells, every one at Excel's exact ARGB. That included D19, the E4 replica and the known risk, which Excel drew at truncation.
+- It withheld 121 cells: 120 as the num-segment shape and D20 as an upper-segment whole product. Every withhold is justified.
+- The conformance pass, now over 10 measured Stage 2 cases, reported 962 cells: 686 exact and 276 withheld (227 num-segment, 19 upper whole product), with 0 violations.
+- Since the owner ruling below, D19 is also withheld, so the case has 73 exact and 122 withheld.
+- `cf-compare --case stage2-scale-upper-whole` passes in both modes. Stage 2 and Stage 5 audits are ok and complete, and `blockedCapabilities=0`.
+- Nothing was published, and no capability changed (no `src/` change).
+
+**A gap in the withhold, closed by owner ruling (2026-11-22).** Five moved cells, F12, F15, F16, F18 and F19, have an exact whole product but no IEEE-integer double product. F16: f = 0.16666666666666663, f·210 = 34.99999999999999; production's `floor(f·d + 1e-11)` gives 35, and Excel drew 34.
+- **Before:** `upperSegmentWholeProduct` (`Number.isInteger`) missed them. They were withheld only because they are literal num / num, so a statistical-bound twin would have been mispainted.
+- **The ruling: widen the withhold to production's truncation guard.** A channel with d ≠ 0 counts when k = round(f·d) has 0 < k < d and |f·d − k| ≤ 1e-11.
+  - The guard is `CF_TRUNCATION_GUARD` in `src/xlsx/cf/colorScale.ts`, also used by `interpolateChannel`.
+  - `scripts/cf-refs/upper-whole-justify.ts` restates it as `JUSTIFY_TRUNCATION_GUARD` without importing production; a test pins the two equal.
+  - The reason code is unchanged (`cf-unmeasured-upper-segment-whole-product`).
+- **Tests** (`tests/xlsx-cf-scale-upper-whole-product.test.ts`):
+  - a min / percentile / max twin of F12, F15, F16, F18 and F19 is withheld, and its literal twin keeps the num-segment reason;
+  - a product 1e-9 off a whole number (either side), k = 0, a lower-segment cell and a 2-colour scale are not withheld;
+  - the justification mirrors every case.
+- **Reach** (cells the upper-segment rule withholds, outside the literal withhold's precedence):
+
+| Case | Before | After | Newly withheld | Of which painted and exact before |
+|---|---|---|---|---|
+| `stage2-scale-interpolation` | 3 | 3 | — | — |
+| `stage2-scale-thresholds` | 1 | 2 | E4 | E4 |
+| `stage2-scale-scope-disjoint` | 1 | 1 | — | — |
+| `stage2-scale-num-segment` | 13 | 13 | — | — |
+| `stage2-scale-upper-whole` | 1 | 2 | D19 | D19 |
+| `stage5-cfvo-nonnumeric-v2` | 4 | 4 | — | — |
+
+- **Inside the literal withhold:** the window also brings F8, F11, F12, F13, F15, F16, F18 and F19 into the shape. They keep the num-segment reason, which takes precedence.
+- **Coverage:** every one of the 100 moved cells of every capture is now in the shape. No cell left the shape.
+- **The cost** is 2 cells Excel drew at truncation, E4 and its replica D19, withheld fail-closed.
+- **Effect on the passes:**
+  - The Stage 2 conformance pass reports 962 cells: 684 exact and 278 withheld (227 num-segment, 21 upper whole product), with 0 violations.
+  - Both audits are ok. cf-compare Stage 2 passes interactive and paged; the only failures are the two clock-dependent `stage1-timeperiod` interactive cases.
+  - The Stage 5 reach is unchanged. No capability changed, so nothing was republished.
+
+**Refined hypotheses for a future pre-registered case** (none registrable from this capture):
+- **R1:** the decision is per cell and a function of the segment's operand doubles; d only makes it visible.
+  - Probe it at a fixed p/q, stepping f through fl(p/q) ± 2 ulp with decimal operands.
+  - Repeat with the same double f from integer and from decimal operands.
+  - Vary r = (hi − v)/(hi − lo) at a fixed f, to separate a from-the-start computation from a from-the-maximum one.
+- **R2:** the decision depends on the exponent, not only on the significand. Candidate operations should be magnitude-sensitive: 1 − r, sums with the midpoint or an offset, (v − lo)·d/(hi − lo), extended-precision intermediates. Probe more power-of-two multiples of one significand (1/24, 1/48, 8/15, 8/9, 16/31).
+- **R3:** confirm d-independence at d = 1..8 (for example d = 3, 5, 7 at 1/3, 1/5, 1/7).
+- **R4:** measure the widened window directly: a statistical-bound 3-colour scale with decimal thresholds whose exact product is whole and whose double product is not (F12-like, thresholds 0.4 / 1). Production now withholds it; the capture would say whether E4-like cells there stay at truncation.

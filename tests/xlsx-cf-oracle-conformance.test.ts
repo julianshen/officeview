@@ -187,6 +187,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-composition',
     'stage2-scale-scope-disjoint',
     'stage2-scale-num-segment',
+    'stage2-scale-upper-whole',
   ]
 
 
@@ -601,25 +602,31 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     expect(checkedCount).toBeGreaterThan(0)
     // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831)
-    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115).
-    expect(checkedCount).toBe(491)
+    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115)
+    // + the 159 scale cells (127 designated, 32 twin line) of stage2-scale-upper-whole (measured, 54fc3388, Excel 16.115).
+    expect(checkedCount).toBe(650)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 9 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 10 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
     expect(r.violations).toEqual([])
     for (const caseId of STAGE2_MEASURED_CASES) expect(r.caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
-    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment.
-    expect(r.total).toBe(767)
+    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment
+    // + the 195 of stage2-scale-upper-whole (54fc3388).
+    expect(r.total).toBe(962)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
     // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
-    // withhold (owner ruling A), 172 exact. The upper-segment withhold also takes 5 earlier confirmed-exact cells:
-    // stage2-scale-interpolation E8, E9, E10, stage2-scale-thresholds E5 and stage2-scale-scope-disjoint U4.
-    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([107, 18])
-    expect(r.exact).toBe(364 + 77 - 5 + 172 + r.stubCompared)
-    expect(r.withheld).toBe(34 + 11 + 5 + 109 - r.stubCompared)
+    // withhold (owner ruling A), 172 exact. The upper-segment withhold also takes 6 earlier confirmed-exact cells:
+    // stage2-scale-interpolation E8, E9, E10, stage2-scale-thresholds E4 (the 1e-11 window) and E5, and
+    // stage2-scale-scope-disjoint U4.
+    // stage2-scale-upper-whole (exploratory): 120 literal cells withheld by the num-segment finding, D19 and D20 by the
+    // upper-segment whole-product withhold, 73 exact (the 2-colour twins, the twin line, the controls).
+    // The 1e-11 window (owner ruling after 54fc3388) also withholds stage2-scale-thresholds E4, confirmed-exact before.
+    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([227, 21])
+    expect(r.exact).toBe(364 + 77 - 6 + 172 + 73 + r.stubCompared)
+    expect(r.withheld).toBe(34 + 11 + 6 + 109 + 122 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

@@ -48,7 +48,10 @@ describe('3-colour scale, literal num segment, f·2^20 not an integer: withheld'
 
   it('a segment with a non-num bound paints as before (min/percentile/max: stage2-scale-thresholds E4 shape)', () => {
     const P: CfScalePoint[] = [{ bound: { type: 'min' }, argb: RED }, { bound: { type: 'percentile', value: 30 }, argb: YELLOW }, { bound: { type: 'max' }, argb: GREEN }]
-    expect(scaleColorAt(3, P, [1, 2.2, 10], all)).toEqual({ kind: 'ready', value: 0xffefe784 })
+    // E4 itself (15.999999999999996) is withheld by the upper-segment window since the owner ruling after 54fc3388;
+    // 3.03 (f·d = 16.6, 4.79, 0.96) is no whole product and paints.
+    expect(scaleColorAt(3, P, [1, 2.2, 10], all)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' })
+    expect(scaleColorAt(3.03, P, [1, 2.2, 10], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(YELLOW, GREEN, (3.03 - 2.2) / (10 - 2.2)) })
     // Only one of the two bounds of the segment is num: not the shape.
     const mixed: CfScalePoint[] = [num(0, RED), num(30, YELLOW), { bound: { type: 'max' }, argb: GREEN }]
     expect(scaleColorAt(40, mixed, [0, 30, 60], all)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }) // not this shape, but the upper-segment whole-product one
