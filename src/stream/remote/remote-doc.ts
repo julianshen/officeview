@@ -11,6 +11,8 @@ import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
 import type { MediaDelivery, MediaRoom, MediaShowAnswer, NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { StreamSheetLayout } from '../sheet-wire'
+import type { DecodedTile, TilesRequest, TilesResult } from './sheet-channel'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
@@ -46,6 +48,16 @@ export interface SessionLike {
   isEnded?(): boolean
   /** R28: the session's unit send budget. */
   readonly unitBudget?: UnitBudgetView
+  /** Stage 4a (see StreamSession.sheetLayout / tiles); absent ⇒ no tiles mode. */
+  sheetLayout?(sheetId: string, signal?: AbortSignal): Promise<StreamSheetLayout>
+  tiles?(req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult>
+}
+
+/** Stage 4a (S4 §6.11): a tiles-mode XLSX session's sheets: the visible sheets in tab order, and the tile protocol. */
+export interface RemoteSheets {
+  readonly list: ReadonlyArray<{ sheetId: string; name: string }>
+  layout(sheetId: string, signal?: AbortSignal): Promise<StreamSheetLayout>
+  tiles(req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult>
 }
 
 export interface RemoteOfficeDoc {
@@ -87,6 +99,8 @@ export interface RemoteOfficeDoc {
   readonly ended: Promise<StreamSessionError | undefined>
   /** R28: the session's unit send budget (every paint's sends are stamped on it). */
   readonly unitBudget?: UnitBudgetView
+  /** Stage 4a: present only when `manifest.sheetMode === 'tiles'` (the host opted in and the server agreed). */
+  readonly sheets?: RemoteSheets
   /** @internal Piece 4 (Task 11): the session's show requests, read by the lazy streamed show only. */
   readonly session?: Pick<SessionLike, 'showPlan' | 'showTrack' | 'showMorph' | 'mediaShow' | 'mediaCursor' | 'mediaRequest' | 'mediaEnd'>
 }
@@ -227,6 +241,17 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     onManifestChange(cb) { return session.onManifestChange?.(cb) ?? (() => {}) },
     close() { if (closed) return; closed = true; session.close() },
     ended: session.ended ?? new Promise(() => {}),
+  }
+  // Stage 4a: tiles mode is fixed for the sid (a resume that changes it ends the session), so it is read once.
+  const m = session.manifest
+  if (m.sheetMode === 'tiles' && m.sheets && session.sheetLayout && session.tiles) {
+    const s = session as Required<Pick<SessionLike, 'sheetLayout' | 'tiles'>>
+    const list = Object.freeze(m.sheets.map((x) => Object.freeze({ sheetId: x.sheetId, name: x.name })))
+    ;(doc as { sheets?: RemoteSheets }).sheets = {
+      list,
+      layout: (sheetId, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.sheetLayout(sheetId, signal),
+      tiles: (req, onTile, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.tiles(req, onTile, signal),
+    }
   }
   // A terminal end invalidates every pending paint: nothing commits pixels after it.
   void doc.ended.then((e) => { closed = true; if (e) o.onNotice?.({ code: e.code }) })
