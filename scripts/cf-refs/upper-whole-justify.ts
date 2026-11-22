@@ -11,8 +11,14 @@
  *   to [0, 1];
  * - some RGB channel of the upper segment's colours (cfvo colours 2 and 3, positional) has d = |c2 - c1| != 0 with f * d
  *   within JUSTIFY_TRUNCATION_GUARD of a whole number k, 0 < k < d (owner ruling after capture 54fc3388).
+ * The upper-segment window follow-up (stage2-scale-upper-window): once a window reading is registered with its evidence
+ * (`cfUpperWindowReading`, the registration table only, never production's arithmetic), production paints the `window`
+ * class of a segment not bounded by two literal num cfvo, so that class is justified no longer: only the `integer` class
+ * (an IEEE-integer product on some channel) and the literal-num segments stay justified.
  */
 import { isCellInSqref } from './verify'
+import { CF_UPPER_WINDOW_CAP, cfUpperWindowReading } from '../../src/xlsx/cf/colorScale'
+import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
 export type UpperWholeMarker = Readonly<{ ruleType: string; sqref: string; scale?: Readonly<{ cfvo: readonly UpperWholeCfvo[]; colors: readonly string[] }> }>
@@ -40,14 +46,29 @@ export const JUSTIFY_TRUNCATION_GUARD = 1e-11
 
 /** Whether some RGB channel of `from` -> `to` (ARGB hex) has a non-zero span d with f·d within the guard of a whole k, 0 < k < d. */
 export function independentWholeProduct(from: string, to: string, f: number): boolean {
+  return independentProductClass(from, to, f) !== undefined
+}
+
+/**
+ * The class of `independentWholeProduct`'s shape: `integer` when some channel's f·d is an IEEE integer k, 0 < k < d;
+ * `window` when none is but some lies within the guard of such a k; undefined otherwise.
+ */
+export function independentProductClass(from: string, to: string, f: number): 'integer' | 'window' | undefined {
+  let window = false
   for (const i of [2, 4, 6]) {
     const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16))
     if (d === 0) continue
     const p = f * d, k = Math.round(p)
-    if (k > 0 && k < d && Math.abs(p - k) <= JUSTIFY_TRUNCATION_GUARD) return true
+    if (!(k > 0 && k < d)) continue
+    if (Number.isInteger(p)) return 'integer'
+    if (Math.abs(p - k) <= JUSTIFY_TRUNCATION_GUARD) window = true
   }
-  return false
+  return window ? 'window' : undefined
 }
+
+/** Whether a window reading is registered with its evidence (production then paints the window class of statistical segments). */
+const windowReadingRegistered = (): boolean => cfUpperWindowReading(CF_UPPER_WINDOW_CAP) !== undefined && hasEvidence(CF_UPPER_WINDOW_CAP)
+const literalNumCfvo = (x: UpperWholeCfvo): boolean => x.type === 'num' && x.f === undefined
 
 /**
  * Whether `ref` (value `value`) is in the shape under `marker`. `values` holds the numeric cells of the sheet (the scope's
@@ -76,5 +97,9 @@ export function upperWholeShapeAt(marker: UpperWholeMarker, ref: string, value: 
   const [mid, top] = t1 > t2 ? [t2, t1] : [t1, t2]
   if (!(t0 < mid && mid < top) || !(value > mid && value < top)) return false
   const f = independentFraction(value, mid, top)
-  return f !== undefined && independentWholeProduct(marker.scale.colors[1]!, marker.scale.colors[2]!, f)
+  if (f === undefined) return false
+  const cls = independentProductClass(marker.scale.colors[1]!, marker.scale.colors[2]!, f)
+  // The upper segment is bounded by cfvo 2 and 3 in either order (the midpoint-above-max re-sort swaps them).
+  if (cls === 'window' && !(literalNumCfvo(marker.scale.cfvo[1]!) && literalNumCfvo(marker.scale.cfvo[2]!)) && windowReadingRegistered()) return false
+  return cls !== undefined
 }

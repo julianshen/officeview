@@ -516,20 +516,96 @@ const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && 
  * replica D19 (15.999999999999996), which Excel drew at truncation: fail-closed.
  */
 export function upperSegmentWholeProduct(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
-  if (!(value > tLo && value < tHi)) return false
+  return upperSegmentProductClass(c1, c2, value, tLo, tHi, fraction) !== undefined
+}
+
+/**
+ * The upper-segment window follow-up (brief cf-upperwindow): which part of `upperSegmentWholeProduct`'s shape a cell is in.
+ * `integer`: some RGB channel's product `fraction * d` is an IEEE integer k, 0 < k < d (the shape captures 377564e0 and
+ * 54fc3388 measured, withheld whatever a window reading says). `window`: no channel is an IEEE integer, but some channel's
+ * product lies within CF_TRUNCATION_GUARD of a whole k, 0 < k < d (the widening of PR #99). Undefined: neither, or the value
+ * is not strictly inside the segment.
+ */
+export function upperSegmentProductClass(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): 'integer' | 'window' | undefined {
+  if (!(value > tLo && value < tHi)) return undefined
+  let window = false
   for (const shift of [16, 8, 0]) {
     const d = Math.abs(((c2 >>> shift) & 0xff) - ((c1 >>> shift) & 0xff))
     if (d === 0) continue
     const p = fraction * d, k = Math.round(p)
-    if (k > 0 && k < d && Math.abs(p - k) <= CF_TRUNCATION_GUARD) return true
+    if (!(k > 0 && k < d)) continue
+    if (Number.isInteger(p)) return 'integer'
+    if (Math.abs(p - k) <= CF_TRUNCATION_GUARD) window = true
   }
-  return false
+  return window ? 'window' : undefined
 }
 
-/** A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`, else production's interpolation. */
-function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
-  if (literalNumBound(lo) && literalNumBound(hi) && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
-  if (seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
+/**
+ * The upper-segment window follow-up (brief cf-upperwindow, Phase 1 task 2): the readings of Excel's step at a cell in the
+ * `window` class of a 3-colour upper segment that is NOT bounded by two literal num cfvo (min, max, percent, percentile, mixed
+ * or formula-resolved bounds; the literal shape is withheld as the num-segment shape first). Per RGB channel, the step from
+ * the segment's start colour, |d| the channel's span:
+ * - `guarded`: floor(f·|d| + 1e-11), production's `interpolateChannel` (what PR #99 withheld; E4 and D19 were drawn so);
+ * - `raw-floor`: floor(f·|d|), no guard (one smaller where the product is just below an integer; F12, F15, F16, F18 of the
+ *   literal capture 54fc3388 were drawn so).
+ * The candidate search (scripts/cf-refs/upper-window-candidates.ts) left no survivor, so these two are the only readings.
+ */
+export const CF_UPPER_WINDOW_READINGS = ['guarded', 'raw-floor'] as const
+export type CfUpperWindowReading = (typeof CF_UPPER_WINDOW_READINGS)[number]
+/** The capability a window reading is registered under (stage2-scale-upper-window). */
+export const CF_UPPER_WINDOW_CAP = 'scale:upper-window-statistical'
+/**
+ * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
+ * (with its evidence), every window-class cell stays withheld (`cf-unmeasured-upper-segment-whole-product`), as on main. The
+ * audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_UPPER_WINDOW_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperWindowReading>>> = Object.freeze({})
+let proposedUpperWindowReadings: Readonly<Partial<Record<string, CfUpperWindowReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfUpperWindowReadings(readings: Readonly<Partial<Record<string, CfUpperWindowReading>>> | null): void {
+  proposedUpperWindowReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The window reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfUpperWindowReading(capability: string = CF_UPPER_WINDOW_CAP): CfUpperWindowReading | undefined {
+  const r = proposedUpperWindowReadings && Object.prototype.hasOwnProperty.call(proposedUpperWindowReadings, capability) ? proposedUpperWindowReadings[capability] : CF_UPPER_WINDOW_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_UPPER_WINDOW_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/**
+ * One window reading's colour between `argb0` (at f = 0) and `argb1`, per channel from the start colour, alpha included (f
+ * clamped to [0, 1]). Undefined (the caller withholds) on any non-finite intermediate.
+ */
+export function upperWindowReadingColor(reading: CfUpperWindowReading, argb0: number, argb1: number, fraction: number): number | undefined {
+  if (!Number.isFinite(fraction)) return undefined
+  const f = Math.max(0, Math.min(1, fraction))
+  let out = 0
+  for (const shift of [24, 16, 8, 0]) {
+    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
+    const p = f * Math.abs(c1 - c0)
+    if (!Number.isFinite(p)) return undefined
+    const k = reading === 'guarded' ? Math.floor(p + CF_TRUNCATION_GUARD) : Math.floor(p)
+    if (!Number.isFinite(k)) return undefined
+    out |= (c1 >= c0 ? c0 + k : c0 - k) << shift
+  }
+  return out >>> 0
+}
+
+/**
+ * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`; an upper-segment cell in the
+ * `integer` class is withheld; one in the `window` class follows the window reading when it is registered with its evidence,
+ * the segment is not bounded by two literal num cfvo and the default sRGB / truncate variants hold, else is withheld; every
+ * other cell is production's interpolation.
+ */
+function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
+  const literal = literalNumBound(lo) && literalNumBound(hi)
+  if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  const cls = seg.segment === 1 ? upperSegmentProductClass(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) : undefined
+  if (cls === 'window' && !literal && colorSpace === 'sRGB' && rounding === 'truncate') {
+    const r = cfUpperWindowReading(CF_UPPER_WINDOW_CAP)
+    const argb = r !== undefined && checkEvidence(CF_UPPER_WINDOW_CAP) ? upperWindowReadingColor(r, seg.c0, seg.c1, seg.fraction) : undefined
+    if (argb !== undefined) return { kind: 'ready', value: argb }
+  }
+  if (cls !== undefined) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
   return { kind: 'ready', value: interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding) }
 }
 
@@ -659,7 +735,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 3, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[mid]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[0]!, points[mid]!, seg, colorSpace, rounding)
+      return threeColourSegment(points[0]!, points[mid]!, seg, checkEvidence, colorSpace, rounding)
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
@@ -667,7 +743,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t1, hi: t2, fraction, c0: c1, c1: c2, colours: 3, segment: 1, loKind: segmentBoundKind(points[mid]!), hiKind: segmentBoundKind(points[top]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[mid]!, points[top]!, seg, colorSpace, rounding)
+      return threeColourSegment(points[mid]!, points[top]!, seg, checkEvidence, colorSpace, rounding)
     }
   }
 }

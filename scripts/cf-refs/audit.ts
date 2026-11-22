@@ -84,6 +84,7 @@ import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
+import { CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
 import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
 import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
@@ -259,10 +260,13 @@ export type Stage2AuditReport = Stage1AuditReport
  * one union scope, as for bars and icons (`icon:scope-disjoint` in CF_STAGE4_PRODUCTION_READINGS). Pinned to behaviour in
  * tests/xlsx-cf-scale-scope-disjoint.test.ts. The num-segment ids (stage2-scale-num-segment) have no entry: their capture
  * matched no pre-registered reading (formula-hypothesis-none), so nothing is registered and they stay recorded findings.
+ * The upper-segment window id spreads colorScale.ts's table (`CF_UPPER_WINDOW_PRODUCTION_READINGS`: empty until
+ * stage2-scale-upper-window's capture matches a reading and it is registered there).
  * A capability whose matched reading differs, or has no entry, stays withheld.
  */
 export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
   'scale:scope-disjoint': 'union',
+  ...(CF_UPPER_WINDOW_PRODUCTION_READINGS as Readonly<Record<string, string>>),
 }
 
 export function auditStage2Manifest(
