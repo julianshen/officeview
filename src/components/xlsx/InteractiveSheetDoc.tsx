@@ -96,7 +96,8 @@ import { SearchBar, ZoomControls } from '../viewerControls'
 import { MotionRoot, Tick } from '../motion/presets'
 import { themeRootProps, type ThemeMode } from '../theme'
 import { warnIfStylesMissing } from '../styleWarning'
-import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
+import { sheetSourceOf, type ViewerSheetSource } from './viewerSource'
+import { streamSheetGeometry } from '../../xlsx/view/streamGeometry'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { documentWithSparklines, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
 import { sheetWithRegionStyles, sheetWithoutRegionStyles } from '../../worker/viewerRemoteRegionStyles'
@@ -441,7 +442,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const source = useMemo(() => props.source ?? createObjectWorkbookSource(doc, docId), [doc, docId, props.source])
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
-  const remote = isRemoteWorkbook(source) ? source : null
+  // S4 §6.1 (R16): `remote` is the paged source (kind 'paged') and every paged-only member is reached through it;
+  // `stream` is a tiles-mode stream (kind 'stream', no cell data); `shared` is either, typed to the members both have.
+  const { paged: remote, stream } = sheetSourceOf(source)
+  const shared: ViewerSheetSource | null = remote ?? stream
   useEffect(() => {
     if (!remote) return
     return remote.subscribeSparklineEvictions(sheetId => {
@@ -532,7 +536,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
   // Unsubscribe in the removing commit, before passive source release emits close.
-  useLayoutEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  useLayoutEffect(() => shared?.subscribe(() => setLoadTick(tick => tick + 1)), [shared])
   useEffect(() => {
     if (!remote) return
     return remote.subscribeRegionStyleEvictions(sheetId => {
@@ -812,9 +816,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
   const localViews = useRef(new Map<string, SheetViewInput>()).current
   const viewInput = (sheetId: string): SheetViewInput => {
-    if (remote) {
-      // The worker owns a paged sheet's view; its revision is the worker viewGen.
-      const view = remote.view(sheetId)
+    if (shared) {
+      // The worker owns a paged sheet's view; its revision is the worker viewGen (a stream's: the server's viewGen).
+      const view = shared.view(sheetId)
       return { revision: view.revision, order: view.order, ...(view.visibility ? { visibility: view.visibility } : {}), filter: view.filter, sort: view.sort }
     }
     const local = localViews.get(sheetId), external = views?.[sheetId]
@@ -898,8 +902,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
-    const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
-    const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
+    const structureGen = shared ? shared.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
+    const valueGen = shared ? 0 : source.store(sheetId).stamp.valueGen
     const drawingGen = (remote ? remote.drawings(sheetId).gen : 0) + timelineGeneration
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
     const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.drawingGen === drawingGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
@@ -913,23 +917,24 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // A rebuild for session sizes alone keeps the view buffers it already shows
     // (charged and held). A structure change (a worker layout publication)
     // refreshes the authored-hidden set and the mask derived from it.
-    const sameView = Boolean(previous && previous.revision === input.revision && (remote !== null || sameInput(previous.input, input)))
+    const sameView = Boolean(previous && previous.revision === input.revision && (shared !== null || sameInput(previous.input, input)))
     const sameStructure = sameView && previous!.structureGen === structureGen
     const order = sameView ? previous!.view.order : input.order ?? createIdentityOrder()
-    const baseHidden = sameStructure ? previous!.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
+    const baseHidden = sameStructure ? previous!.view.baseHidden : shared ? shared.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const authored = () => visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     // An adopted worker (filter) mask predates a newer authored-hidden set: the
     // shown mask is that mask AND NOT authored-hidden (it never revives a
     // filtered row; source identities are unchanged).
     const visibility = sameStructure ? previous!.view.visibility
-      : input.visibility ? (remote && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
+      : input.visibility ? (shared && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
         : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
-    const overlay = remote ? undefined : pivotOverlays.get(sheetId)
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
+    const overlay = shared ? undefined : pivotOverlays.get(sheetId)
+    // A stream sheet's geometry is the server's layout alone (no cells, no drawings: they are pixels in the tiles).
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : stream ? streamSheetGeometry(stream.wireLayout(sheetId)) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
-    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
+    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(shared ? null : order, shared && visibility === input.visibility ? null : visibility)
     return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
@@ -949,16 +954,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // while a view holds them: a resident sort/filter's, and the base visibility
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
     // view's adopted buffers are charged by the workbook (adopt).
-    chargeViewBuffers(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
+    chargeViewBuffers(shared ? null : order, shared && visibility === input.visibility ? null : visibility)
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
-    const used = remote?.layout(sheetId).used
+    const used = shared?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : shared ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
-      ...((remote ? remote.layout(sheetId).frozen : sheet.frozen) ? { frozen: remote ? remote.layout(sheetId).frozen : sheet.frozen } : {}),
+      ...((shared ? shared.layout(sheetId).frozen : sheet.frozen) ? { frozen: shared ? shared.layout(sheetId).frozen : sheet.frozen } : {}),
     }
     entries.set(sheetId, entry)
     holds.own(entry)
@@ -1959,7 +1964,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return { owner: current.current.identityOf(current.current.activeSheetId), filter: e.view.filter, sort: e.view.sort, records: { ...recordCounts(e.metrics, body), completeness: 'complete' } }
   }
   // Only the active sheet keeps a worker row cache (§12.4).
-  useEffect(() => { remote?.activate(activeSheetId) }, [remote, activeSheetId])
+  // A stream fetches the sheet's layout here (once per activation); it never rejects (failures show through loadState).
+  useEffect(() => { void shared?.activate(activeSheetId) }, [shared, activeSheetId])
   const [controls, setControls] = useState<ViewerControls | null>(null)
   const controlsReady = useRef<Promise<ViewerControls> | null>(null)
   const controlPorts = useRef(new Map<string, ViewerControls>()).current
@@ -1980,14 +1986,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       publish: draft => {
         cancelCopy()
         // A worker-owned view was already adopted from the worker's delta.
-        if (!remote) localViews.set(sheetId, { revision: current.current.identityOf(sheetId).viewGen + 1, ...draft })
+        if (!shared) localViews.set(sheetId, { revision: current.current.identityOf(sheetId).viewGen + 1, ...draft })
         current.current.entryFor(sheetId)
         rerender()
         return snapshot(sheetId)
       },
-      ...(remote ? { styleOf: (index: number) => remote.styleOf(index), remote: {
-        sort: (spec, signal, progress) => remote.sort(remote.identity(sheetId), spec, signal, progress),
-        filter: (spec, keySets, signal, progress) => remote.filter(remote.identity(sheetId), spec, keySets, signal, progress),
+      ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
+      // A stream's sort and filter reject stream-no-cell-data until 4c (sheet-sort / sheet-filter).
+      ...(shared ? { remote: {
+        sort: (spec, signal, progress) => shared.sort(shared.identity(sheetId), spec, signal, progress),
+        filter: (spec, keySets, signal, progress) => shared.filter(shared.identity(sheetId), spec, keySets, signal, progress),
       } } : {}),
     }, abort.signal)
     controlsReady.current = ready
@@ -2612,7 +2620,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [source, live])
   const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
   // A worker-backed sheet is complete only once its import finished (LIFE-03).
-  const loadState = remote?.loadState(activeSheetId)
+  const loadState = shared?.loadState(activeSheetId)
   // Retained font diagnostics (§9.1): bounded and deduplicated by family.
   const pagedDrawingNotices = activeDrawings ? drawingNotices(activeDrawings) : []
   const activeCharts = entry ? sheetCharts(entry.sheet.drawings) : []
