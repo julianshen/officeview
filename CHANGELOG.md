@@ -10,6 +10,15 @@ in git history.
 
 ## [Unreleased]
 
+### Changed
+
+- **Some 3-colour colour-scale cells are now withheld.** The affected cells lie strictly inside the upper segment of a 3-colour Excel colour scale, between the midpoint and the maximum, with any kind of bounds. They are withheld when the interpolation step is a whole number on some colour channel.
+  - **Why:** a dedicated Excel 16.115 capture (`stage2-scale-num-segment`) showed Excel drawing such cells one unit off production's interpolation at some fractions (1/3, 2/3, 1/5, 1/7, 1/15) but not at others. No pre-registered explanation matched.
+  - **What you see:** these cells keep their base formatting and are announced as unavailable (`cf-unmeasured-upper-segment-whole-product`).
+  - **Reach:** this stops 5 mispainted cells of a min / percentile / max scale. It also withholds 17 cells, across 5 captured cases, that were already painted correctly.
+  - **Unchanged:** the lower segment, 2-colour scales and every other cell paint as before. No capability changed (345 verified).
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.15.
+
 ### Added
 
 - **Excel colour scales with a formula bound that reads a blank cell.** A colour-scale `type="formula"` bound that evaluates
