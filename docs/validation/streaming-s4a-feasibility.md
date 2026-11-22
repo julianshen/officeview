@@ -1,6 +1,10 @@
 # Stream S4a, Task 1: tile feasibility gate
 
-**Verdict: RED, on one clause.** Leg (c)'s blank-pane clause failed: 0 of 30 abstained `flat`, because all 30 were attributed to the right session. Every other gate is GREEN. Per R1, Task 1 stops here and reports. No threshold was changed.
+**Verdict: GREEN** (re-graded 2026-11-23 under the owner ruling below).
+
+**Owner ruling (2026-11-23).** Leg (c)'s blank-pane clause becomes "a marked blank pane never names a wrong session". Blank tiles stay marked.
+
+**History.** As first graded, under the brief's clause "the blank pane abstains `flat` 30/30", the gate was RED: 0 of 30 abstained, because all 30 were attributed to the right session. That clause is superseded. Its RED result is kept below. The measurements are run 3's, unchanged; nothing was re-run.
 
 | Leg | Gate | Measured | Verdict |
 |---|---|---|---|
@@ -11,7 +15,8 @@
 | (c) JPEG q70 | ≥ 75 % | 30/30 = 100 % | GREEN |
 | (c) 50 % downscale | ≥ 75 % | 30/30 = 100 % | GREEN |
 | (c) wrong attributions | 0 | 0 in 90 captures (plus 0 in 30 blank-pane captures) | GREEN |
-| (c) blank pane | abstains `flat` 30/30 | **0/30 abstained; 30/30 attributed to the right session** (z p50 39.7) | **RED** |
+| (c) blank pane (owner ruling 2026-11-23) | a marked blank pane never names a wrong session | 0 wrong; 30/30 attributed to the right session (z p50 39.7) | GREEN |
+| (c) blank pane, original clause (superseded) | abstains `flat` 30/30 | 0/30 abstained | ~~RED~~ (superseded) |
 | (d) million rows | open ≤ 10 s, heap growth ≤ 256 MiB, last-row tile renders | open 196 ms, heap +6.45 MiB, A1048576 painted | GREEN |
 
 Machine: darwin-arm64 (14 cores), Bun 1.4.5. Other agents' test suites shared the CPU; the 1-minute load average was recorded with each run.
@@ -131,7 +136,7 @@ That is about 1.8×, measured under load. S0 T8 measured a 17 ms p50 on a raw ba
 | 50 % downscale | 30/30 (100 %) | 0 | 0 | 0 | 38.42 / 39.18 / 39.23 |
 | **blank pane** (lossless) | **30/30 to the right sid** | 0 | 0 | **0 flat** | 39.72 / 40.20 / 40.47 |
 
-### Why the blank pane does not abstain (the RED)
+### Why the blank pane does not abstain (the original RED, superseded by the 2026-11-23 ruling)
 
 The gate assumes a blank pane gives flat evidence. It does not:
 
@@ -140,7 +145,9 @@ The gate assumes a blank pane gives flat evidence. It does not:
 
 `flat` is reached only for an **unmarked**, reference-identical capture (parent §13.2). Here it is never reached.
 
-The plan's Task 10 test `"a blank pane abstains"` and R15's "flat tiles may abstain" rest on the same assumption. They will not hold as written. This is a ruling for the owner; it is not a detector defect. No wrong attribution was made.
+The plan's Task 10 test `"a blank pane abstains"` and R15's "flat tiles may abstain" rest on the same assumption. They will not hold as written. This was a ruling for the owner; it is not a detector defect. No wrong attribution was made.
+
+**Resolved 2026-11-23:** blank tiles stay marked, and the clause is now "never a wrong session": 0 wrong in 30, GREEN. Task 10's blank-pane test and R15 should follow the ruling.
 
 ### The `markLayerRaster` crop alternative
 
@@ -196,16 +203,11 @@ The engine row ran second, on a warm process.
 
 ## Concerns
 
-1. **The (c) blank-pane clause is RED**, as above. The owner decides among three options:
-   - change the gate to "a marked blank pane never names a wrong session";
-   - leave flat tiles unmarked, so that an unmarked flat capture abstains;
-   - keep the gate, and require that blank tiles abstain.
-
-   Task 10's blank-pane test inherits whichever is chosen.
+1. **The (c) blank-pane clause: resolved.** The owner ruled on 2026-11-23: blank tiles stay marked, and the clause is "a marked blank pane never names a wrong session", which is GREEN. Task 10's blank-pane test inherits the ruling.
 2. **Leg (b) is load-sensitive at dpr 1.** The headroom is 13 ms on a quiet core, and the contended run read 184 ms. Two levers, neither tried here:
    - font pinning costs about 1.8× on render;
    - `markRaster` decodes and re-encodes the PNG, about 23 ms per tile, which is a quarter of the total.
-3. **`savedFormula` does not discriminate.** The engine does not overwrite the saved 7. F1's T5 and T15 checks that `savedFormula == plainSeven` would pass under either policy. Task 5 needs a fixture the engine does recompute, for example `fullCalcOnLoad`, or a formula over a purged hidden row.
+3. **`savedFormula` does not discriminate.** The engine does not overwrite the saved 7. F1's T5 and T15 checks that `savedFormula == plainSeven` would pass under either policy. **T5 will fix this fixture** (ruled 2026-11-23). It needs one the engine does recompute, for example `fullCalcOnLoad`, or a formula over a purged hidden row.
 4. **The 50 % downscale is easy here.** The (40, 40) offset is even and the cells are 4 px, so a 2× box-average keeps every chip's mean. That is why its z equals the lossless z. An odd-offset downscale would be a harder test; it was not asked for.
 5. **The visible mark is approximated.** It is laid out per tile, over the tile's CSS box at the tile's scale. The product lays it out in global sheet device space; the cost is of the same order, about 0.2 ms.
 6. **`tauFor(64)`** resolves to the smallest declared table, M = 2^16, so τ is conservative for 64 candidates.

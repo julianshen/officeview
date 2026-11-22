@@ -550,10 +550,18 @@
       "q70": true,
       "downscale": true,
       "zeroWrong": true,
-      "blankAbstainsFlat": false
+      "blankNeverWrong": true
     },
-    "verdict": "RED",
-    "basisChoice": "per-tile"
+    "verdict": "GREEN",
+    "basisChoice": "per-tile",
+    "supersededClauses": {
+      "blankAbstainsFlat": {
+        "clause": "the blank pane abstains (flat) 30/30",
+        "measured": "0/30 flat; 30/30 attributed to the right session",
+        "verdict": "RED",
+        "supersededBy": "owner ruling 2026-11-23"
+      }
+    }
   },
   "d": {
     "fixture": {
@@ -625,8 +633,18 @@
       "zoom1-dpr1": "GREEN",
       "zoom1-dpr2": "GREEN"
     },
-    "c": "RED",
+    "c": "GREEN",
     "d": "GREEN",
-    "fixtures": "OK"
-  }
+    "fixtures": "OK",
+    "overall": "GREEN"
+  },
+  "ownerRulings": [
+    {
+      "date": "2026-11-23",
+      "leg": "c",
+      "ruling": "The blank-pane clause becomes \"a marked blank pane never names a wrong session\". Blank tiles stay marked.",
+      "supersedes": "the blank pane abstains (flat) 30 times out of 30"
+    }
+  ],
+  "regraded": "2026-11-23: verdicts re-graded under the owner ruling from the same run-3 measurements (no re-run)"
 }

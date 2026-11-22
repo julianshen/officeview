@@ -423,7 +423,9 @@ async function legC(grid: Opened, blank: Opened, codes: Int8Array[]) {
   const wrong = KLASSES.reduce((n, k) => n + pt[k].wrong, 0)
   const verdicts = {
     lossless: pt.lossless.rate >= 90, q70: pt['jpeg-q70'].rate >= 75, downscale: pt['downscale-50'].rate >= 75,
-    zeroWrong: wrong === 0, blankAbstainsFlat: bl.abstainFlat === N,
+    zeroWrong: wrong === 0,
+    // Owner ruling 2026-11-23: a marked blank pane never names a wrong session (was: abstains `flat` N/N; blank tiles stay marked).
+    blankNeverWrong: bl.wrong === 0,
   }
   const green = Object.values(verdicts).every(Boolean)
   const basisChoice = cr.lossless.rate >= pt.lossless.rate + 5 ? 'crop' : 'per-tile'
