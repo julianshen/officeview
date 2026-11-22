@@ -11,7 +11,7 @@ import type { StreamNotice, TextMessage, TextRequest, UnitPayload } from '../../
 import { serverBackend } from '../src/backend'
 import { ORIGIN, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const backend = serverBackend()
 const client = (s: { url: string }) => new WebSocket(s.url, { headers: { Origin: ORIGIN } } as never)
 const pixels = (c: { width: number; height: number; getContext(t: '2d'): CanvasRenderingContext2D | null }) => Buffer.from(c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data)

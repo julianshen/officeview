@@ -7,7 +7,7 @@ import { entryHiddenSlideDeck, hiddenSlideDeck } from './fixtures'
 import { Client, disposePool, start } from './harness'
 import { rejectionMessage } from './fixtures/rejection'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const presenter = (policy: AuthDecision['policy'] = {}): AuthDecision => ({ viewerId: 'alice', role: 'presenter', policy })
 

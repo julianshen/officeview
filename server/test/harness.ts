@@ -16,8 +16,9 @@ export const corpus = (name: string) => new Uint8Array(readFileSync(resolve(impo
 
 let sharedPool: Pool | undefined
 export const pool = () => (sharedPool ??= new Pool({ workers: 2 }))
-/** Per-file teardown: the next file gets a fresh pool. */
-export const disposePool = () => { sharedPool?.dispose(); sharedPool = undefined }
+/** Per-file teardown: the next file gets a fresh pool. Resolves once every worker of the disposed pool has closed, so
+ * the next test file starts with none of them alive (Bun 1.4.5: a live Worker starves an awaiting test's messages). */
+export const disposePool = (): Promise<void> => { const closed = sharedPool?.dispose() ?? Promise.resolve(); sharedPool = undefined; return closed }
 
 /** `media`: the `MediaServices` this harness built (piece 5 Task 9), for the tests to read the ledgers. `stop()`
  * resolves once they are closed (callers that ignore it are unchanged). */
@@ -67,7 +68,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
     async stop() {
       stopped = true
       srv.stop(true)
-      ownPool?.dispose()
+      await ownPool?.dispose()
       await media?.close()
       if (root) rmSync(root, { recursive: true, force: true })
     },

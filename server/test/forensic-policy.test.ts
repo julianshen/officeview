@@ -5,7 +5,7 @@ import { AuditTable } from '../src/audit'
 import { effectivePolicy, forensicNotices } from '../src/hooks'
 import { Client, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 describe('forensic policy', () => {
   it('effective policy: forensic on by default, off only when asked', () => {

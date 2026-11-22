@@ -7,7 +7,7 @@ import type { TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
 import { Client, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const KIB48 = 48 * 1024
 /** A docx of `n` one-line paragraphs of `line` (≈ 46 lines a page). */

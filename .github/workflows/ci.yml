@@ -30,9 +30,10 @@ concurrency:
 
 jobs:
   check:
-    name: typecheck, media, build, corpus
+    name: typecheck, build, corpus
     runs-on: ubuntu-latest
-    # The vitest suite runs in the sharded `test` job below; this job keeps everything else (~8 min).
+    # The vitest suite runs in the sharded `test` job and the stream server suite in `server` (both below);
+    # this job keeps the typechecks, the build and the corpus report.
     timeout-minutes: 25
     steps:
       - name: Check out the repository
@@ -66,6 +67,47 @@ jobs:
       - name: Typecheck the stream server
         run: bun run typecheck:server
 
+      # The corpus report below parses and paints the real files.
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
+
+      - name: Build the library
+        run: bun run build
+
+      - name: Corpus report (fails on degraded or unexpected failures)
+        run: bun scripts/corpus-report.ts
+
+  # The whole stream server suite (bun test, one process), media tests included (sandboxed ffmpeg, required).
+  # Its own job since it took most of the `check` job's 25 minutes (~22 min together).
+  server:
+    name: stream server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for node-canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Set up bun (pinned, do not float)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+
+      - name: Restore bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
       # Piece 5 (plan D5/D6): the stream server's sandboxed ffmpeg. The server suite runs with
       # OV_MEDIA_REQUIRED=1, so a missing or failing probe (version < 6, codec, demuxer, sandbox) fails
       # the job instead of skipping. The sysctl lets `unshare --user --net` work on ubuntu-24.04.
@@ -77,21 +119,12 @@ jobs:
       - name: Allow unprivileged user namespaces (unshare --user --net)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      # Before the server suite and the vitest suite: the server tests open corpus files, and
-      # corpus-regressions.test.ts runs instead of skipping.
+      # The server tests open corpus files.
       - name: Fetch the real-file corpus
         run: bun scripts/fetch-corpus.ts
 
-      # The whole stream server suite (bun test, one process), media tests included (sandboxed ffmpeg,
-      # required). This step used to run test/media only.
       - name: Stream server test suite (sandboxed ffmpeg, required)
         run: cd server && OV_MEDIA_REQUIRED=1 bun test
-
-      - name: Build the library
-        run: bun run build
-
-      - name: Corpus report (fails on degraded or unexpected failures)
-        run: bun scripts/corpus-report.ts
 
   # The vitest suite, split across three runners (PR #89: one runner took 30 min of a 45-min job, about
   # 2670 s of per-file time; the CF oracle file alone is ~330 s). `--shard` splits by file, so each

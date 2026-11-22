@@ -11,7 +11,7 @@ const sheet = new Uint8Array(readFileSync(resolve(root, 'corpus/poi-56295.xlsx')
 const job = (docRef: string, extra: Partial<RenderJob> = {}): RenderJob => ({ docRef, contentPolicy: 'visible-only', unitIndex: 0, scale: 1, projection: 'final-raster', mark: { kind: 'fixed' }, ...extra })
 const pools: Pool[] = []
 const mk = (o: ConstructorParameters<typeof Pool>[0]) => { const p = new Pool(o); pools.push(p); return p }
-afterAll(() => { for (const p of pools) p.dispose() })
+afterAll(async () => { await Promise.all(pools.map((p) => p.dispose())) })
 
 describe('render pool (§9.2/§14)', () => {
   it('per-session caps: 8 running, then a queue of 32, then refusal', async () => {
@@ -61,7 +61,8 @@ describe('render pool (§9.2/§14)', () => {
     const queued = pool.render('s1', job('deck'), 4096)
     expect(pool.stats()).toMatchObject({ running: 1, queued: 1 })
     await Bun.sleep(20)
-    pool.dispose()
+    // Not awaited here: the next assertions read the pool while its busy worker is still closing.
+    const closed = pool.dispose()
     // Bun cannot interrupt a busy worker: the charge stays held until it really closes.
     expect(pool.stats().reserved).toBe(4096)
     const settled = await Promise.race([Promise.allSettled([running, queued]), Bun.sleep(4000).then(() => 'hung' as const)])
@@ -70,6 +71,7 @@ describe('render pool (§9.2/§14)', () => {
     // The running job's charge was refunded only after its worker closed (review r2-4).
     expect(pool.stats().workers[0]!.closed).toBe(true)
     expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0 })
+    await closed
   }, 10_000)
 
   it('a worker that dies mid-job fails that job, refunds it, and the slot recovers (review r1-4)', async () => {

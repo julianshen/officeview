@@ -20,7 +20,7 @@ import { ffmpegForTests } from './ffmpeg-gate'
 
 const info = await ffmpegForTests()
 const scratch = mkdtempSync(join(tmpdir(), 'ov-t13-wire-'))
-afterAll(() => { disposePool(); rmSync(scratch, { recursive: true, force: true }) })
+afterAll(async () => { await disposePool(); rmSync(scratch, { recursive: true, force: true }) })
 
 const box = { id: 2, name: 'Box', prst: 'rect', off: ['3619500', '2476500'] as [string, string], ext: ['1905000', '1905000'] as [string, string], fill: '336699' }
 const audioNode = (id: number, spid: number) => `<p:audio><p:cMediaNode vol="80000"><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cMediaNode></p:audio>`

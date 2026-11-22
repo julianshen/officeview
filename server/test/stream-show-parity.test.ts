@@ -34,7 +34,7 @@ beforeAll(async () => {
   family = { meanAbs: latin.meanAbs, rowMax: latin.rowMax }
 }, 60_000)
 
-afterAll(() => { disposePool(); uninstallDom() })
+afterAll(async () => { await disposePool(); uninstallDom() })
 
 async function run(deck: string, marks: 'off' | 'fixed'): Promise<StreamDeckResult> {
   const key = `${deck}|${marks}`

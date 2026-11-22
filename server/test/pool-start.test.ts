@@ -18,7 +18,8 @@ const pending = (p: Pool) => (p as unknown as { slots: Array<{ pending: Map<numb
 /** Messages a fake was sent beyond its init. */
 const jobsSent = (w: FakeWorker) => w.received.filter((m) => (m as { type?: string }).type !== 'init').length
 
-afterEach(async () => { pool?.dispose(); pool = undefined; await FakeWorker.release(); FakeWorker.reset() })
+// The dispose's wait is awaited after `release()`: a fake still loading (manual init) closes only once released.
+afterEach(async () => { const closed = pool?.dispose(); pool = undefined; await FakeWorker.release(); await closed; FakeWorker.reset() })
 
 describe('pool worker startup (start gate)', () => {
   it("a job's deadline starts once its worker has loaded: a 300 ms load does not time out a 100 ms job", async () => {
@@ -43,7 +44,8 @@ describe('pool worker startup (start gate)', () => {
     const p = mk()
     const r = p.encode('s', job, 16)
     await until(() => FakeWorker.all.length === 2)
-    p.dispose()
+    // Not awaited here: the replacement is still loading (the terminate is deferred until its ack); awaited below.
+    const closed = p.dispose()
     const fresh = FakeWorker.all[1]!
     expect(fresh.terminateCalls).toBe(0) // still loading: deferred
     fresh.ack()
@@ -52,6 +54,7 @@ describe('pool worker startup (start gate)', () => {
     expect(fresh).toMatchObject({ terminateCalls: 1, terminatedUnacked: false })
     expect(jobsSent(fresh)).toBe(0)
     expect(pending(p)).toBe(0)
+    await closed
   })
 
   it('a start that passes the load bound fails its jobs with RenderFailed and is never terminated while loading; once it answers, the slot works (R1)', async () => {
@@ -67,5 +70,35 @@ describe('pool worker startup (start gate)', () => {
     await until(() => w.acked)
     expect(await p.encode('s', job, 16)).toBeNull()
     expect(FakeWorker.all).toHaveLength(1)
+  })
+
+  it("dispose() resolves only once every worker it terminated has closed: no worker of the pool is left alive", async () => {
+    const p = mk({ workers: 2 })
+    await until(() => FakeWorker.all.length === 2 && FakeWorker.all.every((w) => w.acked))
+    await p.dispose()
+    expect(FakeWorker.all.map((w) => ({ terminateCalls: w.terminateCalls, closed: w.closed }))).toEqual([{ terminateCalls: 1, closed: true }, { terminateCalls: 1, closed: true }])
+  })
+
+  it("a dispose during a load: its promise waits for the deferred terminate's close (it does not settle early, nor hang)", async () => {
+    FakeWorker.scripts = [{ init: 'manual' }]
+    const p = mk()
+    await until(() => FakeWorker.all.length === 1)
+    const w = FakeWorker.all[0]!
+    let settled = false
+    const d = p.dispose().then(() => { settled = true })
+    await Bun.sleep(20)
+    expect({ settled, terminateCalls: w.terminateCalls, closed: w.closed }).toEqual({ settled: false, terminateCalls: 0, closed: false })
+    w.ack()
+    await d
+    expect({ settled, terminateCalls: w.terminateCalls, closed: w.closed, terminatedUnacked: w.terminatedUnacked }).toEqual({ settled: true, terminateCalls: 1, closed: true, terminatedUnacked: false })
+  })
+
+  it('a second dispose() returns the same wait', async () => {
+    const p = mk()
+    await until(() => FakeWorker.all[0]?.acked === true)
+    const a = p.dispose(), b = p.dispose()
+    expect(b).toBe(a)
+    await a
+    expect(FakeWorker.all[0]!.closed).toBe(true)
   })
 })

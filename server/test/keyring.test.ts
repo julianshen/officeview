@@ -13,7 +13,7 @@ import { DEFAULT_PARAMS } from '../src/mark/params'
 import { decodePng } from '../src/mark/png'
 import { Client, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const raw = (n: number, fill: number) => new Uint8Array(n).fill(fill)
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b))

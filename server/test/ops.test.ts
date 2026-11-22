@@ -9,7 +9,7 @@ import { DocumentHost } from '../src/render'
 import { augmentedFixtures } from './fixtures'
 import { Client, ORIGIN, start, disposePool } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const refusal = async (c: Client, reqId: number) => (await c.next((m) => 'text' in m && m.text.reqId === reqId && m.text.type === 'refused') as { text: Record<string, unknown> }).text.code
 
 describe('Review Focus', () => {

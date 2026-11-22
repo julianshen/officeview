@@ -23,7 +23,7 @@ const dir = mkdtempSync(join(tmpdir(), 'ov-detect-cli-'))
 const dbPath = join(dir, 'audit.db')
 const docPath = join(dir, 'doc.pptx')
 writeFileSync(docPath, corpus('pypptx-test.pptx'))
-afterAll(() => { disposePool(); rmSync(dir, { recursive: true, force: true }) })
+afterAll(async () => { await disposePool(); rmSync(dir, { recursive: true, force: true }) })
 
 async function run(args: string[], env: Record<string, string> = { OV_STREAM_KEY: masterB64 }) {
   const p = Bun.spawn([process.execPath, '--preload', PRELOAD, SCRIPT, ...args], { env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', USER: process.env.USER ?? '', LOGNAME: process.env.LOGNAME ?? '',...env }, stdout: 'pipe', stderr: 'pipe' })

@@ -19,7 +19,7 @@ import { decodePng } from '../src/mark/png'
 import { notesBasisLabel } from '../src/notes'
 import { Client, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const TAU = { abs: 7.99, margin: 3.85 }
 const DECK = 'lo-tdf104788.pptx'
 const presenter = (policy: AuthDecision['policy'] = {}): AuthDecision => ({ viewerId: 'alice', role: 'presenter', policy })

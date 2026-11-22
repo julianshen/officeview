@@ -21,7 +21,7 @@ import { DocumentHost } from '../src/render'
 import { Client, corpus, disposePool, start, type Harness } from './harness'
 
 const dirs: string[] = []
-afterAll(() => { disposePool(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+afterAll(async () => { await disposePool(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 const dbPath = () => { const d = mkdtempSync(join(tmpdir(), 'ov-trace-')); dirs.push(d); return join(d, 'audit.db') }
 
 const doc = corpus('pypptx-test.pptx')

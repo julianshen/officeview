@@ -17,7 +17,7 @@ import { ffmpegForTests } from './ffmpeg-gate'
 
 const info = await ffmpegForTests()
 const scratch = mkdtempSync(join(tmpdir(), 'ov-t9-src-'))
-afterAll(() => { disposePool(); rmSync(scratch, { recursive: true, force: true }) })
+afterAll(async () => { await disposePool(); rmSync(scratch, { recursive: true, force: true }) })
 
 /** An m4a source made by ffmpeg from a lavfi graph (test input only, never product code). */
 async function source(name: string, graph: string, seconds: number, bitrate = '64k'): Promise<Uint8Array> {

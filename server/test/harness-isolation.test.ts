@@ -11,7 +11,7 @@ import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { Client, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 describe('harness isolation: a stopped server leaves the shared pool alone', () => {
   test("a stopped server's detached session, reaped later, does not forget a later server's document", async () => {

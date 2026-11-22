@@ -6,7 +6,7 @@ import { StreamSession, type StreamNotice } from '../../src/stream/remote/sessio
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { ORIGIN, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const settle = (ms: number) => Bun.sleep(ms)
 type Sock = WebSocket & { terminate?: () => void }
 

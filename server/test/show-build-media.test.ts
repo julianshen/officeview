@@ -29,7 +29,7 @@ const root = mkdtempSync(join(tmpdir(), 'ov-t4-'))
 const temp = await createMediaTemp(root)
 let mediaPool: Pool | undefined
 const poolOn = () => (mediaPool ??= new Pool({ workers: 1, media: { info: info!, dir: temp.dir } }))
-afterAll(async () => { mediaPool?.dispose(); disposePool(); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
+afterAll(async () => { await Promise.all([mediaPool?.dispose(), disposePool()]); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, media: true, ...over })
 /** Each built plan's server-only media refs, which `bindMedia` needs (`BuiltShowPlan.mediaRefs`). */
