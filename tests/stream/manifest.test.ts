@@ -127,3 +127,41 @@ describe('MANIFEST', () => {
     })
   })
 })
+
+describe('MANIFEST tiles mode (Stage 4a)', () => {
+  const TILES = () => ({ px: 512, zoomSteps: [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4], dprs: [1, 2], palettes: ['light', 'dark'], maxBatch: 64 })
+  const tilesManifest = () => ({ ...exampleManifest(), kind: 'xlsx' as const, sheetMode: 'tiles' as const, sheets: [{ sheetId: '0', name: 'First' }, { sheetId: '1', name: 'Second' }], tiles: TILES() })
+  it('TILE_ZOOM_STEPS deep-equals SHEET_ZOOM_STEPS', async () => {
+    const { TILE_ZOOM_STEPS } = await import('../../src/stream/sheet-wire')
+    const { SHEET_ZOOM_STEPS } = await import('../../src/xlsx/view/sheetZoom')
+    expect([...TILE_ZOOM_STEPS]).toEqual([...SHEET_ZOOM_STEPS])
+  })
+  it('a valid tiles manifest passes', () => {
+    const v = validateManifest(tilesManifest())
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.sheetMode).toBe('tiles')
+    expect(v.manifest).toEqual(tilesManifest())
+  })
+  it.each([
+    ['sheets missing', { sheets: undefined }],
+    ['tiles missing', { tiles: undefined }],
+    ['zoomSteps reordered', { tiles: { ...TILES(), zoomSteps: [0.33, 0.25, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4] } }],
+    ["sheetId '07'", { sheets: [{ sheetId: '07', name: 'First' }] }],
+    ['ids out of sequence', { sheets: [{ sheetId: '1', name: 'First' }, { sheetId: '0', name: 'Second' }] }],
+    ['a 32-character name', { sheets: [{ sheetId: '0', name: 'n'.repeat(32) }] }],
+    ['more than 256 sheets', { sheets: Array.from({ length: 257 }, (_, i) => ({ sheetId: String(i), name: `s${i}` })) }],
+    ['a sheetMode other than tiles', { sheetMode: 'units' }],
+    ['px not 512', { tiles: { ...TILES(), px: 256 } }],
+  ])('a tiles manifest is rejected: %s', (_, patch) => {
+    expect(validateManifest({ ...tilesManifest(), ...patch }).ok).toBe(false)
+  })
+  it('an absent sheetMode means units mode', () => {
+    const v = validateManifest({ ...exampleManifest(), sheets: [{ sheetId: '0', name: 'x' }], tiles: TILES() })
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.sheetMode).toBeUndefined()
+    expect('sheets' in v.manifest).toBe(false)
+    expect('tiles' in v.manifest).toBe(false)
+  })
+})

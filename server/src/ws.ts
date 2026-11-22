@@ -44,6 +44,9 @@ import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type MediaUnitRefs, ty
 import { SessionTable, type Session } from './sessionTable'
 import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
+import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
+import { sheetClockAt, type SheetClock } from './sheet/clock'
+import { TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -51,7 +54,7 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted' | 'unsupported-op' | 'stale-view' | 'layout-too-large'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
 /**
@@ -78,6 +81,8 @@ const SHOW_PLAN_LIMITS_STEPS = 64
 const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8, MEDIA_CHUNK: 9 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
+/** R6: the ops an XLSX tiles session refuses `unsupported-op`. */
+const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 'copy', 'a11y'])
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -120,6 +125,9 @@ export interface StreamServerOptions {
    */
   /** TEST-ONLY: awaited inside a media delivery, after the file is opened and checked, and after each chunk read. */
   mediaTestHooks?: { afterOpen?(): void | Promise<void>; afterRead?(chunk: number): void | Promise<void> }
+  /** Stage 4a (R9): the session clock's zone when the decision's `policy.timeZone` is absent. Default `'UTC'`; a zone
+   * `Intl` rejects throws at construction. */
+  sheetTimeZone?: string
   media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
 }
 
@@ -167,12 +175,16 @@ type WS = ServerWebSocket<Conn>
 /** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
 /** `anim` (D5): shown units with timing, a transition or both; `morph` (Task 7): those entered by Morph. */
 /** `media` (piece 5, D19): shown units whose plan ships an audio record or a transition sound. */
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; media: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; media: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number; /** XLSX: the projected (visible) sheet names in tab order (Stage 4a). */ sheets?: readonly string[] }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
 export function createStreamServer(o: StreamServerOptions) {
   const now = o.now ?? Date.now
+  const sheetTimeZone = o.sheetTimeZone ?? 'UTC'
+  sheetClockAt(0, sheetTimeZone)
+  /** R9: the zone a decision resolves to (validated by `sheetClockAt`). */
+  const zoneOf = (d: AuthDecision): unknown => d.policy?.timeZone ?? sheetTimeZone
   const nowSec = () => Math.floor(now() / 1000)
   const ttl = o.tokenTtlSec ?? 300, lead = o.renewLeadSec ?? 5
   const readyMs = o.readyMs ?? 2000, helloMs = o.helloMs ?? 5000, graceMs = o.detachGraceMs ?? 30_000
@@ -192,7 +204,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -311,15 +323,22 @@ export function createStreamServer(o: StreamServerOptions) {
   async function openSession(ws: WS, hello: Record<string, unknown>, reqId: number) {
     const req: AuthRequest = { headers: ws.data.headers, ip: ws.data.ip, url: new URL(ws.data.url), ...(typeof hello.token === 'string' ? { token: hello.token } : {}) }
     const resume = hello.resume as { sid?: unknown; resumeProof?: unknown } | undefined
-    if (resume !== undefined) return resumeSession(ws, req, resume, reqId)
+    // validHello has checked it.
+    const features = parseFeatures(hello.features) as readonly string[]
+    if (resume !== undefined) return resumeSession(ws, req, resume, reqId, features)
     const decision = await o.authorize(req)
     if (gone(ws)) return
     if (!decision) return close(ws, 'auth-failed')
     const resolved = await o.resolveDocument(req, decision)
     if (gone(ws)) return
     if (!resolved) return close(ws, 'auth-failed')
-    if (!admit(resolved.bytes).ok) return close(ws, 'unsupported-format')
+    const admitted = admit(resolved.bytes)
+    if (!admitted.ok) return close(ws, 'unsupported-format')
     const policy = effectivePolicy(decision)
+    // R9: the session clock, before anything is charged or issued; an invalid zone refuses the open.
+    let clock: SheetClock
+    try { clock = sheetClockAt(now(), zoneOf(decision) as string) } catch { return close(ws, 'policy-refused') }
+    const sheetMode = sheetModeOf(admitted.format, features)
     const docRef = await docRefOf(o.keys.kDoc, resolved.bytes)
     if (gone(ws)) return
     // Charge the document BEFORE parsing; one that cannot fit is refused at admission.
@@ -328,7 +347,7 @@ export function createStreamServer(o: StreamServerOptions) {
     let committed = false
     try {
       let opened
-      try { opened = await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
+      try { opened = admitted.format === 'xlsx' ? await o.pool.open(docRef, resolved.bytes, policy.contentPolicy, { sheetMode }) : await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
         return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
       }
       if (gone(ws)) return
@@ -346,10 +365,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision), sheetMode })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, clock, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -363,7 +382,7 @@ export function createStreamServer(o: StreamServerOptions) {
    * itself grants (`resumeGranted`). Validation and supersession are bound to
    * the jti generation observed before any await, so of two racing resumes
    * only one can commit. */
-  async function resumeSession(ws: WS, req: AuthRequest, resume: { sid?: unknown; resumeProof?: unknown }, reqId: number) {
+  async function resumeSession(ws: WS, req: AuthRequest, resume: { sid?: unknown; resumeProof?: unknown }, reqId: number, features: readonly string[]) {
     if (typeof resume.sid !== 'string' || typeof resume.resumeProof !== 'string') return close(ws, 'auth-failed')
     const s = table.get(resume.sid), sd = sessionDoc.get(resume.sid)
     if (!s || !sd) return close(ws, 'auth-failed')
@@ -376,6 +395,8 @@ export function createStreamServer(o: StreamServerOptions) {
     // R3: copy, textA11y, the print caps (Stage 3b P4) and notes (Stage 3c) may change on resume; every other field, role included, is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
+      // Stage 4a: the same features (so the same sheet mode) and the same clock zone (R9); the day is kept.
+      && JSON.stringify(features) === JSON.stringify(sd.features) && zoneOf(d) === sd.clock.timeZone
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
     if (gone(ws)) return
@@ -441,6 +462,12 @@ export function createStreamServer(o: StreamServerOptions) {
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
+      // Stage 4a: tiles mode only; a units-mode manifest is Stage 3's, key for key.
+      ...(sd.sheetMode === 'tiles' ? {
+        sheetMode: 'tiles' as const,
+        sheets: (sd.doc.sheets ?? []).map((name, i) => ({ sheetId: String(i), name })),
+        tiles: { px: TILE_PX, zoomSteps: [...TILE_ZOOM_STEPS], dprs: [...TILE_DPRS], palettes: [...TILE_PALETTES], maxBatch: TILE_BATCH_MAX },
+      } : {}),
     }
     ws.data.phase = 'manifest'
     sendFrames(ws, [frame(KIND.MANIFEST, reqId, encodeManifest(m))!])
@@ -1218,6 +1245,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!Array.isArray(m.recVersions) || m.recVersions.length === 0 || m.recVersions.length > 16 || !m.recVersions.every((v) => Number.isInteger(v) && v >= 0 && v <= 255)) return false
     if (m.token !== undefined && (typeof m.token !== 'string' || m.token.length > 512)) return false
     if (m.resume !== undefined && (typeof m.resume !== 'object' || m.resume === null)) return false
+    if (parseFeatures(m.features) === 'invalid') return false
     return true
   }
 
@@ -1243,6 +1271,11 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'relax' || 'policy' in m || 'projection' in m || 'contentPolicy' in m) return close(ws, 'policy-refused')
     if (ws.data.phase === 'opening') return refuse(ws, m.reqId, 'policy-refused')
     if (m.type === 'ready') return onReady(ws, m)
+    // Stage 4a (R6): an XLSX tiles session serves no unit or Stage 3 text op (each would render units); print works.
+    const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
+    if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
+    // The tile ops: stubs until their tasks land (and never served in units mode).
+    if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') return refuse(ws, m.reqId, 'unsupported-op')
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
@@ -1325,6 +1358,8 @@ export function createStreamServer(o: StreamServerOptions) {
     audit,
     /** The sid's hidden slide units (tests). */
     hiddenOf: (sid: string) => sessionDoc.get(sid)?.doc.hidden,
+    /** TEST-ONLY: the sid's session clock (Stage 4a, R9). */
+    sheetClockOf: (sid: string) => sessionDoc.get(sid)?.clock,
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */

@@ -41,6 +41,9 @@ export interface AuditRow {
   notesShown: { images: number; chars: number }
   /** Show sends recorded for this sid (piece 4): charged sends, assets sent, and assets shipped without Layer-1. */
   showSent: { sends: number; assets: number; unmarked: number }
+  /** Stage 4a: the sid's sheet mode, fixed at open (`'tiles'` only for an XLSX client that sent `sheet-tiles@1`). A row
+   * stored before Stage 4a has none (units). */
+  sheetMode?: 'units' | 'tiles'
 }
 /** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. `media`
  * (piece 5): whether the sid is served media in shows (`can.media`). */
