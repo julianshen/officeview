@@ -5596,6 +5596,21 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     }
   })
 
+  it('scale literal cfvo val compares by double, not text: Excel 16.115 resaves 2.2 as 2.2000000000000002', () => {
+    // stage2-scale-upper-whole.rejected.xlsx: Excel rewrote <cfvo type="num" val="2.2"/> as val="2.2000000000000002"
+    // (the same IEEE double) and kept 0.1, 0.4, 0.7, 1.3 verbatim. The rule is unchanged; a different double still refuses.
+    const sheetXml = (mid: string): Map<string, Uint8Array> => new Map([['xl/worksheets/sheet1.xml', new TextEncoder().encode(
+      `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><conditionalFormatting sqref="F8:F11"><cfRule type="colorScale" priority="23"><colorScale><cfvo type="num" val="1"/><cfvo type="num" val="${mid}"/><cfvo type="num" val="10"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting></worksheet>`)]])
+    const marker: CfPartMarker = { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId: 'scale:upper-segment-whole-product', sqref: 'F8:F11', ruleType: 'colorScale', priority: 23, formulas: [], scale: { cfvo: [{ type: 'num', val: '1' }, { type: 'num', val: '2.2' }, { type: 'num', val: '10' }], colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] } }
+    const ok = (mid: string): boolean => verifyMarkerInArchive(sheetXml(mid), marker).ok
+    expect(ok('2.2')).toBe(true)
+    expect(ok('2.2000000000000002'), 'same double, 17 significant digits').toBe(true)
+    expect(ok('2.2000000000000006'), 'next double up').toBe(false)
+    expect(ok('2.3')).toBe(false)
+    expect(ok(''), 'empty val').toBe(false)
+    expect(ok('Infinity'), 'non-finite').toBe(false)
+  })
+
   it('formula marker pins rule formula, operands, cfvo f, dialect and activePresent exactly', () => {
     const X14NS = 'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"'
     const sheet = (legacy: string, x14 = ''): string =>
