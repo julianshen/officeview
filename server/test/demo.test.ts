@@ -11,8 +11,8 @@ import { Client } from './harness'
 import { ffmpegForTests } from './media/ffmpeg-gate'
 
 const corpusDir = resolve(import.meta.dir, '../../corpus')
-const servers: Array<{ stop(): void }> = []
-afterAll(() => { for (const s of servers) s.stop() })
+const servers: Array<{ stop(): Promise<void> }> = []
+afterAll(() => Promise.all(servers.map((s) => s.stop())))
 const req = (q: string) => ({ headers: new Headers(), ip: '127.0.0.1', url: new URL(`ws://x/stream?${q}`) })
 
 describe('demo hooks', () => {
@@ -57,7 +57,7 @@ describe('demo server end to end', () => {
       const s = await startServer(['--port', '0', '--doc-dir', corpusDir, '--origin', 'http://a'], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: path })
       expect(s.stream.audit.get('old')).toBeUndefined()
       expect(s.stream.audit.get('fresh')).toBeDefined()
-      s.stop()
+      await s.stop()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   it('media is on by default (D18, Task 11): the startup probe runs, a temp dir is claimed, sessions get can.media; OV_MEDIA=off fails closed', async () => {
@@ -87,6 +87,24 @@ describe('demo server end to end', () => {
       c.close()
     } finally { await off.stop() }
   }, 30_000)
+  it("stop() settles only once the pool's workers have closed, and closes media after them", async () => {
+    const s = await startServer(['--demo', '--port', '0', '--doc-dir', corpusDir], { OV_MEDIA: 'off' })
+    // Hold the pool's dispose open past its workers' close, so a stop() that does not await it shows.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const dispose = s.pool.dispose.bind(s.pool), closeMedia = s.media.close.bind(s.media)
+    let workersClosed: Promise<void> | undefined, poolDone = false, mediaAfterPool: boolean | undefined
+    s.pool.dispose = () => (workersClosed = dispose()).then(() => gate).then(() => { poolDone = true })
+    s.media.close = () => { mediaAfterPool = poolDone; return closeMedia() }
+    let stopped = false
+    const stopping = s.stop().then(() => { stopped = true })
+    await workersClosed
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(stopped).toBe(false)
+    release()
+    await stopping
+    expect({ stopped, mediaAfterPool }).toEqual({ stopped: true, mediaAfterPool: true })
+  })
   it('streams every unit of one file per format at scale 1, protected and relaxed', async () => {
     const s = await startServer(['--demo', '--port', '0', '--doc-dir', corpusDir], {}); servers.push(s)
     const base = `ws://localhost:${s.server.port}/stream`
