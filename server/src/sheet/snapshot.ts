@@ -8,6 +8,7 @@
 import type { SheetAssetsLease } from '../../../src/components/xlsx/sheetAssets'
 import type { RenderSheetAssets } from '../../../src/xlsx/render'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../../src/xlsx/types'
+import type { ResolvedSparkline, ResolvedSparklines } from '../../../src/xlsx/sparklines/resolve'
 import { cellSourceRow } from '../../../src/xlsx/view/sheetCells'
 import { buildSheetGeometry, type SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import type { SheetClock } from './clock'
@@ -33,11 +34,12 @@ function blankCell(cell: XlsxCell): XlsxCell {
   return { ref: cell.ref, row: cell.row, col: cell.col, value: null, styleIndex: cell.styleIndex, ...(cell.style ? { style: cell.style } : {}) }
 }
 
-/** A copy of `sheet` in which every covered cell is blank (`sheet` itself when none is). Rows without a covered cell are
- * shared with the original. */
+/** A copy of `sheet` in which every covered cell is blank and draws no sparkline located there (`sheet` itself when
+ * nothing changes). Rows without a covered cell are shared with the original. */
 export function blankCovered(sheet: XlsxSheet, coverage: Extract<BaseCoverage, { kind: 'known' }>): XlsxSheet {
-  if (coverage.count === 0) return sheet
-  let changed = false
+  const sparklines = withoutCoveredSparklines(sheet.resolvedSparklines, coverage)
+  if (coverage.count === 0) return sparklines === sheet.resolvedSparklines ? sheet : { ...sheet, resolvedSparklines: sparklines }
+  let changed = sparklines !== sheet.resolvedSparklines
   const rows = sheet.rows.map((row) => {
     let cells: XlsxCell[] | undefined
     row.cells.forEach((cell, i) => {
@@ -50,25 +52,51 @@ export function blankCovered(sheet: XlsxSheet, coverage: Extract<BaseCoverage, {
     changed = true
     return { ...row, cells }
   })
-  return changed ? { ...sheet, rows } : sheet
+  return changed ? { ...sheet, rows, ...(sparklines !== sheet.resolvedSparklines ? { resolvedSparklines: sparklines } : {}) } : sheet
+}
+
+type Sparklines = ResolvedSparklines | undefined
+/** The resolved sparklines minus those whose location cell is covered (the map itself when none is). Sparklines are
+ * usually located in empty cells, so this does not depend on `count`. */
+function withoutCoveredSparklines(map: Sparklines, coverage: Extract<BaseCoverage, { kind: 'known' }>): Sparklines {
+  if (!map?.size) return map
+  let out: Map<number, ReadonlyMap<number, ResolvedSparkline>> | undefined
+  for (const [row, cols] of map) {
+    let kept: Map<number, ResolvedSparkline> | undefined
+    for (const col of cols.keys()) {
+      if (!coverage.covered(row, col)) continue
+      kept ??= new Map(cols)
+      kept.delete(col)
+    }
+    if (!kept) continue
+    out ??= new Map(map)
+    if (kept.size) out.set(row, kept)
+    else out.delete(row)
+  }
+  return out ?? map
+}
+
+/** One sheet as every answer may read it: the blanked copy and its base coverage (`'visible-only'`), or the projected
+ * sheet itself (`'full'`, or unknown coverage). Clock-free, so a host computes it once per sheet and shares it between
+ * snapshots and the cross-sheet views of other sheets' snapshots. */
+export interface ServableSheet { sheet: XlsxSheet; coverage: BaseCoverage | 'off'; geometry: SheetGeometryResult }
+export function servableSheet(projected: XlsxSheet, contentPolicy: 'visible-only' | 'full'): ServableSheet {
+  if (contentPolicy === 'full') return { sheet: projected, coverage: 'off', geometry: buildSheetGeometry(projected) }
+  const authored = buildSheetGeometry(projected)
+  const coverage = baseCoverage(projected, authored)
+  const sheet = coverage.kind === 'known' ? blankCovered(projected, coverage) : projected
+  return { sheet, coverage, geometry: sheet === projected ? authored : buildSheetGeometry(sheet) }
 }
 
 /**
  * The snapshot of `doc.sheets[sheetIndex]`. The order is fixed: coverage (author view, over the projected sheet), then
- * blanking, then `prepare` over the blanked sheet. `prepare` owns the lease it returns; a failure after it is released.
+ * blanking, then `prepare` over the blanked sheet. `servable` supplies a sheet's coverage and blanked copy (default:
+ * computed here); a host passes its per-document cache, and its `prepare` reads every other sheet through the same
+ * cache, so a cross-sheet rule never reads another sheet's covered cell. `prepare` owns the lease it returns.
  */
-export async function buildSheetSnapshot(doc: XlsxDocument, sheetIndex: number, contentPolicy: 'visible-only' | 'full', clock: SheetClock, prepare: (sheet: XlsxSheet) => Promise<SheetAssetsLease>): Promise<SheetSnapshot> {
-  const projected = doc.sheets[sheetIndex]
-  if (!projected) throw new RangeError(`no sheet ${sheetIndex}`)
-  let sheet = projected
-  let geometry: SheetGeometryResult | undefined
-  let coverage: BaseCoverage | 'off' = 'off'
-  if (contentPolicy === 'visible-only') {
-    geometry = buildSheetGeometry(projected)
-    coverage = baseCoverage(projected, geometry)
-    if (coverage.kind === 'known') sheet = blankCovered(projected, coverage)
-  }
-  if (!geometry || sheet !== projected) geometry = buildSheetGeometry(sheet)
+export async function buildSheetSnapshot(doc: XlsxDocument, sheetIndex: number, contentPolicy: 'visible-only' | 'full', clock: SheetClock, prepare: (sheet: XlsxSheet) => Promise<SheetAssetsLease>, servable: (sheetIndex: number) => ServableSheet = (i) => servableSheet(doc.sheets[i]!, contentPolicy)): Promise<SheetSnapshot> {
+  if (!doc.sheets[sheetIndex]) throw new RangeError(`no sheet ${sheetIndex}`)
+  const { sheet, coverage, geometry } = servable(sheetIndex)
   const lease = await prepare(sheet)
   let released = false
   return {

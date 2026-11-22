@@ -20,7 +20,7 @@ import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../src/x
 import { augmentedFixtures } from './fixtures'
 import { rejection } from './fixtures/rejection'
 import {
-  cfToday, cfTodayFormula, CF_TODAY_SERIALS, DATA_BAR_VALUES, rotatedBox, savedFormula, spillUnderShape, SPILL_TEXT,
+  cfToday, cfTodayFormula, crossSheetCoveredRef, sparklineUnderShape, CF_TODAY_SERIALS, DATA_BAR_VALUES, rotatedBox, savedFormula, spillUnderShape, SPILL_TEXT,
   unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor,
 } from './sheet-fixtures'
 
@@ -253,6 +253,31 @@ describe('the servable snapshot (S4 §6.2)', () => {
     const dropped = await prepareCfPaint(sheet, { valuePolicy: 'cached', evaluation: { ...cfDocumentEvaluationOf(doc), timeZone: 'UTC' }, now: () => epochNowMs, dateContext: { dateSystem: '1900', timeZone: 'UTC', epochNowMs: epochNowMs + 1 }, documentSheets: doc.sheets })
     expect(CF_TODAY_SERIALS.some((_, r) => dropped!.layer.styleAt(r, 0, cellAt(sheet, r, 0)!.style)?.fillColor)).toBe(false)
     dropped!.dispose()
+  }, 60_000)
+
+  test('cross-sheet CF reads another sheet\'s covered cell as blank (fix round 1)', async () => {
+    const bytes = await crossSheetCoveredRef()
+    const fillOf = (snap: SheetSnapshot) => snap.assets.conditionalFormatting!.layer.styleAt(0, 0, cellAt(snap.sheet, 0, 0)!.style)?.fillColor
+    // Under 'full' the rule reads S!B2 = 20 and T!A1 fills: the fixture's rule does evaluate across sheets.
+    const full = await snapshotOf(bytes, 'full', UTC_23, 1)
+    expect(fillOf(full.snap)).toBe('FFFF0000')
+    // Under visible-only S!B2 is covered, so T's rule reads it blank, whichever sheet was snapshotted first.
+    const vis = await snapshotOf(bytes, 'visible-only', UTC_23, 1)
+    expect(fillOf(vis.snap)).toBeUndefined()
+    const s0 = await vis.host.sheetSnapshot(vis.docKey, 0, UTC_23)
+    expect(known(s0.coverage).covered(1, 1)).toBe(true)
+    expect(cellAt(s0.sheet, 1, 1)!.value).toBeNull()
+  }, 60_000)
+
+  test('a sparkline located in a covered cell is absent (fix round 1)', async () => {
+    const bytes = await sparklineUnderShape()
+    const vis = (await snapshotOf(bytes)).snap
+    expect(known(vis.coverage).covered(1, 1)).toBe(true)
+    expect(vis.sheet.resolvedSparklines?.get(1)?.has(1)).toBeFalsy()
+    // The uncovered control at C2 still draws.
+    expect(vis.sheet.resolvedSparklines?.get(1)?.has(2)).toBe(true)
+    const full = (await snapshotOf(bytes, 'full')).snap
+    expect(full.sheet.resolvedSparklines?.get(1)?.has(1)).toBe(true)
   }, 60_000)
 
   test('drop releases the cached snapshots', async () => {

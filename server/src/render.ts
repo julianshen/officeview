@@ -17,7 +17,7 @@ import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { prepareSheetAssets } from '../../src/components/xlsx/sheetAssets'
 import { clockEpochMs, type SheetClock } from './sheet/clock'
-import { buildSheetSnapshot, type SheetSnapshot } from './sheet/snapshot'
+import { buildSheetSnapshot, servableSheet, type ServableSheet, type SheetSnapshot } from './sheet/snapshot'
 import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
 import type { XlsxDocument } from '../../src/xlsx/types'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
@@ -104,7 +104,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -320,12 +320,19 @@ export class DocumentHost {
     if (!built) {
       const contentPolicy = doc.contentPolicyId === 'full@1' ? 'full' as const : 'visible-only' as const
       const cfClock = { epochNowMs: clockEpochMs(clock), timeZone: clock.timeZone }
-      built = buildSheetSnapshot(saved, sheetIndex, contentPolicy, clock, (sheet) => {
-        // The lease reads `doc.sheets[sheetIndex]`: hand it the snapshot's (possibly blanked) sheet in that slot, so CF
-        // and cross-sheet reads see the blanked cells. Chart contexts stay shared with the saved parse.
-        const view: XlsxDocument = sheet === saved.sheets[sheetIndex] ? saved : { ...saved, sheets: saved.sheets.map((s, i) => (i === sheetIndex ? sheet : s)) }
+      const cache = doc.servable ??= new Map()
+      const servable = (i: number): ServableSheet => {
+        let s = cache.get(i)
+        if (!s) cache.set(i, s = servableSheet(saved.sheets[i]!, contentPolicy))
+        return s
+      }
+      built = buildSheetSnapshot(saved, sheetIndex, contentPolicy, clock, () => {
+        // The lease reads `doc.sheets[sheetIndex]`, and CF's cross-sheet rules read the other sheets: every slot holds its
+        // servable (blanked) sheet, so no sheet's covered cell reaches any rule (owner 11.1). Chart contexts stay shared.
+        const sheets = saved.sheets.map((_, i) => servable(i).sheet)
+        const view: XlsxDocument = sheets.every((s, i) => s === saved.sheets[i]) ? saved : { ...saved, sheets }
         return prepareSheetAssets(view, { sheetIndex, registerFont, cfClock, chartOwner: saved })
-      }).then((snap) => {
+      }, servable).then((snap) => {
         // Dropped while building: nothing will release it later.
         if (this.docs.get(docKey) !== doc) { snap.release(); throw new RenderRefusal('unknown-doc') }
         return snap

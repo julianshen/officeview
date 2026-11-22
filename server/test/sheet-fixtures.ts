@@ -272,6 +272,38 @@ export async function unfilledShapeOverDataBar(): Promise<Uint8Array> {
   })
 }
 
+/**
+ * Fix round 1 (a): two visible sheets. Sheet `S` is the data-bar variant's grid with B2 = 20 under the box strictly
+ * inside B2; sheet `T` holds A1 = 1 under one `expression` rule `S!$B$2=20` (dxf 0: solid red fill). Under
+ * `visible-only` S!B2 is covered, so the rule must read it blank and T!A1 stays unfilled; under `'full'` it fills.
+ */
+export async function crossSheetCoveredRef(): Promise<Uint8Array> {
+  const st = stringTable()
+  const s = [1, 2, 3].map((r) => ({ r, cells: [textCell(st, `A${r}`, `X-${r}-1`), { ref: `B${r}`, v: DATA_BAR_VALUES[r - 1]! }] }))
+  return patchXlsx(await buildXlsx([{ name: 'S', rows: s }, { name: 'T', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }] }], st.list), async (zip) => {
+    await addDrawing(zip, 0, insideB2())
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', '</cellXfs><dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs>'))
+    await patchSheetXml(zip, 1, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1"><formula>S!$B$2=20</formula></cfRule></conditionalFormatting>'))
+  })
+}
+
+/**
+ * Fix round 1 (b): two line sparklines over D1:D4 (numbers 1..4), located at B2 (under the box strictly inside B2,
+ * so covered) and at C2 (uncovered, the control). A1 holds text so the sheet is not otherwise empty.
+ */
+export async function sparklineUnderShape(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [1, 2, 3, 4].map((r) => ({ r, cells: [...(r === 1 ? [textCell(st, 'A1', 'SPARK')] : []), { ref: `D${r}`, v: r }] }))
+  const x14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main', xm = 'http://schemas.microsoft.com/office/excel/2006/main'
+  const line = (at: string) => `<x14:sparkline><xm:f>S!D1:D4</xm:f><xm:sqref>${at}</xm:sqref></x14:sparkline>`
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, insideB2())
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'extLst',
+      `<extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="${x14}"><x14:sparklineGroups xmlns:xm="${xm}"><x14:sparklineGroup displayEmptyCellsAs="gap"><x14:colorSeries rgb="FF376092"/><x14:sparklines>${line('B2')}${line('C2')}</x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst>`))
+  })
+}
+
 /** The text of `spillUnderShape` A3: far wider than A3 (64 px), so it runs on into the empty B3 and C3. */
 export const SPILL_TEXT = 'SPILL-A3 long text that overflows into the empty cells to its right'
 /**
