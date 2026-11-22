@@ -3637,6 +3637,371 @@ function stage2UpperWindowCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The raw-floor follow-up (brief cf-rawfloor): capture ed0fccb6 (stage2-scale-upper-window) found 14 interior cells of
+// 2-colour scales and 3-colour lower segments whose step product p = f·|d| lies within 1e-11 below a whole number; Excel
+// drew every one at raw floor, floor(p), where production's guarded truncation, floor(p + 1e-11), paints one step more.
+// They are withheld since (the guard-boundary shape, `cf-unmeasured-guard-boundary`). W1 (docs/validation/xlsx-cf.md
+// §14.z.17): these segments draw raw floor; exact on every captured lower-segment or 2-colour cell (the census,
+// scripts/cf-refs/raw-floor-census.ts). This case PRE-REGISTERS two readings of the shape (scale:guard-boundary-raw-floor):
+// `raw-floor` (W1) and `guarded` (the control). One evidence configuration per bound kind × segment kind (2-colour num,
+// min / max, percent, percentile, inverted; 3-colour lower segment under min / percentile 50 / max, min / percent 50 / max,
+// mixed bounds and the midpoint-above-max re-sort), both colour orders, spans 210, 150, 105 and 30, the 14 doubles of
+// ed0fccb6 replicated; the literal-num lower segment (withheld as the num-segment shape whatever a reading says) under its own
+// recorded id; controls of the same shapes (above an integer, an integer, not whole); W3 probes (the same double in the
+// upper segment, both colour orders) recorded only. Every fill lies on the P line and is shown by a twin line whose products
+// are IEEE integers on every channel (num 0 / 1 over a 128-step span, value k/128). Every prediction comes from an
+// independent model (`s2RawFloorColour`), never from the viewer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_RAW_FLOOR_ID = 'stage2-scale-raw-floor'
+/** The question: the guard-boundary shape of 2-colour scales and 3-colour lower segments not bounded by two literal num cfvo. */
+export const S2_RAW_FLOOR_CAP = 'scale:guard-boundary-raw-floor'
+/** The literal-num 3-colour lower segment (withheld as the num-segment shape first): recorded against the same readings, never registrable. */
+export const S2_RAW_FLOOR_LITERAL = 'scale:guard-boundary-literal-lower'
+/** The twin line (2-colour num 0 / 1 over 128 steps of the P line, value k/128): comparison references only. */
+export const S2_RAW_FLOOR_TWIN = 'scale:guard-boundary-twin'
+/** The pre-registered readings (brief cf-rawfloor: raw-floor is W1, guarded the pre-#102 control). */
+export const S2_RAW_FLOOR_READINGS = ['raw-floor', 'guarded'] as const
+export type S2RawFloorReading = (typeof S2_RAW_FLOOR_READINGS)[number]
+
+/**
+ * A cell's role: `evidence` (in the guard-boundary shape, the readings differ), `control` (the same shapes above an integer,
+ * at an integer or not whole, or an upper-segment cell outside every upper withhold: the readings agree), `w3` (an
+ * upper-segment cell at the double of a lower-segment evidence cell, recorded only) or `scope` (a bound, not observed).
+ */
+export type S2RawFloorRole = 'evidence' | 'control' | 'w3' | 'scope'
+export type S2RawFloorGroup = '2c-num' | '2c-minmax' | '2c-percent' | '2c-percentile' | '2c-inverted' | '3c-pmp' | '3c-percent' | '3c-mixed' | '3c-resort' | 'literal'
+
+export interface S2RawFloorBlock {
+  id: string
+  /** The evidence configuration of the block's `evidence` cells. */
+  group: S2RawFloorGroup
+  col: string
+  firstRow: number
+  /** cfvo in authored order. */
+  cfvo: ReadonlyArray<{ type: string; val?: string }>
+  /** Colours in authored order, as P-line steps (`s2UwLine`). */
+  steps: readonly number[]
+  /** The thresholds the rule resolves to, in cfvo order, as decimals (checked bit for bit against the resolver). */
+  thresholds: readonly string[]
+  values: ReadonlyArray<{ text: string; role: S2RawFloorRole }>
+}
+
+const s2rfNum = (...v: string[]): Array<{ type: string; val: string }> => v.map(val => ({ type: 'num', val }))
+const s2rfV = (role: S2RawFloorRole, ...texts: string[]): Array<{ text: string; role: S2RawFloorRole }> => texts.map(text => ({ text, role }))
+const S2RF_PMP = [{ type: 'min' }, { type: 'percentile', val: '50' }, { type: 'max' }] as const
+const S2RF_PERCENT3 = [{ type: 'min' }, { type: 'percent', val: '50' }, { type: 'max' }] as const
+
+/**
+ * The blocks (columns A..K, rows 2..16). Statistical thresholds are data values (min, max, a median over an odd count,
+ * percentile 100 = max) or halves of a zero-minimum maximum (percent 50, percent 100), exact in every operation order, so a
+ * cell's double f is the one of its literal-num counterpart. The 14 doubles of ed0fccb6: E7..E10 (0.6, 0.44, 0.5, 0.58 in
+ * 0.4 .. 1, Q to P) in A and D; E12..E14 (1.21, 1.32, 1.43 in 1.1 .. 2.2, Q to P) in B, C and E; H8, H18, I5 (57, 108, 127
+ * in 0 .. 210, P to Q) in A, F, H and I, and as offsets 267, 318, 337 in 210 .. 420 in D; A3, A4 (0.13, 0.21 in 0.1 .. 0.4,
+ * P to Q) in G; D2, D4 (0.11, 0.15 in 0.1 .. 0.2, P to Q) in J. Spans: 210 (P to Q), 30 (B), 150 (C) and 105 (K).
+ */
+export function s2RawFloorBlocks(): S2RawFloorBlock[] {
+  return [
+    // 2-colour, literal num.
+    { id: '2c-num-tenths', group: '2c-num', col: 'A', firstRow: 2, cfvo: s2rfNum('0.4', '1'), steps: [210, 0], thresholds: ['0.4', '1'],
+      values: [...s2rfV('evidence', '0.6', '0.44', '0.5', '0.58', '0.42', '0.7'), ...s2rfV('control', '0.54', '0.46')] },
+    { id: '2c-num-210', group: '2c-num', col: 'A', firstRow: 10, cfvo: s2rfNum('0', '210'), steps: [0, 210], thresholds: ['0', '210'],
+      values: [...s2rfV('evidence', '57', '108', '127', '27', '114'), ...s2rfV('control', '115', '70')] },
+    { id: '2c-num-d30', group: '2c-num', col: 'B', firstRow: 2, cfvo: s2rfNum('0.4', '1'), steps: [100, 130], thresholds: ['0.4', '1'],
+      values: [...s2rfV('evidence', '0.42', '0.48', '0.58', '0.94'), ...s2rfV('control', '0.65')] },
+    // 2-colour, min / max.
+    { id: '2c-minmax-e12', group: '2c-minmax', col: 'B', firstRow: 7, cfvo: [{ type: 'min' }, { type: 'max' }], steps: [210, 0], thresholds: ['1.1', '2.2'],
+      values: [...s2rfV('scope', '1.1'), ...s2rfV('evidence', '1.21', '1.32', '1.43', '1.65', '2.09'), ...s2rfV('control', '1.87'), ...s2rfV('scope', '2.2')] },
+    { id: '2c-minmax-d150', group: '2c-minmax', col: 'C', firstRow: 2, cfvo: [{ type: 'min' }, { type: 'max' }], steps: [180, 30], thresholds: ['0.1', '0.4'],
+      values: [...s2rfV('scope', '0.1'), ...s2rfV('evidence', '0.11', '0.13', '0.17', '0.31'), ...s2rfV('scope', '0.4')] },
+    // 2-colour, percent 50 / percent 100 over a zero minimum (max/2 and max exactly).
+    { id: '2c-percent-e12', group: '2c-percent', col: 'C', firstRow: 8, cfvo: [{ type: 'percent', val: '50' }, { type: 'percent', val: '100' }], steps: [0, 210], thresholds: ['1.1', '2.2'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '1.21', '1.32', '1.43', '1.54'), ...s2rfV('control', '1.87'), ...s2rfV('scope', '2.2')] },
+    { id: '2c-percent-420', group: '2c-percent', col: 'D', firstRow: 2, cfvo: [{ type: 'percent', val: '50' }, { type: 'percent', val: '100' }], steps: [210, 0], thresholds: ['210', '420'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '267', '318', '337', '237'), ...s2rfV('control', '325', '280'), ...s2rfV('scope', '420')] },
+    // 2-colour, inverted thresholds (the first cfvo above the second; colours positional, as production and stage2-scale-degenerate).
+    { id: '2c-inverted-tenths', group: '2c-inverted', col: 'D', firstRow: 10, cfvo: s2rfNum('1', '0.4'), steps: [210, 0], thresholds: ['1', '0.4'],
+      values: [...s2rfV('evidence', '0.6', '0.44', '0.5', '0.58'), ...s2rfV('control', '0.54')] },
+    // 2-colour, percentile 50 / percentile 100 over 13 values (the median 1.1 exactly, then the maximum).
+    { id: '2c-percentile-e12', group: '2c-percentile', col: 'E', firstRow: 2, cfvo: [{ type: 'percentile', val: '50' }, { type: 'percentile', val: '100' }], steps: [210, 0], thresholds: ['1.1', '2.2'],
+      values: [...s2rfV('scope', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '1.1'), ...s2rfV('evidence', '1.21', '1.32', '1.43', '1.76'), ...s2rfV('control', '1.87'), ...s2rfV('scope', '2.2')] },
+    { id: '2c-inverted-210', group: '2c-inverted', col: 'F', firstRow: 2, cfvo: s2rfNum('210', '0'), steps: [0, 210], thresholds: ['210', '0'],
+      values: [...s2rfV('evidence', '57', '108', '127'), ...s2rfV('control', '115')] },
+    // 3-colour, literal num (the num-segment shape first: withheld whatever a reading says; recorded).
+    { id: '3c-literal-210', group: 'literal', col: 'F', firstRow: 6, cfvo: s2rfNum('0', '210', '420'), steps: [0, 210, 0], thresholds: ['0', '210', '420'],
+      values: s2rfV('evidence', '57', '108', '127', '27') },
+    // 3-colour, the midpoint above the maximum (min / num 420 / num 210 re-sorts to 0 / 210 / 420; the lower segment runs colour 1 to colour 2).
+    { id: '3c-resort-210', group: '3c-resort', col: 'F', firstRow: 10, cfvo: [{ type: 'min' }, { type: 'num', val: '420' }, { type: 'num', val: '210' }], steps: [0, 210, 0], thresholds: ['0', '420', '210'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '57', '108', '127', '27'), ...s2rfV('control', '115')] },
+    // 3-colour, min / percentile 50 / max: the median 0.4 (6 values each side), A3 and A4's doubles; upper-segment controls not whole.
+    { id: '3c-pmp-tenths', group: '3c-pmp', col: 'G', firstRow: 2, cfvo: S2RF_PMP, steps: [0, 210, 0], thresholds: ['0.1', '0.4', '1'],
+      values: [...s2rfV('scope', '0.1'), ...s2rfV('evidence', '0.13', '0.21', '0.16', '0.31'), ...s2rfV('control', '0.27'), ...s2rfV('scope', '0.4'), ...s2rfV('control', '0.45', '0.55', '0.65', '0.75', '0.85'), ...s2rfV('scope', '1')] },
+    // The median 210 (7 values each side); W3: the upper segment at the same doubles (210 + k), P to Q below and Q to P above.
+    { id: '3c-pmp-210', group: '3c-pmp', col: 'H', firstRow: 2, cfvo: S2RF_PMP, steps: [0, 210, 0], thresholds: ['0', '210', '420'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '57', '108', '127', '27'), ...s2rfV('control', '115', '70'), ...s2rfV('scope', '210'), ...s2rfV('w3', '267', '318', '337', '237'), ...s2rfV('control', '300.5', '350.5'), ...s2rfV('scope', '420')] },
+    // 3-colour, min / percent 50 / max over 0 .. 420 (210 exactly); Q / P / Q, so W3's colour orders are the other way round.
+    { id: '3c-percent-210', group: '3c-percent', col: 'I', firstRow: 2, cfvo: S2RF_PERCENT3, steps: [210, 0, 210], thresholds: ['0', '210', '420'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '57', '108', '127', '27', '54'), ...s2rfV('control', '115'), ...s2rfV('w3', '267', '318', '337', '237', '264'), ...s2rfV('scope', '420')] },
+    // 3-colour, mixed: num 0.1 / percentile 50 / num 0.8 over the median 0.2 (D2 and D4's doubles); upper controls not whole.
+    { id: '3c-mixed-tenths', group: '3c-mixed', col: 'J', firstRow: 2, cfvo: [{ type: 'num', val: '0.1' }, { type: 'percentile', val: '50' }, { type: 'num', val: '0.8' }], steps: [0, 210, 0], thresholds: ['0.1', '0.2', '0.8'],
+      values: [...s2rfV('evidence', '0.11', '0.15', '0.12', '0.18'), ...s2rfV('control', '0.14', '0.13'), ...s2rfV('scope', '0.2'), ...s2rfV('control', '0.25', '0.35', '0.45', '0.55', '0.65', '0.75')] },
+    // 3-colour, mixed: min / num 210 / max, span 105.
+    { id: '3c-mixed-d105', group: '3c-mixed', col: 'K', firstRow: 2, cfvo: [{ type: 'min' }, { type: 'num', val: '210' }, { type: 'max' }], steps: [0, 105, 0], thresholds: ['0', '210', '420'],
+      values: [...s2rfV('scope', '0'), ...s2rfV('evidence', '54', '108', '114'), ...s2rfV('control', '70', '57'), ...s2rfV('scope', '420')] },
+  ]
+}
+
+/** The layout's fixed slots: twin columns (one twin rule each), positive-control slots, the control row. */
+export const S2_RAW_FLOOR = {
+  twinCols: ['L', 'M', 'N', 'O', 'P'] as const,
+  positiveControlCols: ['Q'] as const,
+  firstRow: 2,
+  lastDataRow: 16,
+  /** Row 17: each data column's unformatted control (the column's first designated value), the twin's and the positive controls'. */
+  controlRow: 17,
+  /** The twin line: num 0 / 1 between two P-line steps 128 apart; a twin of step k has value (k − from)/128 (exact). */
+  twinSpans: [{ from: 0, to: 128 }, { from: 82, to: 210 }] as const,
+  /** Literal cellIs positive controls (readback of a dxf fill off the P line). */
+  literalControls: ['FFF8696B', 'FF63BE7B'] as const,
+}
+
+export interface S2RawFloorCell {
+  ref: string
+  block: S2RawFloorBlock
+  text: string
+  value: number
+  role: S2RawFloorRole
+  /** 0: lower (or only) segment; 1: upper. */
+  segment: 0 | 1
+  colours: 2 | 3
+  /** The configuration (designated cells only). */
+  configuration?: string
+  /** The segment as evaluated: thresholds sorted (2-colour) or re-sorted (midpoint above max), colours positional. */
+  lo: number
+  hi: number
+  from: string
+  to: string
+}
+
+/** The independent threshold model: min / max, literal num, percent min + p/100·(max − min), PERCENTILE.INC. */
+function s2rfThresholds(b: S2RawFloorBlock): number[] {
+  const scope = b.values.map(x => Number(x.text)).sort((x, y) => x - y)
+  const min = scope[0]!, max = scope[scope.length - 1]!
+  return b.cfvo.map(c => {
+    if (c.type === 'min') return min
+    if (c.type === 'max') return max
+    const n = Number(c.val)
+    if (c.type === 'num') return n
+    if (c.type === 'percent') return min + (n / 100) * (max - min)
+    const rank = (n / 100) * (scope.length - 1), i = Math.floor(rank)
+    return i + 1 < scope.length ? scope[i]! + (rank - i) * (scope[i + 1]! - scope[i]!) : scope[i]!
+  })
+}
+
+/** Every cell of every block, with the segment Excel's re-sorts put it in (2-colour thresholds sorted, colours positional). */
+export function s2RawFloorCells(): S2RawFloorCell[] {
+  return s2RawFloorBlocks().flatMap(b => {
+    const t = s2rfThresholds(b)
+    if (t.some((x, i) => !Object.is(x, Number(b.thresholds[i])))) throw new Error(`${S2_RAW_FLOOR_ID}: ${b.id} thresholds ${t.join(' / ')} are not ${b.thresholds.join(' / ')}`)
+    const colours = b.steps.map(s2UwLine)
+    return b.values.map((x, i): S2RawFloorCell => {
+      const value = Number(x.text)
+      let lo: number, hi: number, segment: 0 | 1, from: string, to: string
+      if (b.cfvo.length === 2) {
+        ;[lo, hi] = t[0]! < t[1]! ? [t[0]!, t[1]!] : [t[1]!, t[0]!]
+        segment = 0; from = colours[0]!; to = colours[1]!
+      } else {
+        const [mid, top] = t[1]! > t[2]! ? [t[2]!, t[1]!] : [t[1]!, t[2]!]
+        segment = value <= mid ? 0 : 1
+        ;[lo, hi] = segment === 0 ? [t[0]!, mid] : [mid, top]
+        from = colours[segment]!; to = colours[segment + 1]!
+      }
+      const configuration = x.role === 'scope' ? undefined : x.role === 'evidence' ? b.group : x.role === 'control' ? 'controls' : 'w3'
+      return { ref: `${b.col}${b.firstRow + i}`, block: b, text: x.text, value, role: x.role, segment, colours: b.cfvo.length as 2 | 3, configuration, lo, hi, from, to }
+    })
+  })
+}
+
+/** Each channel's product class at a cell: `below` (within 1e-11 strictly below a whole number), `above`, `integer`, `clear`. */
+export function s2RawFloorClasses(c: Pick<S2RawFloorCell, 'value' | 'lo' | 'hi' | 'from' | 'to'>): Array<'below' | 'above' | 'integer' | 'clear'> {
+  const f = Math.max(0, Math.min(1, (c.value - c.lo) / (c.hi - c.lo)))
+  return [2, 4, 6].flatMap(i => {
+    const d = Math.abs(parseInt(c.to.slice(i, i + 2), 16) - parseInt(c.from.slice(i, i + 2), 16))
+    if (d === 0) return []
+    const p = f * d
+    if (Number.isInteger(p)) return ['integer' as const]
+    const k = Math.round(p)
+    return [Math.abs(p - k) <= 1e-11 ? (p < k ? 'below' as const : 'above' as const) : 'clear' as const]
+  })
+}
+
+/** A reading's colour from `from` to `to` at f = (v − lo)/(hi − lo), clamped: `raw-floor` floor(f·d), `guarded` floor(f·d + 1e-11), per channel. */
+export function s2RawFloorColour(reading: S2RawFloorReading, from: string, to: string, v: number, lo: number, hi: number): string {
+  const f = Math.max(0, Math.min(1, (v - lo) / (hi - lo)))
+  return [0, 2, 4, 6].map(i => {
+    const c0 = parseInt(from.slice(i, i + 2), 16), c1 = parseInt(to.slice(i, i + 2), 16)
+    const p = f * Math.abs(c1 - c0)
+    const k = reading === 'raw-floor' ? Math.floor(p) : Math.floor(p + 1e-11)
+    return (c1 >= c0 ? c0 + k : c0 - k).toString(16).toUpperCase().padStart(2, '0')
+  }).join('')
+}
+
+/**
+ * What a reading predicts at a designated cell: the reading's colour in a 2-colour scale or a lower segment (where the two
+ * agree except in the guard-boundary shape); in an upper segment, guarded truncation for every control (production's
+ * interpolation, outside every upper withhold), and the reading's arithmetic applied there for a W3 probe (recorded only).
+ */
+export function s2RawFloorPrediction(c: S2RawFloorCell, reading: S2RawFloorReading): string {
+  const r = c.colours === 2 || c.segment === 0 || c.role === 'w3' ? reading : 'guarded'
+  return s2RawFloorColour(r, c.from, c.to, c.value, c.lo, c.hi)
+}
+
+const S2RF_CONFIGURATIONS: ReadonlyArray<{ id: string; capabilityId: string; role?: 'negative-control'; record?: string; note: string }> = [
+  { id: '2c-num', capabilityId: S2_RAW_FLOOR_CAP, note: '2-colour, literal num bounds (E7..E10 and H8, H18, I5 of ed0fccb6; spans 210 and 30).' },
+  { id: '2c-minmax', capabilityId: S2_RAW_FLOOR_CAP, note: '2-colour, min / max (E12..E14 of ed0fccb6; spans 210 and 150).' },
+  { id: '2c-percent', capabilityId: S2_RAW_FLOOR_CAP, note: '2-colour, percent 50 / percent 100 over a zero minimum (1.1 .. 2.2 and 210 .. 420).' },
+  { id: '2c-percentile', capabilityId: S2_RAW_FLOOR_CAP, note: '2-colour, percentile 50 / percentile 100 (the median 1.1, the maximum 2.2).' },
+  { id: '2c-inverted', capabilityId: S2_RAW_FLOOR_CAP, note: '2-colour, inverted literal thresholds (num 1 / 0.4, num 210 / 0).' },
+  { id: '3c-pmp', capabilityId: S2_RAW_FLOOR_CAP, note: '3-colour lower segment, min / percentile 50 / max (A3, A4 of ed0fccb6; 0 / 210 / 420).' },
+  { id: '3c-percent', capabilityId: S2_RAW_FLOOR_CAP, note: '3-colour lower segment, min / percent 50 / max over 0 .. 420 (Q / P / Q).' },
+  { id: '3c-mixed', capabilityId: S2_RAW_FLOOR_CAP, note: '3-colour lower segment, mixed bounds (num 0.1 / percentile 50 / num 0.8: D2, D4 of ed0fccb6; min / num 210 / max, span 105).' },
+  { id: '3c-resort', capabilityId: S2_RAW_FLOOR_CAP, note: '3-colour lower segment after the midpoint-above-max re-sort (min / num 420 / num 210).' },
+  { id: 'controls', capabilityId: S2_RAW_FLOOR_CAP, role: 'negative-control', note: 'Negative controls: the same shapes just above an integer, at an integer or not whole, and upper-segment cells outside every upper withhold; every reading predicts guarded truncation, Excel must match it, never evidence.' },
+  { id: 'w3', capabilityId: S2_RAW_FLOOR_CAP, record: 'W3 probes (exploratory, docs/validation/xlsx-cf.md §14.z.17): upper-segment cells at the double of a lower-segment evidence cell, both colour orders; withheld by production (upper-segment window); recorded only, never evidence.', note: 'recorded' },
+  { id: 'literal', capabilityId: S2_RAW_FLOOR_LITERAL, note: '3-colour lower segment bounded by two literal num cfvo: withheld as the num-segment shape whatever a reading says; recorded against the same readings.' },
+]
+
+/**
+ * The twin line: one 2-colour rule per twin column (num 0 / num 1 between P-line steps `from` and `from` + 128), a twin of
+ * step k holding (k − from)/128, so f is the value exactly and f·128 is the IEEE integer k − from on every channel; throws if
+ * any twin's products are not. Twins of steps up to 128 use the first span, the rest the second.
+ */
+function s2rfTwinLine(steps: readonly number[]): Array<{ ref: string; k: number; span: { from: number; to: number }; text: string }> {
+  const fx = S2_RAW_FLOOR
+  const rows = fx.lastDataRow - fx.firstRow + 1
+  const out: Array<{ ref: string; k: number; span: { from: number; to: number }; text: string }> = []
+  let col = 0
+  for (const span of fx.twinSpans) {
+    const mine = steps.filter(k => (span === fx.twinSpans[0] ? k <= span.to : k > fx.twinSpans[0].to) && k >= span.from && k <= span.to)
+    for (let i = 0; i < mine.length; i += rows) {
+      const colName = fx.twinCols[col++]
+      if (colName === undefined) throw new Error(`${S2_RAW_FLOOR_ID}: ${steps.length} twins exceed ${fx.twinCols.length} twin columns`)
+      mine.slice(i, i + rows).forEach((k, j) => {
+        const text = String((k - span.from) / 128)
+        const v = Number(text), f = (v - 0) / (1 - 0), p = f * (span.to - span.from)
+        if (!Object.is(v * 128, k - span.from) || !Number.isInteger(p) || p !== k - span.from) throw new Error(`${S2_RAW_FLOOR_ID}: twin step ${k} product ${p} is not the IEEE integer ${k - span.from}`)
+        out.push({ ref: `${colName}${fx.firstRow + j}`, k, span, text })
+      })
+    }
+  }
+  return out
+}
+
+/** The configurations, the twin line and the literal positive controls; every prediction is a twin token (P-line step k). */
+export function s2RawFloorLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: Array<{ ref: string; k: number; span: { from: number; to: number }; text: string }> } {
+  const fx = S2_RAW_FLOOR
+  const cells = s2RawFloorCells().filter(c => c.configuration !== undefined)
+  const fills = [...new Set(cells.flatMap(c => S2_RAW_FLOOR_READINGS.map(r => s2RawFloorPrediction(c, r))))].sort()
+  const offLine = fills.filter(f => s2nsLineStep(f) === undefined)
+  if (offLine.length > 0) throw new Error(`${S2_RAW_FLOOR_ID}: fills off the P line ${offLine.join(', ')}`)
+  const steps = [...new Set(fills.map(f => s2nsLineStep(f)!))].sort((a, b) => a - b)
+  const twins = s2rfTwinLine(steps)
+  const twinOf = new Map(twins.map(t => [t.k, t.ref]))
+  const positiveControls = fx.literalControls.map((token, i) => ({ ref: `${fx.positiveControlCols[0]}${fx.firstRow + i}`, token }))
+  const tokenOf = (fill: string): string => `twin:${twinOf.get(s2nsLineStep(fill)!)!}`
+  const configurations: S5Configuration[] = S2RF_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    const hypotheses = Object.fromEntries(S2_RAW_FLOOR_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2RawFloorPrediction(c, h))]))]))
+    const twinRefs = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)))].map(t => t.slice('twin:'.length)).sort()
+    return {
+      id: cfg.id, capabilityId: cfg.capabilityId, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(cfg.record ? { record: cfg.record } : {}),
+      twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])),
+      ...(cfg.id === 'controls' ? { positiveControls: Object.fromEntries(positiveControls.map(p => [p.ref, p.token])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins }
+}
+
+/** The data columns (A..K) and the control of each: the column's first designated cell's value, unformatted, in the control row. */
+export function s2RawFloorColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2RawFloorCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_RAW_FLOOR.controlRow}`, text: cells.find(c => c.configuration !== undefined && /^[A-Z]+/.exec(c.ref)![0] === col)!.text }))
+}
+
+/** A sqref of one column's rows, a single cell written as the cell (Excel collapses `X2:X2`). */
+const s2rfSqref = (col: string, first: number, last: number): string => (first === last ? `${col}${first}` : `${col}${first}:${col}${last}`)
+
+/** The colour rules (one per block), then the twin line's (one per twin column), in priority order; positive controls follow, unmarked. */
+export function s2RawFloorMarkers(): CfPartMarker[] {
+  const { twins } = s2RawFloorLayout()
+  const twinRules = S2_RAW_FLOOR.twinCols.map(col => ({ col, mine: twins.filter(t => /^[A-Z]+/.exec(t.ref)![0] === col) })).filter(x => x.mine.length > 0)
+  return [
+    ...s2RawFloorBlocks().map(b => ({ cap: b.group === 'literal' ? S2_RAW_FLOOR_LITERAL : S2_RAW_FLOOR_CAP, sqref: s2rfSqref(b.col, b.firstRow, b.firstRow + b.values.length - 1), cfvo: b.cfvo, colors: b.steps.map(s2UwLine) })),
+    ...twinRules.map(x => ({ cap: S2_RAW_FLOOR_TWIN, sqref: s2rfSqref(x.col, Number(x.mine[0]!.ref.slice(x.col.length)), Number(x.mine.at(-1)!.ref.slice(x.col.length))), cfvo: s2rfNum('0', '1'), colors: [s2UwLine(x.mine[0]!.span.from), s2UwLine(x.mine[0]!.span.to)] })),
+  ].map((m, i) => s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1))
+}
+
+/** The capture range: through the last positive-control column and the control row. */
+export const s2RawFloorRange = (): string => `A1:${S2_RAW_FLOOR.positiveControlCols.at(-1)!}${S2_RAW_FLOOR.controlRow}`
+
+function stage2RawFloorCase(): CfOracleCase {
+  const fx = S2_RAW_FLOOR
+  const { configurations, positiveControls, twins } = s2RawFloorLayout()
+  const all = s2RawFloorCells()
+  const colControl = new Map(s2RawFloorColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const twinControl = `${fx.twinCols[0]}${fx.controlRow}`
+  const pcControl = `${fx.positiveControlCols[0]}${fx.controlRow}`
+  const designated: CfCellExpectation[] = all.filter(c => c.configuration !== undefined).map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  // A twin's control is the shared unformatted twin-row cell (value 0); a positive control's is the shared one (value 1).
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: pcControl, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: pcControl, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const count = (cfg: string): number => all.filter(c => c.configuration === cfg).length
+  const evidence = S2RF_CONFIGURATIONS.filter(c => c.capabilityId === S2_RAW_FLOOR_CAP && !c.role && !c.record).map(c => `${c.id} ${count(c.id)}`).join(', ')
+  return {
+    id: S2_RAW_FLOOR_ID,
+    stage: 2,
+    question:
+      `The raw-floor follow-up of ed0fccb6 (14 interior cells of 2-colour scales and 3-colour lower segments whose step product lies within 1e-11 below a whole number, all drawn one step below production's guarded truncation, now withheld): does Excel draw that guard-boundary shape at raw floor, floor(f·d) (W1), or at guarded truncation, floor(f·d + 1e-11)? Two readings pre-registered on ${evidence} cells (bound kind × segment kind; both colour orders; spans 210, 150, 105 and 30; the 14 doubles replicated); ${count('literal')} literal-num lower-segment cells (recorded); ${count('controls')} negative controls of the same shapes; ${count('w3')} W3 probes (the same doubles in the upper segment, recorded only). A twin line with IEEE-integer products shows every predicted P-line fill; two literal cellIs positive controls check the readback.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_RAW_FLOOR_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_RAW_FLOOR_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2RawFloorRange(),
+    requiredAppearances: ['screen'],
+    markers: s2RawFloorMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_RAW_FLOOR_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_RAW_FLOOR_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -4801,8 +5166,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   stage2NumSegmentCase(),
   // 11. stage2-scale-upper-whole (the upper-segment whole-product follow-up, exploratory)
   stage2UpperWholeCase(),
-  // 12. stage2-scale-upper-window (the upper-segment window follow-up, appended last: earlier inputs stay byte-identical)
+  // 12. stage2-scale-upper-window (the upper-segment window follow-up)
   stage2UpperWindowCase(),
+  // 13. stage2-scale-raw-floor (the raw-floor follow-up, appended last: earlier inputs stay byte-identical)
+  stage2RawFloorCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -4957,6 +5324,15 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The literal-num twins of stage2-scale-upper-window (bit-identical thresholds, the same double f as each statistical window cell): recorded against the same readings to test "same double, same outcome"; withheld as the num-segment shape, never registrable.',
   'scale:upper-window-twin':
     'The 2-colour twin line of stage2-scale-upper-window (num 0 / 210, P to P+210, one cell per predicted P-line fill): comparison references, never a question themselves.',
+  // The raw-floor follow-up (stage2-scale-raw-floor): the question is registered until its capture (a matched reading is
+  // published only by removing this entry and registering it in CF_GUARD_BOUNDARY_PRODUCTION_READINGS); the literal-num lower
+  // segment and the twin line are comparisons, never questions.
+  'scale:guard-boundary-raw-floor':
+    'Pre-registered (stage2-scale-raw-floor, two readings: raw-floor, guarded), awaiting its capture: the guard-boundary shape of 2-colour scales and 3-colour lower segments stays withheld (cf-unmeasured-guard-boundary) until a matched reading is registered.',
+  'scale:guard-boundary-literal-lower':
+    'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings; withheld as the num-segment shape whatever a reading says, never registrable.',
+  'scale:guard-boundary-twin':
+    'The 2-colour twin line of stage2-scale-raw-floor (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
 }
 
 /**

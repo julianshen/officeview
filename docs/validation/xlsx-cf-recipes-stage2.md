@@ -1030,3 +1030,224 @@ There are 2067 interior channels with d ≠ 0 in all, and raw floor is exact on 
 **Withheld here, exact all the same.** Production withholds 74 of the 692: the 14 guard-boundary cells and 60 literal-num lower-segment cells (the num-segment shape). Raw floor is Excel's fill at all of them.
 
 **Before this case**, only the 14 below-integer cells separate the readings. All 14 come from one capture and one span (d = 210 on every channel). The case below replicates them and widens them.
+
+### 11.2 Readings and the registration rule (Phase 1 task 2)
+
+`src/xlsx/cf/colorScale.ts` implements two readings of the guard-boundary shape (`guardBoundaryProduct`). The shape is an interior cell of a 2-colour scale, or of a 3-colour lower segment after the midpoint-above-max re-sort, where some ARGB channel's p = f·|d| lies within 1e-11 strictly below a whole number. Per channel, each reading takes the step from the segment's start colour:
+
+| Reading | Step | Status |
+|---|---|---|
+| `raw-floor` (W1) | floor(f·\|d\|) | every captured lower-segment and 2-colour interior cell was drawn so (§11.1) |
+| `guarded` | floor(f·\|d\| + 1e-11) | the pre-#102 interpolation; the control, contradicted by ed0fccb6 at its 14 cells |
+
+**When a reading applies.** A reading applies only when all of these hold:
+- it is registered for `scale:guard-boundary-raw-floor`. `CF_GUARD_BOUNDARY_PRODUCTION_READINGS` is empty and is spread into the audit's `CF_STAGE2_PRODUCTION_READINGS`. The test seam `injectCfGuardBoundaryReadings` rehearses a registration;
+- the id's evidence is held;
+- the variants are the defaults, sRGB and truncate;
+- neither bounding cfvo is formula-resolved. Formula-resolved bounds were never captured in this shape, so they stay withheld (fail closed).
+
+**Precedence.** The literal num-segment withhold still comes first on 3-colour segments. A lower segment bounded by two literal num cfvo is never painted by a reading. The upper-segment rules are untouched.
+
+**Fail closed.** Any non-finite intermediate withholds.
+
+**Default:** unregistered. The shape stays withheld (`cf-unmeasured-guard-boundary`).
+
+**Justification.** `guardBoundaryShapeAt` (`scripts/cf-refs/upper-whole-justify.ts`) narrows with the registration and only then. Formula-bounded segments stay justified. It is pinned by `tests/xlsx-cf-scale-raw-floor-readings.test.ts`.
+
+### 11.3 The case (Phase 1 task 3)
+
+`stage2-scale-raw-floor` is appended last in `CF_STAGE2_CASES`, so earlier inputs stay byte-identical. It owns three ids, each registered in `CF_STAGE2_NONDISCRIMINATING` until its capture:
+- `scale:guard-boundary-raw-floor`: the question;
+- `scale:guard-boundary-literal-lower`: literal-num lower segments, recorded;
+- `scale:guard-boundary-twin`: the twin line.
+
+The range is A1:Q17 and holds 201 cells:
+- 114 designated cells;
+- 72 twins;
+- 2 literal cellIs positive controls (FFF8696B at Q2 and FF63BE7B at Q3);
+- 13 unformatted controls in row 17.
+
+The text-scope estimate over the whole range is 3,072,876 bytes, which is 37% of the 8,388,608-byte cap.
+
+**Thresholds** are exact in every operation order. Each one is a data value (min, max, a median over an odd count, percentile 100 as the maximum) or half of, or all of, a zero-minimum maximum (percent 50 and percent 100). So a cell's f double is the same as that of its literal counterpart. Production's resolver is pinned bit for bit.
+
+**Fills.** Every fill lies on the P line, P + k·(1, −1, 1) with P = (20, 240, 40). Each fill is shown by a twin. The twin line has two 2-colour rules, num 0 / 1, from step 0 to 128 and from step 82 to 210. A twin of step k holds (k − from)/128, so f is that value exactly and f·128 is an IEEE integer on every channel. This is recomputed in the layout, which throws otherwise, and again in the test. This follows the PR #102 lesson: no twin can be drawn off its line by the arithmetic under test.
+
+**Configurations.** Each evidence configuration is one replication group, one per bound kind × segment kind.
+
+| Configuration | Cells (all decisive) | Blocks | ed0fccb6 doubles replicated |
+|---|---|---|---|
+| `2c-num` | 15 | num 0.4 / 1, Q → P (d = 210); num 0 / 210, P → Q; num 0.4 / 1, span 30 | E7..E10; H8, H18, I5 |
+| `2c-minmax` | 9 | min / max over 1.1 .. 2.2, Q → P; over 0.1 .. 0.4, span 150 | E12..E14 |
+| `2c-percent` | 8 | percent 50 / 100 over 0 .. 2.2, P → Q; over 0 .. 420, Q → P | E12..E14 (other colour order); H8, H18, I5 as 210 + k |
+| `2c-percentile` | 4 | percentile 50 / 100 over 13 values (median 1.1, max 2.2), Q → P | E12..E14 |
+| `2c-inverted` | 7 | num 1 / 0.4 (colours positional) and num 210 / 0 | E7..E10; H8, H18, I5 |
+| `3c-pmp` | 8 | min / percentile 50 / max over 0.1 / 0.4 / 1 and 0 / 210 / 420, P / Q / P | A3, A4; H8, H18, I5 |
+| `3c-percent` | 5 | min / percent 50 / max over 0 .. 420, Q / P / Q | H8, H18, I5 (other colour order) |
+| `3c-mixed` | 7 | num 0.1 / percentile 50 / num 0.8 (median 0.2); min / num 210 / max, span 105 | D2, D4 |
+| `3c-resort` | 4 | min / num 420 / num 210 (re-sorts to 0 / 210 / 420; the lower segment runs colour 1 to colour 2) | H8, H18, I5 |
+| `literal` (own id, recorded) | 4 | num 0 / 210 / 420 (the num-segment shape: withheld whatever a reading says) | H8, H18, I5 |
+| `controls` (negative control) | 34 | the same shapes just above an integer, at an integer or not whole, plus upper-segment cells outside every upper withhold | — |
+| `w3` (record) | 9 | upper-segment cells at 210 + k in the 0 / 210 / 420 blocks, P / Q / P and Q / P / Q | — |
+
+- **Coverage.** The spans are 210, 150, 105 and 30, and both colour orders occur. Every P-line cell also has ascending R and B channels and a descending G channel, or the reverse, so both truncation directions are in every cell.
+- **The W3 probes** are recorded only: they are in a `record` configuration and are never evidence. Each has a lower-segment evidence partner in its own block. The partner has the same f double bit for bit and the same span, and runs the opposite colour direction. Production withholds the probes as upper-segment window cells, and no reading changes that.
+- **The readings separate** at every evidence cell: 67 cells, from 4 to 15 per configuration.
+- **The negative controls** must equal guarded truncation, the same under both readings. Otherwise every reading is refused.
+
+### 11.4 Predicted colours
+
+The table gives every decisive and recorded cell's prediction under each reading, with its P-line step and twin. Every prediction comes from the independent model (`s2RawFloorPrediction`), never from the viewer.
+
+| Cell | Configuration | Block | Value | lo .. hi | Colours (steps) | f·d (double) | raw-floor | guarded |
+|---|---|---|---|---|---|---|---|---|
+| A2 | 2c-num | 2c-num-tenths | 0.6 | 0.4 .. 1 | 210 → 0 | 210: 69.99999999999999 | FFA163B5 (k 141, O3) | FFA064B4 (k 140, O2) |
+| A3 | 2c-num | 2c-num-tenths | 0.44 | 0.4 .. 1 | 210 → 0 | 210: 13.999999999999995 | FFD92BED (k 197, P12) | FFD82CEC (k 196, P11) |
+| A4 | 2c-num | 2c-num-tenths | 0.5 | 0.4 .. 1 | 210 → 0 | 210: 34.99999999999999 | FFC440D8 (k 176, P5) | FFC341D7 (k 175, P4) |
+| A5 | 2c-num | 2c-num-tenths | 0.58 | 0.4 .. 1 | 210 → 0 | 210: 62.999999999999986 | FFA85CBC (k 148, O7) | FFA75DBB (k 147, O6) |
+| A6 | 2c-num | 2c-num-tenths | 0.42 | 0.4 .. 1 | 210 → 0 | 210: 6.999999999999987 | FFE024F4 (k 204, P14) | FFDF25F3 (k 203, P13) |
+| A7 | 2c-num | 2c-num-tenths | 0.7 | 0.4 .. 1 | 210 → 0 | 210: 104.99999999999997 | FF7E8692 (k 106, N3) | FF7D8791 (k 105, N2) |
+| A10 | 2c-num | 2c-num-210 | 57 | 0 .. 210 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| A11 | 2c-num | 2c-num-210 | 108 | 0 .. 210 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| A12 | 2c-num | 2c-num-210 | 127 | 0 .. 210 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| A13 | 2c-num | 2c-num-210 | 27 | 0 .. 210 | 0 → 210 | 210: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| A14 | 2c-num | 2c-num-210 | 114 | 0 .. 210 | 0 → 210 | 210: 113.99999999999999 | FF857F99 (k 113, N8) | FF867E9A (k 114, N9) |
+| B2 | 2c-num | 2c-num-d30 | 0.42 | 0.4 .. 1 | 100 → 130 | 30: 0.9999999999999981 | FF788C8C (k 100, M12) | FF798B8D (k 101, M13) |
+| B3 | 2c-num | 2c-num-d30 | 0.48 | 0.4 .. 1 | 100 → 130 | 30: 3.9999999999999982 | FF7B898F (k 103, M15) | FF7C8890 (k 104, M16) |
+| B4 | 2c-num | 2c-num-d30 | 0.58 | 0.4 .. 1 | 100 → 130 | 30: 8.999999999999998 | FF808494 (k 108, N5) | FF818395 (k 109, N6) |
+| B5 | 2c-num | 2c-num-d30 | 0.94 | 0.4 .. 1 | 100 → 130 | 30: 26.999999999999996 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| B8 | 2c-minmax | 2c-minmax-e12 | 1.21 | 1.1 .. 2.2 | 210 → 0 | 210: 20.999999999999975 | FFD232E6 (k 190, P9) | FFD133E5 (k 189, P8) |
+| B9 | 2c-minmax | 2c-minmax-e12 | 1.32 | 1.1 .. 2.2 | 210 → 0 | 210: 41.99999999999999 | FFBD47D1 (k 169, P3) | FFBC48D0 (k 168, P2) |
+| B10 | 2c-minmax | 2c-minmax-e12 | 1.43 | 1.1 .. 2.2 | 210 → 0 | 210: 62.999999999999964 | FFA85CBC (k 148, O7) | FFA75DBB (k 147, O6) |
+| B11 | 2c-minmax | 2c-minmax-e12 | 1.65 | 1.1 .. 2.2 | 210 → 0 | 210: 104.99999999999996 | FF7E8692 (k 106, N3) | FF7D8791 (k 105, N2) |
+| B12 | 2c-minmax | 2c-minmax-e12 | 2.09 | 1.1 .. 2.2 | 210 → 0 | 210: 188.99999999999994 | FF2ADA3E (k 22, L5) | FF29DB3D (k 21, L4) |
+| C3 | 2c-minmax | 2c-minmax-d150 | 0.11 | 0.1 .. 0.4 | 180 → 30 | 150: 4.9999999999999964 | FFC440D8 (k 176, P5) | FFC341D7 (k 175, P4) |
+| C4 | 2c-minmax | 2c-minmax-d150 | 0.13 | 0.1 .. 0.4 | 180 → 30 | 150: 14.999999999999996 | FFBA4ACE (k 166, O15) | FFB94BCD (k 165, O14) |
+| C5 | 2c-minmax | 2c-minmax-d150 | 0.17 | 0.1 .. 0.4 | 180 → 30 | 150: 34.99999999999999 | FFA65EBA (k 146, O5) | FFA55FB9 (k 145, O4) |
+| C6 | 2c-minmax | 2c-minmax-d150 | 0.31 | 0.1 .. 0.4 | 180 → 30 | 150: 104.99999999999997 | FF60A474 (k 76, M5) | FF5FA573 (k 75, M4) |
+| C9 | 2c-percent | 2c-percent-e12 | 1.21 | 1.1 .. 2.2 | 0 → 210 | 210: 20.999999999999975 | FF28DC3C (k 20, L3) | FF29DB3D (k 21, L4) |
+| C10 | 2c-percent | 2c-percent-e12 | 1.32 | 1.1 .. 2.2 | 0 → 210 | 210: 41.99999999999999 | FF3DC751 (k 41, L10) | FF3EC652 (k 42, L11) |
+| C11 | 2c-percent | 2c-percent-e12 | 1.43 | 1.1 .. 2.2 | 0 → 210 | 210: 62.999999999999964 | FF52B266 (k 62, L16) | FF53B167 (k 63, M2) |
+| C12 | 2c-percent | 2c-percent-e12 | 1.54 | 1.1 .. 2.2 | 0 → 210 | 210: 83.99999999999999 | FF679D7B (k 83, M7) | FF689C7C (k 84, M8) |
+| D3 | 2c-percent | 2c-percent-420 | 267 | 210 .. 420 | 210 → 0 | 210: 56.99999999999999 | FFAE56C2 (k 154, O9) | FFAD57C1 (k 153, O8) |
+| D4 | 2c-percent | 2c-percent-420 | 318 | 210 .. 420 | 210 → 0 | 210: 107.99999999999999 | FF7B898F (k 103, M15) | FF7A8A8E (k 102, M14) |
+| D5 | 2c-percent | 2c-percent-420 | 337 | 210 .. 420 | 210 → 0 | 210: 126.99999999999999 | FF689C7C (k 84, M8) | FF679D7B (k 83, M7) |
+| D6 | 2c-percent | 2c-percent-420 | 237 | 210 .. 420 | 210 → 0 | 210: 26.999999999999996 | FFCC38E0 (k 184, P7) | FFCB39DF (k 183, P6) |
+| D10 | 2c-inverted | 2c-inverted-tenths | 0.6 | 0.4 .. 1 | 210 → 0 | 210: 69.99999999999999 | FFA163B5 (k 141, O3) | FFA064B4 (k 140, O2) |
+| D11 | 2c-inverted | 2c-inverted-tenths | 0.44 | 0.4 .. 1 | 210 → 0 | 210: 13.999999999999995 | FFD92BED (k 197, P12) | FFD82CEC (k 196, P11) |
+| D12 | 2c-inverted | 2c-inverted-tenths | 0.5 | 0.4 .. 1 | 210 → 0 | 210: 34.99999999999999 | FFC440D8 (k 176, P5) | FFC341D7 (k 175, P4) |
+| D13 | 2c-inverted | 2c-inverted-tenths | 0.58 | 0.4 .. 1 | 210 → 0 | 210: 62.999999999999986 | FFA85CBC (k 148, O7) | FFA75DBB (k 147, O6) |
+| E9 | 2c-percentile | 2c-percentile-e12 | 1.21 | 1.1 .. 2.2 | 210 → 0 | 210: 20.999999999999975 | FFD232E6 (k 190, P9) | FFD133E5 (k 189, P8) |
+| E10 | 2c-percentile | 2c-percentile-e12 | 1.32 | 1.1 .. 2.2 | 210 → 0 | 210: 41.99999999999999 | FFBD47D1 (k 169, P3) | FFBC48D0 (k 168, P2) |
+| E11 | 2c-percentile | 2c-percentile-e12 | 1.43 | 1.1 .. 2.2 | 210 → 0 | 210: 62.999999999999964 | FFA85CBC (k 148, O7) | FFA75DBB (k 147, O6) |
+| E12 | 2c-percentile | 2c-percentile-e12 | 1.76 | 1.1 .. 2.2 | 210 → 0 | 210: 125.99999999999997 | FF699B7D (k 85, M9) | FF689C7C (k 84, M8) |
+| F2 | 2c-inverted | 2c-inverted-210 | 57 | 0 .. 210 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| F3 | 2c-inverted | 2c-inverted-210 | 108 | 0 .. 210 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| F4 | 2c-inverted | 2c-inverted-210 | 127 | 0 .. 210 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| F6 | literal | 3c-literal-210 | 57 | 0 .. 210 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| F7 | literal | 3c-literal-210 | 108 | 0 .. 210 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| F8 | literal | 3c-literal-210 | 127 | 0 .. 210 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| F9 | literal | 3c-literal-210 | 27 | 0 .. 210 | 0 → 210 | 210: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| F11 | 3c-resort | 3c-resort-210 | 57 | 0 .. 210 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| F12 | 3c-resort | 3c-resort-210 | 108 | 0 .. 210 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| F13 | 3c-resort | 3c-resort-210 | 127 | 0 .. 210 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| F14 | 3c-resort | 3c-resort-210 | 27 | 0 .. 210 | 0 → 210 | 210: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| G3 | 3c-pmp | 3c-pmp-tenths | 0.13 | 0.1 .. 0.4 | 0 → 210 | 210: 20.999999999999996 | FF28DC3C (k 20, L3) | FF29DB3D (k 21, L4) |
+| G4 | 3c-pmp | 3c-pmp-tenths | 0.21 | 0.1 .. 0.4 | 0 → 210 | 210: 76.99999999999999 | FF60A474 (k 76, M5) | FF61A375 (k 77, M6) |
+| G5 | 3c-pmp | 3c-pmp-tenths | 0.16 | 0.1 .. 0.4 | 0 → 210 | 210: 41.99999999999999 | FF3DC751 (k 41, L10) | FF3EC652 (k 42, L11) |
+| G6 | 3c-pmp | 3c-pmp-tenths | 0.31 | 0.1 .. 0.4 | 0 → 210 | 210: 146.99999999999997 | FFA65EBA (k 146, O5) | FFA75DBB (k 147, O6) |
+| H3 | 3c-pmp | 3c-pmp-210 | 57 | 0 .. 210 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| H4 | 3c-pmp | 3c-pmp-210 | 108 | 0 .. 210 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| H5 | 3c-pmp | 3c-pmp-210 | 127 | 0 .. 210 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| H6 | 3c-pmp | 3c-pmp-210 | 27 | 0 .. 210 | 0 → 210 | 210: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| H10 | w3 | 3c-pmp-210 | 267 | 210 .. 420 | 210 → 0 | 210: 56.99999999999999 | FFAE56C2 (k 154, O9) | FFAD57C1 (k 153, O8) |
+| H11 | w3 | 3c-pmp-210 | 318 | 210 .. 420 | 210 → 0 | 210: 107.99999999999999 | FF7B898F (k 103, M15) | FF7A8A8E (k 102, M14) |
+| H12 | w3 | 3c-pmp-210 | 337 | 210 .. 420 | 210 → 0 | 210: 126.99999999999999 | FF689C7C (k 84, M8) | FF679D7B (k 83, M7) |
+| H13 | w3 | 3c-pmp-210 | 237 | 210 .. 420 | 210 → 0 | 210: 26.999999999999996 | FFCC38E0 (k 184, P7) | FFCB39DF (k 183, P6) |
+| I3 | 3c-percent | 3c-percent-210 | 57 | 0 .. 210 | 210 → 0 | 210: 56.99999999999999 | FFAE56C2 (k 154, O9) | FFAD57C1 (k 153, O8) |
+| I4 | 3c-percent | 3c-percent-210 | 108 | 0 .. 210 | 210 → 0 | 210: 107.99999999999999 | FF7B898F (k 103, M15) | FF7A8A8E (k 102, M14) |
+| I5 | 3c-percent | 3c-percent-210 | 127 | 0 .. 210 | 210 → 0 | 210: 126.99999999999999 | FF689C7C (k 84, M8) | FF679D7B (k 83, M7) |
+| I6 | 3c-percent | 3c-percent-210 | 27 | 0 .. 210 | 210 → 0 | 210: 26.999999999999996 | FFCC38E0 (k 184, P7) | FFCB39DF (k 183, P6) |
+| I7 | 3c-percent | 3c-percent-210 | 54 | 0 .. 210 | 210 → 0 | 210: 53.99999999999999 | FFB153C5 (k 157, O11) | FFB054C4 (k 156, O10) |
+| I9 | w3 | 3c-percent-210 | 267 | 210 .. 420 | 0 → 210 | 210: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+| I10 | w3 | 3c-percent-210 | 318 | 210 .. 420 | 0 → 210 | 210: 107.99999999999999 | FF7F8593 (k 107, N4) | FF808494 (k 108, N5) |
+| I11 | w3 | 3c-percent-210 | 337 | 210 .. 420 | 0 → 210 | 210: 126.99999999999999 | FF9272A6 (k 126, N14) | FF9371A7 (k 127, N15) |
+| I12 | w3 | 3c-percent-210 | 237 | 210 .. 420 | 0 → 210 | 210: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| I13 | w3 | 3c-percent-210 | 264 | 210 .. 420 | 0 → 210 | 210: 53.99999999999999 | FF49BB5D (k 53, L12) | FF4ABA5E (k 54, L13) |
+| J2 | 3c-mixed | 3c-mixed-tenths | 0.11 | 0.1 .. 0.2 | 0 → 210 | 210: 20.99999999999999 | FF28DC3C (k 20, L3) | FF29DB3D (k 21, L4) |
+| J3 | 3c-mixed | 3c-mixed-tenths | 0.15 | 0.1 .. 0.2 | 0 → 210 | 210: 104.99999999999997 | FF7C8890 (k 104, M16) | FF7D8791 (k 105, N2) |
+| J4 | 3c-mixed | 3c-mixed-tenths | 0.12 | 0.1 .. 0.2 | 0 → 210 | 210: 41.99999999999998 | FF3DC751 (k 41, L10) | FF3EC652 (k 42, L11) |
+| J5 | 3c-mixed | 3c-mixed-tenths | 0.18 | 0.1 .. 0.2 | 0 → 210 | 210: 167.99999999999997 | FFBB49CF (k 167, O16) | FFBC48D0 (k 168, P2) |
+| K3 | 3c-mixed | 3c-mixed-d105 | 54 | 0 .. 210 | 0 → 105 | 105: 26.999999999999996 | FF2ED642 (k 26, L6) | FF2FD543 (k 27, L7) |
+| K4 | 3c-mixed | 3c-mixed-d105 | 108 | 0 .. 210 | 0 → 105 | 105: 53.99999999999999 | FF49BB5D (k 53, L12) | FF4ABA5E (k 54, L13) |
+| K5 | 3c-mixed | 3c-mixed-d105 | 114 | 0 .. 210 | 0 → 105 | 105: 56.99999999999999 | FF4CB860 (k 56, L14) | FF4DB761 (k 57, L15) |
+
+Controls: A8 0.54 (above/above/above) FFB54FC9; A9 0.46 (integer/integer/integer) FFD133E5; A15 115 (above/above/above) FF877D9B; A16 70 (integer/integer/integer) FF5AAA6E; B6 0.65 (clear/clear/clear) FF848098; B13 1.87 (integer/integer/integer) FF53B167; C13 1.87 (integer/integer/integer) FFA75DBB; D7 325 (above/above/above) FF739187; D8 280 (integer/integer/integer) FFA064B4; D14 0.54 (above/above/above) FFB54FC9; E13 1.87 (integer/integer/integer) FF53B167; F5 115 (above/above/above) FF877D9B; F15 115 (above/above/above) FF877D9B; G7 0.27 (integer/integer/integer) FF8B799F; G9 0.45 (clear/clear/clear) FFD52FE9; G10 0.55 (clear/clear/clear) FFB252C6; G11 0.65 (clear/clear/clear) FF8F75A3; G12 0.75 (clear/clear/clear) FF6C9880; G13 0.85 (clear/clear/clear) FF49BB5D; H7 115 (above/above/above) FF877D9B; H8 70 (integer/integer/integer) FF5AAA6E; H14 300.5 (clear/clear/clear) FF8C78A0; H15 350.5 (clear/clear/clear) FF5AAA6E; I8 115 (above/above/above) FF739187; J6 0.14 (above/above/above) FF689C7C; J7 0.13 (integer/integer/integer) FF53B167; J9 0.25 (clear/clear/clear) FFD52FE9; J10 0.35 (clear/clear/clear) FFB252C6; J11 0.45 (clear/clear/clear) FF8F75A3; J12 0.55 (clear/clear/clear) FF6C9880; J13 0.65 (clear/clear/clear) FF49BB5D; J14 0.75 (clear/clear/clear) FF26DE3A; K6 70 (integer/integer/integer) FF37CD4B; K7 57 (clear/clear/clear) FF30D444
+
+### 11.5 Rehearsal (Phase 1 task 4)
+
+Pinned by `tests/xlsx-cf-scale-raw-floor-case.test.ts`.
+
+**The independent model is production.**
+- *Unregistered:* production paints every control, twin and positive control at the model's guarded prediction. It withholds the 67 evidence cells (guard boundary), the 4 literal cells (num-segment) and the 9 W3 probes (upper-segment window).
+- *Under each registration:* the 67 cells paint the reading. The literal and W3 cells stay withheld, and nothing else moves.
+
+**Synthetic observations** (`evaluateFormulaCapabilities`):
+- each planted reading matches exactly itself, for the question and for the literal id;
+- W3 probes drawn under the other reading, or off both readings, leave the verdict unchanged;
+- a world at one reading with one decisive cell flipped, in any one evidence configuration, is refused (`formula-hypothesis-none`);
+- a formatted control, a missing or wrong positive control, a blank twin and a moved negative control all refuse.
+
+**The audit gate**, on a synthetic measured capture in a temp root (real `verifyCfCase` and `auditStage2Manifest`):
+- a planted reading matches itself;
+- with the registry entry kept, the id is `unverified-nondiscriminating`;
+- with the entry removed and nothing registered, it is `supported-structural`;
+- registered with the matched reading, it is `verified`;
+- registered with the other reading, it is `supported-structural`;
+- a "no match" plant is refused, and unregistered production keeps the withhold: 201 cells, 80 withheld and justified, 0 violations.
+
+**Against every committed capture** (`stage2Conformance` over the measured Stage 2 cases):
+
+| Registration | Cells | Exact | Withheld | Guard-boundary withheld | Violations |
+|---|---|---|---|---|---|
+| none | 1109 | 761 | 348 | 14 | 0 |
+| `raw-floor` | 1109 | 775 | 334 | 0 | 0 (the 14 cells of ed0fccb6 painted at Excel's fill exactly) |
+| `guarded` | 1109 | | | | **14**, exactly the 14 cells of ed0fccb6 (caught) |
+
+- **Stage 5:** the records are unchanged under each registration, with 0 disagreeing.
+- **This case on each planted world:** the conformance pass and `compareCfCase` (interactive and paged) pass unregistered and under the world's own registration. The other reading registered on that world disagrees at the 67 evidence cells (caught).
+**Gates on the committed manifest** (recipe-pending, nothing registered):
+- `bun scripts/cf-compare.ts --stage 2 --mode paged`: 23 pass, 1 pending (`stage2-scale-raw-floor`, all 201 cell expectations verified), 2 unsupported, 0 fail.
+- `--mode interactive`: the same, except for the two clock-dependent `stage1-timeperiod-today-clock` cases, which fail identically on main.
+- `npx tsx scripts/cf-refs/audit.ts --stage 2`: `ok=true`, `structural=13/13`, `unverifiedNonDiscriminating=21` (18 + the three new ids), `stageComplete=true`, `blockedCapabilities=0`.
+- `--stage 5`: `ok=true`, `stageComplete=true`, `blockedCapabilities=0`.
+
+A registration is rehearsed only through the test seam and a temp root. The committed conformance test's `STAGE2_MEASURED_CASES` reads the capture's sidecar, so the case joins it only once it is captured.
+
+### 11.6 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-raw-floor.xlsx   # 18c54d9391a6772e981f56d3a03db14c60c2066e40bd7b0fada0622e964fcd93
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-raw-floor
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-raw-floor
+npx vitest run tests/xlsx-cf-scale-raw-floor-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-raw-floor`.
+
+**Before the build.** Check that Excel keeps every sqref as written: no rule has a single-cell range written as `X2:X2`.
+
+**After the capture.** The capture cannot be retried, and no prediction, value or reading is edited after it.
+- **First, check the capture is sound:**
+  - every designated cell, twin and positive control is observed through DisplayFormat;
+  - the 13 controls are white;
+  - the two positive controls show FFF8696B and FF63BE7B;
+  - all 72 twins are on the P line at their step. An off-line twin is a harness fault, not a finding, because every twin's product is an IEEE integer.
+- **`raw-floor` matches `scale:guard-boundary-raw-floor`** (W1 confirmed): register it.
+  - Remove the id's `CF_STAGE2_NONDISCRIMINATING` entry.
+  - Set `CF_GUARD_BOUNDARY_PRODUCTION_READINGS['scale:guard-boundary-raw-floor'] = 'raw-floor'`.
+  - Production then paints the guard-boundary shape of 2-colour scales and non-literal 3-colour lower segments at raw floor. The 14 cells of ed0fccb6 are recovered, and the rehearsal (§11.5) says nothing else moves.
+- **`guarded` matches:** this would contradict ed0fccb6 at its 14 cells. That is a finding for the owner before any registration.
+- **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The shape stays withheld.
+- **The literal id and the W3 probes** are recorded whatever they show. The W3 probes are exploratory, and production's upper-segment rules do not change.
