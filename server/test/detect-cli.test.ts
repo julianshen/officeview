@@ -12,6 +12,7 @@ import { decodeImage } from '../src/detect/image'
 import { deriveKeys } from '../src/keys'
 import { formatAnswer } from '../scripts/detect'
 import { Client, corpus, disposePool, start, type Harness } from './harness'
+import { grid500x100 } from './sheet-fixtures'
 
 const SCRIPT = resolve(import.meta.dir, '../scripts/detect.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -162,6 +163,74 @@ describe('detect CLI', () => {
     expect(r.code).toBe(0)
     expect(snap()).toBe(before)
   }, 90_000)
+})
+
+describe('detect CLI --tiles (Stage 4a)', () => {
+  let h: Harness, store: AuditStore
+  let sidB = '', capPng = ''
+  const tilesDb = join(dir, 'tiles.db'), gridPath = join(dir, 'grid.xlsx')
+  const tiles = (extra: string[] = [], spec = '0,5,1,0-1,0-1') => ['--image', capPng, '--doc', gridPath, '--tiles', spec, '--audit-db', tilesDb, ...extra]
+
+  beforeAll(async () => {
+    const grid = await grid500x100()
+    writeFileSync(gridPath, grid)
+    store = AuditStore.open(tilesDb)
+    let current = 'alice'
+    h = await start({ doc: grid, keys: await deriveKeys(master, 1), audit: new AuditTable({ store }), authorize: async () => ({ viewerId: current, policy: { visibleMark: 'fixed', forensicMark: true } }) })
+    const own: Record<string, Uint8Array> = {}
+    for (const who of ['alice', 'bob']) {
+      current = who
+      const c = new Client(h.url), m = await c.hello({ features: ['sheet-tiles@1'] }); await c.ready()
+      const r = await c.tiles(10, { sheetId: '0', viewGen: 0, zoomStep: 5, dpr: 1, palette: 'light', tiles: [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 1, row: 1 }] }, { ms: 60_000 })
+      if (r.tiles.length !== 4) throw new Error('expected four tiles')
+      if (who === 'bob') { sidB = m.session.sid; for (const t of r.tiles) own[`${t.col},${t.row}`] = t.png }
+      c.close()
+    }
+    // Bob's 2×2 pane composited, cropped to 900×900 at (40, 40), saved as a PNG capture.
+    const cv = createCanvas(900, 900), ctx = cv.getContext('2d')
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 2; c++) {
+      const b = await decodeImage(own[`${c},${r}`]!), img = ctx.createImageData(b.width, b.height)
+      img.data.set(b.data); ctx.putImageData(img, c * 512 - 40, r * 512 - 40)
+    }
+    capPng = join(dir, 'pane.png')
+    writeFileSync(capPng, cv.encodeSync('png'))
+  }, 120_000)
+  afterAll(async () => { await h?.stop(); store?.close() })
+
+  it('--tiles 0,5,1,0-1,0-1 prints the traced sid', async () => {
+    const r = await run(tiles())
+    expect([r.code, r.stderr]).toEqual([0, ''])
+    expect(r.stdout).toMatch(new RegExp(`^${capPng.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}: TRACED — session ${sidB}, viewer bob, ip \\S+, started \\S+Z, key generation 1, sheet 0 tiles 0-1,0-1 \\(zoom step 5, dpr 1, light\\) \\(z \\d+\\.\\d\\d, margin \\d+\\.\\d\\d\\)\\n$`))
+    const j = await run(tiles(['--json']))
+    expect(JSON.parse(j.stdout.trim()).answer).toMatchObject({ kind: 'traced', sid: sidB, viewerId: 'bob', target: 'tiles' })
+    const reader = AuditStore.openReadOnlyForTrace(tilesDb)
+    expect(reader.detections().at(-1)).toMatchObject({ sid: sidB, unitIndex: 0 })
+    reader.close()
+  }, 90_000)
+
+  it('--palette selects the deliveries searched', async () => {
+    const r = await run(tiles(['--palette', 'dark']))
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe(`${capPng}: NO USABLE SIGNAL — no audit record of these tiles being viewed\n`)
+    const l = await run(tiles(['--palette', 'light', '--json']))
+    expect(JSON.parse(l.stdout.trim()).answer).toMatchObject({ kind: 'traced', sid: sidB })
+  }, 90_000)
+
+  it('a malformed or conflicting --tiles is exit 2', async () => {
+    const bad = [
+      tiles([], '0,5,1,0-1'), tiles([], '0,11,1,0-1,0-1'), tiles([], '0,5,3,0-1,0-1'), tiles([], '0,5,1,1-0,0-1'), tiles([], 'x,5,1,0-1,0-1'),
+      tiles([], '01,5,1,0-1,0-1'), tiles(['--page', '1']), tiles(['--notes']), tiles(['--palette', 'blue']),
+      ['--image', capPng, '--doc', gridPath, '--page', '1', '--audit-db', tilesDb, '--palette', 'dark'],
+      tiles([], '0,5,1,0-64,0-0'),
+    ]
+    for (const args of bad) {
+      const r = await run(args)
+      expect([args.join(' '), r.code, r.stdout]).toEqual([args.join(' '), 2, ''])
+    }
+    // A well-formed window nobody was served (here: past the sheet's grid) is answered, not an error.
+    const off = await run(tiles([], '0,5,1,2047-2048,0-1'))
+    expect([off.code, off.stdout]).toEqual([0, `${capPng}: NO USABLE SIGNAL — no audit record of these tiles being viewed\n`])
+  }, 120_000)
 })
 
 describe('formatAnswer', () => {
