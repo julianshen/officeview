@@ -14,6 +14,10 @@ import { OfficePackage } from '../../src/core/zip'
 import type { WatermarkOptions } from '../../src/core/watermark'
 import { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec } from './mark/visible'
 import { detectAndParse } from '../../src/components/loadOfficeSource'
+import { parseXlsx } from '../../src/xlsx/parse'
+import { prepareSheetAssets } from '../../src/components/xlsx/sheetAssets'
+import { clockEpochMs, type SheetClock } from './sheet/clock'
+import { buildSheetSnapshot, type SheetSnapshot } from './sheet/snapshot'
 import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
 import type { XlsxDocument } from '../../src/xlsx/types'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
@@ -100,7 +104,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse, retained for the tile paths. */ parsed?: XlsxDocument; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -200,6 +204,8 @@ export class DocumentHost {
       const parsed = await detectAndParse(projected.pkg)
       // R5: a tiles-mode XLSX open builds no paintables; its units are sized from the sheet metrics alone.
       const lazy = admitted.format === 'xlsx' && sheetMode === 'tiles'
+      // F1: tiles paint saved values (S4 §6.2 step 7), so a tiles open also parses the projected package under 'cached'.
+      const savedParse = lazy ? await parseXlsx(projected.pkg, { valuePolicy: 'cached' }) : undefined
       const xlsx = admitted.format === 'xlsx' ? parsed as XlsxDocument : undefined
       const paintables = lazy ? undefined : await getPaintables(parsed, { registerFont })
       this.parses++
@@ -246,7 +252,7 @@ export class DocumentHost {
           mediaUnits.length = 0
         }
       }
-      const opened = { key, docRef, ...(paintables ? { paintables } : {}), ...(xlsx ? { parsed: xlsx, sheets: Object.freeze(xlsx.sheets.map((s) => s.name)) } : {}), raw, hidden, anim, morph, mediaUnits, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
+      const opened = { key, docRef, ...(paintables ? { paintables } : {}), ...(xlsx ? { parsed: xlsx, sheets: Object.freeze(xlsx.sheets.map((s) => s.name)) } : {}), ...(savedParse ? { savedParse } : {}), raw, hidden, anim, morph, mediaUnits, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
       opened.media = this.mediaTableFor(opened)
       if (show) show.media = opened.media
       doc = opened
@@ -254,6 +260,8 @@ export class DocumentHost {
     }
     // A units-mode open stays eager (R5), also when it joins an entry a tiles open created.
     if (sheetMode === 'units') await this.buildPaintables(doc)
+    // A tiles open joining a units-created entry: the entry kept no projected package, so re-project these bytes (F1).
+    else if (doc.format === 'xlsx' && !doc.savedParse) await this.buildSavedParse(doc, bytes, contentPolicy)
     return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables?.fontDiagnostics?.length ?? 0, ...(doc.sheets ? { sheets: [...doc.sheets] } : {}) }
   }
 
@@ -278,6 +286,56 @@ export class DocumentHost {
     return doc.paintablesBuild
   }
 
+  /** The entry's single saved-values parse build (F1), from the bytes a joining tiles open brought: the same projection
+   * as the entry's own. A build that settles after its entry was dropped is discarded. Not counted in `parses`. */
+  private buildSavedParse(doc: OpenDoc, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<XlsxDocument> {
+    if (doc.savedParse) return Promise.resolve(doc.savedParse)
+    doc.savedParseBuild ??= (async () => {
+      const original = await OfficePackage.load(bytes)
+      const projected = await projectPackage(original, 'xlsx', contentPolicy)
+      return parseXlsx(projected.pkg, { valuePolicy: 'cached' })
+    })().then((saved) => {
+      doc.savedParseBuild = undefined
+      if (this.docs.get(doc.key) !== doc) throw new RenderRefusal('unknown-doc')
+      doc.savedParse = saved
+      return saved
+    }, (e: unknown) => { doc.savedParseBuild = undefined; throw e })
+    return doc.savedParseBuild
+  }
+
+  /**
+   * Stage 4a (S4 §6.2): the servable snapshot of sheet `sheetIndex` (an index into the entry's projected sheets, as
+   * `OpenResult.sheets`) under the session clock. Built from `savedParse` only; one promise per
+   * `(docKey, sheetIndex, day, timeZone)`, released on `drop`. Callers never release it themselves.
+   */
+  sheetSnapshot(docKey: string, sheetIndex: number, clock: SheetClock): Promise<SheetSnapshot> {
+    const doc = this.docs.get(docKey)
+    if (!doc) return Promise.reject(new RenderRefusal('unknown-doc'))
+    const saved = doc.savedParse
+    if (doc.format !== 'xlsx' || !saved) return Promise.reject(new RenderRefusal('bad-job', 'no saved-values parse: the entry was not opened in tiles mode'))
+    if (!Number.isInteger(sheetIndex) || sheetIndex < 0 || sheetIndex >= saved.sheets.length) return Promise.reject(new RenderRefusal('bad-job', 'sheet index'))
+    const key = `${sheetIndex}|${clock.day}|${clock.timeZone}`
+    const snapshots = doc.snapshots ??= new Map()
+    let built = snapshots.get(key)
+    if (!built) {
+      const contentPolicy = doc.contentPolicyId === 'full@1' ? 'full' as const : 'visible-only' as const
+      const cfClock = { epochNowMs: clockEpochMs(clock), timeZone: clock.timeZone }
+      built = buildSheetSnapshot(saved, sheetIndex, contentPolicy, clock, (sheet) => {
+        // The lease reads `doc.sheets[sheetIndex]`: hand it the snapshot's (possibly blanked) sheet in that slot, so CF
+        // and cross-sheet reads see the blanked cells. Chart contexts stay shared with the saved parse.
+        const view: XlsxDocument = sheet === saved.sheets[sheetIndex] ? saved : { ...saved, sheets: saved.sheets.map((s, i) => (i === sheetIndex ? sheet : s)) }
+        return prepareSheetAssets(view, { sheetIndex, registerFont, cfClock, chartOwner: saved })
+      }).then((snap) => {
+        // Dropped while building: nothing will release it later.
+        if (this.docs.get(docKey) !== doc) { snap.release(); throw new RenderRefusal('unknown-doc') }
+        return snap
+      })
+      snapshots.set(key, built)
+      built.catch(() => { if (snapshots.get(key) === built) snapshots.delete(key) })
+    }
+    return built
+  }
+
   /** The static paintables every units path paints from (synchronous: `ensurePaintables` builds them). */
   private paintablesOf(doc: OpenDoc): PaintableArray {
     if (!doc.paintables) throw new PaintablesUnbuilt()
@@ -285,7 +343,15 @@ export class DocumentHost {
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
-  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { this.droppedProbes += d.media.probes; d.paintables?.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
+  drop(docKey: string) {
+    const d = this.docs.get(docKey)
+    if (d) {
+      this.droppedProbes += d.media.probes; d.paintables?.dispose(); d.show?.store.close(); this.docs.delete(docKey)
+      for (const built of d.snapshots?.values() ?? []) built.then((snap) => snap.release(), () => undefined)
+      d.snapshots?.clear()
+    }
+    this.served.drop(docKey)
+  }
   get docCount() { return this.docs.size }
 
   render(docKey: string, job: { unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: readonly string[] }, observers: readonly PaintObserver[] = []): RenderedUnit {

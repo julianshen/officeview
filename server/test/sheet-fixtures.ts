@@ -141,9 +141,10 @@ export function rectShapeXml(opts: { id: number; name: string; offPx: [number, n
   return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${opts.id}" name="${opts.name}"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm${rot}><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${line}</xdr:spPr></xdr:sp>`
 }
 
-/** A two-cell anchor over 0-based cells (from) .. (to), zero offsets. */
-export function twoCellAnchorXml(from: { col: number; row: number }, to: { col: number; row: number }, body: string): string {
-  const m = (p: { col: number; row: number }) => `<xdr:col>${p.col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${p.row}</xdr:row><xdr:rowOff>0</xdr:rowOff>`
+/** A two-cell anchor over 0-based cells (from) .. (to); offsets into each cell in CSS px (default 0). */
+export interface AnchorMarker { col: number; row: number; colOffPx?: number; rowOffPx?: number }
+export function twoCellAnchorXml(from: AnchorMarker, to: AnchorMarker, body: string): string {
+  const m = (p: AnchorMarker) => `<xdr:col>${p.col}</xdr:col><xdr:colOff>${Math.round((p.colOffPx ?? 0) * EMU_PER_PX)}</xdr:colOff><xdr:row>${p.row}</xdr:row><xdr:rowOff>${Math.round((p.rowOffPx ?? 0) * EMU_PER_PX)}</xdr:rowOff>`
   return `<xdr:twoCellAnchor><xdr:from>${m(from)}</xdr:from><xdr:to>${m(to)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`
 }
 
@@ -224,15 +225,69 @@ export async function cfToday(): Promise<Uint8Array> {
 }
 
 /**
+ * The `TODAY()` formula twin of `cfToday` (Task 5, F2): the same A1:A10 dates under one `expression` rule
+ * `A1=TODAY()` (dxf 0: solid red fill). It evaluates only when the CF evaluation context survives
+ * `cfAlignClock`, so a clock that reaches the predicates but not the evaluation leaves every cell unfilled.
+ */
+export async function cfTodayFormula(): Promise<Uint8Array> {
+  const rows = CF_TODAY_SERIALS.map((v, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v, style: 3 }] }))
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchStylesXml(zip, (xml) => xml
+      .replace('<cellXfs count="3">', '<cellXfs count="4">')
+      .replace('</cellXfs>', '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs>'))
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="A1:A10"><cfRule type="expression" dxfId="0" priority="1"><formula>A1=TODAY()</formula></cfRule></conditionalFormatting>'))
+  })
+}
+
+/** The unfilled box of `unfilledShapeOverText`: strictly inside B2 (x 64..128, y 20..40 CSS px) at x 72..120,
+ * y 24..36, so its 1 pt outline (half width 0.67 px) stays clear of every neighbouring cell. */
+const insideB2 = () => twoCellAnchorXml({ col: 1, row: 1, colOffPx: 8, rowOffPx: 4 }, { col: 1, row: 1, colOffPx: 56, rowOffPx: 16 },
+  rectShapeXml({ id: 2, name: 'Unfilled', offPx: [72, 24], extPx: [48, 12], fill: null, line: '404040' }))
+
+/**
  * B2 holds `COVERED-B2` (A1:D4 hold `CELL-r-c` around it) under an unfilled rectangle (`<a:noFill/>`, a
- * 1 pt outline) anchored two-cell over A1..C3 (0-based from (0,0) to (3,3)). Coverage ignores fill (S4 §6.2
- * step 4): B2 is covered.
+ * 1 pt outline) anchored two-cell strictly inside B2 (Task 5: it was A1..C3, which covered nine cells, while
+ * S4a Tasks 5 and 15 expect B2 alone). Coverage ignores fill (S4 §6.2 step 4): B2 is the only covered cell.
  */
 export async function unfilledShapeOverText(): Promise<Uint8Array> {
   const st = stringTable()
   const rows = [1, 2, 3, 4].map((r) => ({ r, cells: [0, 1, 2, 3].map((j) => textCell(st, `${colName(j)}${r}`, r === 2 && j === 1 ? 'COVERED-B2' : `CELL-${r}-${j + 1}`)) }))
+  return sheetWorkbook(rows, st.list, async (zip) => { await addDrawing(zip, 0, insideB2()) })
+}
+
+/** B1:B3 of `unfilledShapeOverDataBar`; B2 (20) sits under the box. */
+export const DATA_BAR_VALUES = Object.freeze([10, 20, 30])
+/**
+ * The data-bar variant of `unfilledShapeOverText` (Task 5): B1:B3 hold DATA_BAR_VALUES under one `dataBar`
+ * rule (min..max), A1:A3 and C1:C3 hold text, and the same unfilled box sits strictly inside B2.
+ */
+export async function unfilledShapeOverDataBar(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [1, 2, 3].map((r) => ({ r, cells: [textCell(st, `A${r}`, `BAR-${r}-1`), { ref: `B${r}`, v: DATA_BAR_VALUES[r - 1]! }, textCell(st, `C${r}`, `BAR-${r}-3`)] }))
   return sheetWorkbook(rows, st.list, async (zip) => {
-    await addDrawing(zip, 0, twoCellAnchorXml({ col: 0, row: 0 }, { col: 3, row: 3 }, rectShapeXml({ id: 2, name: 'Unfilled', offPx: [0, 0], extPx: [192, 60], fill: null, line: '404040' })))
+    await addDrawing(zip, 0, insideB2())
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="B1:B3"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule></conditionalFormatting>'))
+  })
+}
+
+/** The text of `spillUnderShape` A3: far wider than A3 (64 px), so it runs on into the empty B3 and C3. */
+export const SPILL_TEXT = 'SPILL-A3 long text that overflows into the empty cells to its right'
+/**
+ * R8's spill case (Task 5): A3 holds SPILL_TEXT, aligned `left` or `right` (style 3), B3 and C3 are empty,
+ * and a filled box sits strictly inside C3 (x 128..192, y 40..60 → box x 136..184, y 44..56). Left-aligned
+ * text spills right, under the box: A3 is covered. Right-aligned text spills left (nothing there): it is not.
+ */
+export async function spillUnderShape(align: 'left' | 'right'): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [{ r: 3, cells: [{ ...textCell(st, 'A3', SPILL_TEXT), style: 3 }] }]
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await patchStylesXml(zip, (xml) => xml
+      .replace('<cellXfs count="3">', '<cellXfs count="4">')
+      .replace('</cellXfs>', `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="${align}"/></xf></cellXfs>`))
+    await addDrawing(zip, 0, twoCellAnchorXml({ col: 2, row: 2, colOffPx: 8, rowOffPx: 4 }, { col: 2, row: 2, colOffPx: 56, rowOffPx: 16 },
+      rectShapeXml({ id: 2, name: 'OverC3', offPx: [136, 44], extPx: [48, 12], fill: 'FF8800' })))
   })
 }
 
@@ -263,9 +318,17 @@ export async function unresolvedAnchor(): Promise<Uint8Array> {
   })
 }
 
-/** A1 = `=1+1` with saved value 7: saved values paint 7, a recompute paints 2. */
+/**
+ * A1 = `=1+1` with saved value 7: saved values paint 7, a recompute paints 2. The workbook sets
+ * `calcPr fullCalcOnLoad="1"` (Task 5, F1): without it the engine keeps a saved value, so the two policies
+ * could not be told apart; with it the engine parse recomputes A1 to 2.
+ */
 export async function savedFormula(): Promise<Uint8Array> {
-  return sheetWorkbook([{ r: 1, cells: [{ ref: 'A1', formula: '1+1', v: 7 }] }], [])
+  return sheetWorkbook([{ r: 1, cells: [{ ref: 'A1', formula: '1+1', v: 7 }] }], [], async (zip) => {
+    const wb = await textOf(zip, 'xl/workbook.xml')
+    if (!wb.includes('</workbook>')) throw new Error('sheet-fixtures: no </workbook>')
+    zip.file('xl/workbook.xml', wb.replace('</workbook>', '<calcPr fullCalcOnLoad="1"/></workbook>'))
+  })
 }
 
 /** A1 = the value 7 (the saved-values twin of `savedFormula`). */
