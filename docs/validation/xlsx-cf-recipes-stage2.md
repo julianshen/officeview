@@ -527,3 +527,46 @@ The capture cannot be retried, and no prediction, class or separator is edited a
 - **The finding:** Excel equals truncation except at 19 upper-segment whole products, at f = 1/3, 2/3, 1/5, 1/7 and 1/15, where every step is one unit smaller. This held in both colour orders, in the re-sorted copy, in the replica (= T4/V3) and in the statistical twin.
 - **Owner ruling:** withhold every upper-segment whole product of a 3-colour scale (`cf-unmeasured-upper-segment-whole-product`). Evidence, reach and hypotheses: `docs/validation/xlsx-cf.md` §14.z.15.
 - **What §8.2–§8.4 still are:** the record of the pre-registration and its rehearsals as committed before the capture. The registration machinery they describe (consensus, the reading seam, the statistical fail-closed path) was removed from production after the capture, since nothing is registrable.
+
+## 9. The upper-segment whole-product follow-up (`stage2-scale-upper-whole`)
+
+> **Exploratory: nothing is registrable from this case.** The extended search (§9.1) found no candidate that reproduces every captured cell, so no reading but the `truncate` control is pre-registered. The capture measures; it cannot register anything, and production does not change on its account.
+
+**Why.** Capture 377564e0 (`stage2-scale-num-segment`, §8.6) drew truncation everywhere except 19 cells. Each is in the UPPER segment of a 3-colour scale at a whole step product (f = 1/3, 2/3, 1/5, 1/7, 1/15), one unit smaller on every channel; T4 and V3 of e448d831 are the same shape. Unmoved upper-segment whole products: 1/6, 5/6, 1/10, 3/10, 7/10, 6/7, 1/2, 1/4. No lower-segment or 2-colour cell moved. Production withholds every 3-colour upper-segment whole product (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`). Hypotheses H1–H3: `docs/validation/xlsx-cf.md` §14.z.15.
+
+### 9.1 Extended candidate search (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/upper-whole-candidates.ts` (about 40 s; pinned by `tests/xlsx-cf-scale-upper-whole-candidates.test.ts`).
+
+**Cells.** The harness of §8.1 (`collectSegmentCells`, production's own paint with the segment probe), now with `stage2-scale-num-segment` included: 942 captured colour-scale cells, 217 of them from that capture and 520 from Stage 5 refs. 112 cells are inapplicable (group a) and 32 are dropped by a production gate (group b, none under a 3-colour scale). 0 harness faults. **Baseline:** production's truncation misses exactly the 21 moved cells (T4, V3, and B17, B18, B21, B24, B28, C17, C18, C21, C24, C28, D7, D8, D12, D13, E17, E18, E21, E24, E28 of `stage2-scale-num-segment`).
+
+**Scopes.** A candidate replaces production's arithmetic strictly inside the segment, at one of three scopes; elsewhere truncation stands:
+- **upper 3-colour** (86 interior cells): consistent by construction with P1, since no lower-segment or 2-colour cell moved;
+- **every 3-colour segment** (171): a single 3-colour formula, which must also leave the lower segment at truncation;
+- **every segment** (663).
+
+A survivor reproduces Excel's DisplayFormat fill at every one of the 942 cells. Evaluation fails closed: any non-finite intermediate (float32 conversions included), a zero span, or a channel that is not a whole number in 0..255 is a mismatch.
+
+**New families** (48345 candidates, none of them in the first search):
+
+| Family | Hypothesis | Formulations | Candidates |
+|---|---|---|---|
+| `origin` | H1, H3 | 15 fraction forms × 23 channel forms, double precision. Fractions: `(v−lo)/(hi−lo)`; from the maximum `1 − (hi−v)/(hi−lo)` (also with a reciprocal multiply and in percent); split; from the scale minimum, the full-span position g remapped by the midpoint's position gm in six operation orders (`(g−gm)/(1−gm)`, reciprocal, from the top `1 − (1−g)/(1−gm)`, `(g−gm)/(gh−gm)`, percent, a shared reciprocal), and as offsets; from the maximum over the full span (two orders); the midpoint-relative position over the full span. Channels: step truncated toward the start (guarded or not); written from the maximum end (step from the max rounded up, down or truncated, signed; value rounded toward the midpoint colour, the max colour, floor, round); value and convex blends toward the start; 0..1 channels (five forms); the packed 0xRRGGBB integer from either end | 345 |
+| `f32` | H3 | float32 at every subset of five operation points of four fraction forms (exact, from the maximum, the full-span remap, the full-span reverse) × seven channel forms × float32 at the channel's two operations | 3584 |
+| `precision` | H2 | the fraction (or the complement r = (hi−v)/(hi−lo)) rounded to a p-bit significand (nearest or truncated, p = 18..53), to n significant decimals (6..17), to float32 or not at all; the step product rounded by a second precision of the same list; six forms (from the start, from the complement, from the maximum rounded up) | 44376 |
+| `rational` | H3 | exact-rational (BigInt) emulation: plain step, from the maximum, FMA-contracted value, convex and from-max lerps, full-span remap; each operation rounded to a 24-, 53- or 64-bit (x87 extended) significand, or exact | 40 |
+
+**Survivors: none, at any scope.** The best candidates per family:
+
+| Family | upper 3-colour | every 3-colour segment | every segment |
+|---|---|---|---|
+| `origin` | 14 mismatches (`exact/max-ceil`: 1/5, 1/7, 6/7, 1/15 and 7/10 wrong) | 21 (truncation-equivalent) | 21 |
+| `f32` | **1** (28 candidates, all from the maximum: E4 of `stage2-scale-thresholds`) | 13 | 13 |
+| `precision` | 2 (E4 and E5; or H25 and I25, see below) | 18 | 21 |
+| `rational` | **1** (`from-max-step/p24`, the same formula: E4) | 18 | 20 |
+
+**The near miss, and why it is not a survivor.** float32 arithmetic from the maximum, `f = f32(1 − f32(f32(hi − v)/f32(hi − lo)))` then `floor(f32(f·|d|))`, reproduces all 21 moved cells and every unmoved one except E4 of `stage2-scale-thresholds`. The split it predicts is the sign of the float32 rounding of r = (hi − v)/(hi − lo), as rescued by the float32 rounding of the product. E4 (3-colour min / percentile 30 / max over 1, 2, 3, 4, 10; v = 3 in 2.2..10, stock palette) is a whole product in exact arithmetic (0.8/7.8 · 156 = 16), drawn at 16 in Excel. Under this formula its product is 15.999999046 (one float32 ulp below 16), exactly the shortfall of the moved 1/15 cell (13.999999046). No float32 placement separates them, and the 64-bit and exact-rational versions of the same form miss E4 and E5 too. E4 cannot be scoped away: it is an upper-segment whole product in exact arithmetic, and excluding it because its double product fails `Number.isInteger` would be fitting.
+
+**Aliasing.** The `precision` pair `complement-raw-step/bin28/bin30` misses only H25 and I25 (f = 7/10). It recurs at bin40/bin42 (and bin24/bin36, bin19/bin31/bin43, bin27/bin39 elsewhere in the table). The binary periods of 1/3, 1/5, 1/7 and 1/15 (2, 4, 3, 4) divide 12, so the captured fractions cannot tell p-bit from (p+12)-bit rounding. It identifies no precision, and the case breaks the period (denominators 11, 17, 23 and 31, whose periods 10, 8, 11 and 5 do not divide 12).
+
+**What follows.** There is no survivor, so task 2 is skipped: nothing is implemented, selectable or registered. The case of §9.2 is exploratory. Its cells are chosen to discriminate H1–H3 and the near miss's mechanism (E4 replication, the product's binade, denominators off the 12-bit period). The near miss's predictions are listed for interpretation only. It is never a reading.
