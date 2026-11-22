@@ -26,7 +26,7 @@ vi.mock('../src/core/watermark', async original => {
 const { renderSheetViewport } = await import('../src/xlsx/view/renderViewport')
 const { paintWatermark, normalizeWatermark } = await import('../src/core/watermark')
 const { SheetTileRenderer, TILE_BYTES } = await import('../src/components/xlsx/sheetTiles')
-const { createStreamTileSource } = await import('../src/components/xlsx/streamTiles')
+const { createStreamTileSource, failureKind, STREAM_RETRY_LIMIT } = await import('../src/components/xlsx/streamTiles')
 type CanvasTile = import('../src/components/xlsx/sheetTiles').CanvasTile
 type SheetFrame = import('../src/components/xlsx/sheetTiles').SheetFrame
 
@@ -54,6 +54,7 @@ function fakeServer(o: { ignoreAbort?: boolean } = {}) {
 }
 const decoded: CanvasTile[] = []
 const decode = vi.fn(async (png: Uint8Array): Promise<CanvasTile> => {
+  if (png[0] === 9) throw new Error('corrupt PNG')
   const canvas = document.createElement('canvas')
   canvas.width = T; canvas.height = T
   const tile: CanvasTile = { canvas, get width() { return canvas.width }, get height() { return canvas.height }, close: vi.fn(() => { canvas.width = 0; canvas.height = 0 }) }
@@ -70,7 +71,7 @@ function source(o: { palette?: () => TilePalette; viewGen?: () => number; ignore
   const server = fakeServer({ ignoreAbort: o.ignoreAbort })
   const src = createStreamTileSource({
     sheetId: '0', viewGen: o.viewGen ?? (() => 3), palette: o.palette ?? (() => 'light'), tiles: server.tiles, decode,
-    now: () => Date.now(), setTimer: setTimeout,
+    now: () => Date.now(), setTimer: setTimeout, clearTimer: clearTimeout,
   })
   return { server, src }
 }
@@ -261,6 +262,111 @@ describe('stream tiles (S4 §6.5)', () => {
     await tick()
     expect(src.stats.outstanding).toBe(0)
     src.dispose()
+  })
+
+  describe('transient failures retry by themselves; permanent ones never do (fix round 1)', () => {
+    const VISIBLE = range(0, 1, 0, 0), RING = range(0, 2, 0, 1)
+    const refuse = (c: Call, code: string) => c.resolve({ refused: c.req.tiles.map(t => ({ ...t, code })) })
+
+    it('classifies the codes', () => {
+      for (const code of ['policy-refused', 'session-rotated', 'decode-failed']) expect([code, failureKind(code)]).toEqual([code, 'transient'])
+      for (const code of ['unsupported-op', 'stale-view', 'layout-too-large', 'closed', 'something-new']) expect([code, failureKind(code)]).toEqual([code, 'permanent'])
+      expect(STREAM_RETRY_LIMIT).toBe(3)
+    })
+
+    it('a timed-out visible tile is requested again after the cooldown and paints with no user input', async () => {
+      vi.useFakeTimers()
+      const { server, src } = source()
+      const arrive = vi.fn()
+      src.onArrive(arrive)
+      const renderer = new SheetTileRenderer('D', BITMAP_BUDGETS.D - TILE_BYTES * 64)
+      const frame = streamFrame(src, { viewport: { width: 300, height: 200 } })
+      renderer.present(pane(frame), frame)
+      await tick()
+      expect(server.calls).toHaveLength(1)
+      // The channel's 5 s reply deadline refuses the outstanding tiles `policy-refused`.
+      refuse(server.calls[0]!, 'policy-refused')
+      await tick(999)
+      expect(server.calls).toHaveLength(1)
+      await tick(1)
+      expect(server.calls).toHaveLength(2)
+      expect(server.calls[1]!.req.tiles).toEqual([{ col: 0, row: 0 }])
+      server.deliver(server.calls[1]!); server.calls[1]!.resolve({ refused: [] })
+      await tick()
+      // The arrival schedules the repaint (the viewer coalesces it); that repaint draws the tile.
+      expect(arrive).toHaveBeenCalledTimes(1)
+      renderer.present(pane(frame), frame)
+      expect(renderer.stats.tileHits).toBe(1)
+      expect(renderer.stats.pendingTiles).toBe(0)
+      expect(src.stats.outstanding).toBe(0)
+      renderer.dispose(); src.dispose()
+    })
+
+    it('a tile that fails 3 times in a row stops retrying', async () => {
+      vi.useFakeTimers()
+      const { server, src } = source()
+      src.retain(VISIBLE, RING)
+      src.request(key(0, 0), true)
+      await tick()
+      refuse(server.calls[0]!, 'policy-refused') // 1: a timeout
+      await tick(1000)
+      expect(server.calls).toHaveLength(2)
+      const second = server.calls[1]!
+      second.onTile({ sheetIndex: 0, viewGen: 3, zoomStep: 5, dpr: 1, col: 0, row: 0, png: new Uint8Array([9]) }) // 2: a bad PNG
+      second.resolve({ refused: [] })
+      await tick(1000)
+      expect(server.calls).toHaveLength(3)
+      refuse(server.calls[2]!, 'policy-refused') // 3: stops
+      await tick(10_000)
+      expect(server.calls).toHaveLength(3)
+      // An arrival-driven repaint (same visible range) does not ask again either.
+      src.retain(VISIBLE, RING)
+      src.request(key(0, 0), true)
+      await tick(1000)
+      expect(server.calls).toHaveLength(3)
+      expect(src.stats.outstanding).toBe(0)
+      // A user-driven repaint (the visible range moved) may.
+      src.retain(range(0, 2, 0, 0), RING)
+      src.request(key(0, 0), true)
+      await tick()
+      expect(server.calls).toHaveLength(4)
+      src.dispose()
+    })
+
+    it('a permanent refusal is never retried', async () => {
+      vi.useFakeTimers()
+      for (const code of ['stale-view', 'unsupported-op', 'layout-too-large']) {
+        const { server, src } = source()
+        src.retain(VISIBLE, RING)
+        src.request(key(0, 0), true)
+        await tick()
+        refuse(server.calls[0]!, code)
+        await tick(10_000)
+        src.retain(VISIBLE, RING)
+        src.request(key(0, 0), true)
+        await tick(10_000)
+        expect([code, server.calls.length]).toEqual([code, 1])
+        expect(src.stats.outstanding).toBe(0)
+        src.dispose()
+      }
+    })
+
+    it('disposing during the cooldown fires nothing', async () => {
+      vi.useFakeTimers()
+      const { server, src } = source()
+      const arrive = vi.fn()
+      src.onArrive(arrive)
+      src.retain(VISIBLE, RING)
+      src.request(key(0, 0), true)
+      await tick()
+      refuse(server.calls[0]!, 'policy-refused')
+      await tick(500)
+      src.dispose()
+      expect(vi.getTimerCount()).toBe(0)
+      await tick(10_000)
+      expect(server.calls).toHaveLength(1)
+      expect(arrive).not.toHaveBeenCalled()
+    })
   })
 
   it('a tile ~0.9 s late (a worker recycle) is not a failure', async () => {

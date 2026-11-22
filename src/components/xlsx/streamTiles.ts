@@ -13,8 +13,14 @@
  *   tiles there, and cancels a batch none of whose tiles is wanted any more (`sheet-cancel`, via the signal).
  * - **Rate-limited tiles are retried.** A `rate-limited` refusal re-queues the tile after the result's
  *   `retryAfterMs` as the channel delivers it (already clamped, with its 1 s fallback); no tile stays pending
- *   (Review Focus 2). Any other refusal drops the tile, with a 1 s cooldown before it is asked for again, so a
- *   refused tile never loops a request per frame.
+ *   (Review Focus 2).
+ * - **Other failures are classified** (`failureKind`). A transient one (`policy-refused`, which is also how the
+ *   channel's 5 s reply deadline arrives; `session-rotated`; a decode failure) drops the tile and, when the 1 s
+ *   cooldown ends, asks for it again by itself if it is still visible (through the pacer, like any request), at
+ *   most `STREAM_RETRY_LIMIT - 1` times in a row: the `STREAM_RETRY_LIMIT`-th consecutive failure leaves it on the
+ *   pending fill. A permanent one (`unsupported-op`, `stale-view`, `layout-too-large`, and any code not known to be
+ *   transient: fail closed) is never retried by itself. A stopped tile is asked for again only after a user-driven
+ *   repaint, i.e. a frame whose visible range or tuple differs (an arrival's repaint changes neither).
  * - **No deadline of its own.** The channel's 5 s reply deadline restarts with every fragment, so a tile that takes
  *   ~0.9 s after a server worker recycle is simply late, never a failure.
  * - **Paced under the server's message budget.** Every `tiles` send and every cancel is one message toward the
@@ -39,6 +45,18 @@ export const STREAM_BATCHES_IN_FLIGHT = 2
 /** `sheet-channel.ts` `TILE_RETRY_FALLBACK_MS`: a `rate-limited` result without `retryAfterMs`, and the cooldown of a
  * tile refused for any other reason. */
 export const STREAM_RETRY_FALLBACK_MS = 1_000
+/** The consecutive transient failures of one tile key that stop its automatic retries. */
+export const STREAM_RETRY_LIMIT = 3
+/** Refusal codes a retry can cure. The channel's reply deadline refuses the outstanding tiles `policy-refused`, and a
+ * tile's render failure on the server is `policy-refused` too; `session-rotated` is a RENEW race. Every other code is
+ * permanent (fail closed): explicitly `unsupported-op`, `stale-view` and `layout-too-large`. */
+const TRANSIENT_CODES: ReadonlySet<string> = new Set(['policy-refused', 'session-rotated'])
+/** The internal code of a tile whose PNG would not decode (transient). */
+export const DECODE_FAILED = 'decode-failed'
+export function failureKind(code: string): 'transient' | 'permanent' {
+  return code === DECODE_FAILED || TRANSIENT_CODES.has(code) ? 'transient' : 'permanent'
+}
+
 /** This source's share of the per-sid `'message'` budget (server: 20 per 1 s, 120 per 10 s). The rest is headroom
  * for the session's other messages (layout, RENEW, print). */
 export const MESSAGE_PACE = Object.freeze([{ perWindow: 8, windowMs: 1_000 }, { perWindow: 80, windowMs: 10_000 }])
@@ -65,6 +83,7 @@ export interface StreamTileSourceOptions {
   decode: (png: Uint8Array) => Promise<CanvasTile>
   now?: () => number
   setTimer?: typeof setTimeout
+  clearTimer?: typeof clearTimeout
 }
 
 type State = 'queued' | 'flight' | 'decoding' | 'retry' | 'arrived'
@@ -108,24 +127,49 @@ class Pacer {
 
 export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSource {
   const now = o.now ?? (() => performance.now())
-  const setTimer = o.setTimer ?? setTimeout
+  const setTimeoutFn = o.setTimer ?? setTimeout, clearTimeoutFn = o.clearTimer ?? clearTimeout
+  // Every timer this source arms, so dispose clears them all.
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+  const setTimer = (fn: () => void, ms: number) => {
+    const handle: ReturnType<typeof setTimeout> = setTimeoutFn(() => { timers.delete(handle); fn() }, ms)
+    timers.add(handle)
+  }
   const pacer = new Pacer(now)
   const entries = new Map<string, Entry>()
   const inFlight = new Set<Batch>()
   const cooldown = new Map<string, number>()
+  /** Consecutive transient failures per tile id (cleared by an arrival or a user-driven repaint). */
+  const failures = new Map<string, number>()
+  /** Tile ids not retried by themselves (a permanent refusal, or the retry limit): asked again only after a user-driven
+   * repaint. */
+  const stopped = new Set<string>()
+  let lastVisible: TileIndexRange | undefined
   const listeners = new Set<() => void>()
   let tuple = ''
   let flushTimer = false
   let closed = false
   const counts = { requested: 0, dropped: 0 }
 
-  const drop = (e: Entry, cool = false) => {
+  /** `failed`: the refusal or decode code when the tile failed (classified), else it was merely not wanted. */
+  const drop = (e: Entry, failed?: string) => {
     if (entries.get(e.id) !== e) return
     entries.delete(e.id)
     e.tile?.close()
     e.tile = undefined
     counts.dropped++
-    if (cool) cooldown.set(e.id, now() + STREAM_RETRY_FALLBACK_MS)
+    if (failed === undefined) return
+    cooldown.set(e.id, now() + STREAM_RETRY_FALLBACK_MS)
+    const n = (failures.get(e.id) ?? 0) + 1
+    failures.set(e.id, n)
+    if (failureKind(failed) === 'permanent' || n >= STREAM_RETRY_LIMIT) { stopped.add(e.id); return }
+    // Transient: once the cooldown ends, asked again by itself if it is still visible and its tuple still current.
+    setTimer(() => {
+      if (closed || e.tuple !== tuple || stopped.has(e.id) || entries.has(e.id)) return
+      if (!(lastVisible ? within(lastVisible, e.key) : e.visible)) return
+      cooldown.delete(e.id)
+      entries.set(e.id, { id: e.id, tuple: e.tuple, key: e.key, visible: true, state: 'queued' })
+      flush()
+    }, STREAM_RETRY_FALLBACK_MS)
   }
   const cancel = (b: Batch) => {
     if (b.settled || b.abort.signal.aborted) return
@@ -142,6 +186,9 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
   const adopt = (next: string) => {
     if (next === tuple) return
     tuple = next
+    // A new tuple is a user-driven repaint (zoom, theme, view): nothing of the old one stays stopped.
+    stopped.clear()
+    failures.clear()
     for (const e of [...entries.values()]) if (e.tuple !== next && e.state !== 'flight' && e.state !== 'decoding') drop(e)
     for (const b of inFlight) if (b.tuple !== next) cancel(b)
   }
@@ -179,9 +226,10 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
         // Decoded after the frame moved to another tuple: nobody will take it.
         if (e.tuple !== tuple) { e.tile = tile; drop(e); return }
         e.state = 'arrived'
+        failures.delete(e.id)
         e.tile = tile
         for (const cb of [...listeners]) { try { cb() } catch { /* a listener never breaks the source */ } }
-      }, () => drop(e, true))
+      }, () => drop(e, DECODE_FAILED))
     }
     let result: Promise<TilesResult>
     try {
@@ -199,7 +247,7 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
       const e = entries.get(cell(batch.tuple, x.col, x.row))
       if (!e || e.batch !== batch || e.state !== 'flight') continue
       // A batch of an older tuple (its cancel was paced out) is not retried: nothing would take its tiles.
-      if (x.code === 'rate-limited' && batch.tuple === tuple) { e.state = 'retry'; retry.push(e) } else drop(e, x.code !== 'rate-limited')
+      if (x.code === 'rate-limited') { if (batch.tuple === tuple) { e.state = 'retry'; retry.push(e) } else drop(e) } else drop(e, x.code)
     }
     // Neither delivered nor refused (cancelled, or the request failed): not pending any more; asked again when wanted.
     for (const id of batch.ids) { const e = entries.get(id); if (e && e.batch === batch && e.state === 'flight') drop(e) }
@@ -226,6 +274,7 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
       adopt(t)
       const e = entries.get(id)
       if (e) { if (visible && !e.visible) e.visible = true; return }
+      if (stopped.has(id)) return
       const until = cooldown.get(id)
       if (until !== undefined) { if (now() < until) return; cooldown.delete(id) }
       entries.set(id, { id, tuple: t, key, visible, state: 'queued' })
@@ -241,6 +290,9 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
       return tile
     },
     retain(visible, ring) {
+      // A changed visible range is a user-driven repaint (a scroll): stopped tiles may be asked for again.
+      if (lastVisible && (lastVisible.c0 !== visible.c0 || lastVisible.c1 !== visible.c1 || lastVisible.r0 !== visible.r0 || lastVisible.r1 !== visible.r1)) { stopped.clear(); failures.clear() }
+      lastVisible = visible
       const wanted = (k: TileKey) => within(visible, k) || within(ring, k)
       for (const e of [...entries.values()]) if ((e.state === 'queued' || e.state === 'retry' || e.state === 'arrived') && !wanted(e.key)) drop(e)
       for (const b of inFlight) {
@@ -260,6 +312,8 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
     dispose() {
       if (closed) return
       closed = true
+      for (const handle of timers) clearTimeoutFn(handle)
+      timers.clear()
       for (const b of inFlight) cancel(b)
       for (const e of entries.values()) e.tile?.close()
       entries.clear()
