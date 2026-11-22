@@ -4356,16 +4356,17 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Literal twin rules of stage2-scale-scope-disjoint (num-bounded single-range scales, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
   'scale:scope-disjoint-control':
     'The single-range min/max negative control of stage2-scale-scope-disjoint: every reading agrees on it by design, so Excel must match it but it never bears evidence.',
-  // The num-segment follow-up: both questions await their first capture (the readings decide them); the 2-colour twins are
-  // a negative control, never a question.
+  // The num-segment follow-up: stage2-scale-num-segment was captured (Excel 16.115) and no pre-registered reading matched
+  // either question (formula-hypothesis-none): recorded findings, never verified. Production withholds the shape instead
+  // (the literal-num withhold and the upper-segment whole-product withhold, docs/validation/xlsx-cf.md §14.z.15).
   'scale:num-segment-fraction':
-    'Pre-capture: stage2-scale-num-segment pre-registers one reading per class of surviving candidates for the arithmetic inside a 3-colour literal-num segment (capture e448d831 contradicts truncation at T4 and V3); the shape stays withheld until one is matched and registered, then paints by class consensus.',
+    'Recorded finding (stage2-scale-num-segment, formula-hypothesis-none): none of the 126 pre-registered readings of a 3-colour literal-num segment matched; Excel equals truncation except one unit smaller per step at whole products in the upper segment. Withheld (cf-unmeasured-num-segment-fraction, cf-unmeasured-upper-segment-whole-product); a future case must pre-register new readings.',
   'scale:num-segment-fraction-statistical':
-    'Pre-capture: stage2-scale-num-segment measures the same values under min / percentile 50 / max bounds (truncate or percent-roundtrip); production paints truncation, the published behaviour, and a registered percent-roundtrip outcome withholds the non-dyadic interior statistical cells.',
+    'Recorded finding (stage2-scale-num-segment, formula-hypothesis-none): neither truncate nor percent-roundtrip matched the min / percentile 50 / max twin (E17, E18, E21, E24, E28 one unit smaller per step); upper-segment whole products of every 3-colour scale are withheld (cf-unmeasured-upper-segment-whole-product).',
   'scale:num-segment-fraction-2colour':
-    'The 2-colour literal num twins of stage2-scale-num-segment: every reading is 3-colour only, so all predict truncation; Excel must match them but they never bear evidence.',
+    'The 2-colour literal num twins of stage2-scale-num-segment: every reading is 3-colour only, so all predict truncation; Excel matched them (truncation) but they never bear evidence.',
   'scale:num-segment-fraction-twin':
-    'The 2-colour twin line of stage2-scale-num-segment (num 0 / 210, P to Q, one cell per predicted P/Q fill): comparison references for the readings, never a question themselves.',
+    'The 2-colour twin line of stage2-scale-num-segment (num 0 / 210, P to Q, one cell per predicted P/Q fill): comparison references for the readings (every cell matched its model), never a question themselves.',
 }
 
 /**

@@ -184,8 +184,10 @@ describe('the capture (e448d831): union, and production against Excel', () => {
     const fills = await productionFills(c, twins)
     const withheld = twins.filter(ref => inNumSegmentShape(c, ref))
     expect(withheld).toEqual(['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4'])
+    // U4 (num 30/60/100, value 70, f = 1/4, upper segment, step 39 whole) is withheld since stage2-scale-num-segment
+    // (the upper-segment whole-product withhold, owner ruling A); Excel drew it at truncation.
     for (const ref of twins) {
-      if (withheld.includes(ref)) expect(fills.get(ref), ref).toBeUndefined()
+      if (withheld.includes(ref) || ref === 'U4') expect(fills.get(ref), ref).toBeUndefined()
       else expect(fills.get(ref), ref).toBe(excel.get(ref))
     }
     // The finding: with the shape painted (production's interpolation), T4 and V3 are one unit lower per RGB channel than Excel.
@@ -473,8 +475,8 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
 
   it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    // The num-segment follow-up adds its statistical id (truncate, the published behaviour); its literal-num id has none.
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:num-segment-fraction-statistical'])
+    // The num-segment follow-up registered nothing (its capture matched no reading).
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

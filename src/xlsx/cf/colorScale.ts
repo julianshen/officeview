@@ -20,8 +20,6 @@ import type {
 } from './model'
 import type { CfRangeStatistics } from './statistics'
 import { hasEvidence as defaultHasEvidence } from './evidence'
-import { numSegmentCandidate } from './numSegmentCandidates'
-import { CF_NUM_SEGMENT_CLASSES } from './numSegmentClasses'
 
 export type CfPercentileVariant = 'inc' | 'exc'
 export type CfRoundingVariant = 'truncate' | 'half-up' | 'half-even'
@@ -495,133 +493,30 @@ export function injectCfScaleSegmentProbe(probe: ((segment: CfScaleSegment) => C
   segmentProbe = probe
 }
 
-/**
- * The num-segment follow-up: the readings of Excel's arithmetic inside a 3-colour segment that the candidate search
- * (scripts/cf-refs/num-segment-candidates.ts) left standing. Fix round 1 (R1): a reading is a CLASS of surviving
- * candidates (`CF_NUM_SEGMENT_CLASSES`, committed), named by its representative; `truncate` is production's
- * interpolation (the control e448d831 contradicts). A registered reading paints by consensus (`numSegmentConsensusColor`).
- * The representative's step from the segment's start colour per channel, |d| the channel's span:
- * - `truncate`: floor(f·|d| + 1e-11);
- * - `percent-roundtrip`: floor(((f·100)/100)·|d|), unguarded;
- * - `fixed-N`: floor((floor(f·N)/N)·|d|), unguarded (the fraction quantised to 1/N);
- * - `roundtrip-K`, `roundtrip-reciprocal-K`, `roundtrip-after-K`: floor(((f·K)/K)·|d|), floor((f·K·(1/K))·|d|), floor((f·K·|d|)/K).
- */
-export const CF_NUM_SEGMENT_READINGS: readonly string[] = Object.freeze(Object.keys(CF_NUM_SEGMENT_CLASSES))
-export type CfNumSegmentReading = string
-/** The statistical id's readings: truncation (published) or the percent round trip (answered by withholding, fix round 1 R2). */
-export const CF_NUM_SEGMENT_STATISTICAL_READINGS: readonly string[] = Object.freeze(['truncate', 'percent-roundtrip'])
-/** A 3-colour segment bounded by two literal num cfvo (the withheld shape, `numSegmentUnmeasured`). */
-export const CF_NUM_SEGMENT_CAP = 'scale:num-segment-fraction'
-/** Every other 3-colour segment (a min/max/percent/percentile or formula bound on either side). */
-export const CF_NUM_SEGMENT_STATISTICAL_CAP = 'scale:num-segment-fraction-statistical'
-/**
- * The reading production implements per id. `scale:num-segment-fraction` has none (unregistered): the shape stays withheld.
- * `scale:num-segment-fraction-statistical` reads `truncate`, the published behaviour. A reading other than `truncate` is
- * honoured only with its id's evidence; the audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
- */
-export const CF_NUM_SEGMENT_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfNumSegmentReading>>> = Object.freeze({
-  [CF_NUM_SEGMENT_STATISTICAL_CAP]: 'truncate',
-})
-let proposedNumSegmentReadings: Readonly<Partial<Record<string, CfNumSegmentReading>>> | null = null
-/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
-export function injectCfNumSegmentReadings(readings: Readonly<Partial<Record<string, CfNumSegmentReading>>> | null): void {
-  proposedNumSegmentReadings = readings ? Object.freeze({ ...readings }) : null
-}
-/** The reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
-export function cfNumSegmentReading(capability: string): CfNumSegmentReading | undefined {
-  const r = proposedNumSegmentReadings && Object.prototype.hasOwnProperty.call(proposedNumSegmentReadings, capability) ? proposedNumSegmentReadings[capability] : CF_NUM_SEGMENT_PRODUCTION_READINGS[capability]
-  const valid = capability === CF_NUM_SEGMENT_STATISTICAL_CAP ? CF_NUM_SEGMENT_STATISTICAL_READINGS : CF_NUM_SEGMENT_READINGS
-  return r !== undefined && valid.includes(r) ? r : undefined
-}
-
-function numSegmentStep(reading: CfNumSegmentReading, f: number, d: number): number {
-  if (reading === 'truncate') return Math.floor(f * d + 1e-11)
-  if (reading === 'percent-roundtrip') return Math.floor(((f * 100) / 100) * d)
-  let m = /^fixed-(\d+)$/.exec(reading)
-  if (m) { const n = Number(m[1]); return Math.floor((Math.floor(f * n) / n) * d) }
-  m = /^roundtrip-(\d+)$/.exec(reading)
-  if (m) { const k = Number(m[1]); return Math.floor(((f * k) / k) * d) }
-  m = /^roundtrip-reciprocal-(\d+)$/.exec(reading)
-  if (m) { const k = Number(m[1]); return Math.floor(f * k * (1 / k) * d) }
-  m = /^roundtrip-after-(\d+)$/.exec(reading)
-  if (m) { const k = Number(m[1]); return Math.floor((f * k * d) / k) }
-  throw new RangeError(`no representative formula for num-segment reading ${reading}`)
-}
-
-/** One reading's REPRESENTATIVE colour between `argb0` (at f = 0) and `argb1`, per channel from the start colour (f clamped to [0, 1]); production paints the class consensus, never this alone. */
-export function numSegmentReadingColor(reading: CfNumSegmentReading, argb0: number, argb1: number, fraction: number): number {
-  const f = Math.max(0, Math.min(1, fraction))
-  // A class named by a grid formulation (`fixed-floor-N/<channel>`) is that candidate.
-  const grid = reading.includes('/') ? numSegmentCandidate(reading) : undefined
-  if (grid) return grid.colour({ value: f, lo: 0, hi: 1, fraction: f, c0: argb0, c1: argb1, colours: 3, segment: 0, loKind: 'num', hiKind: 'num', thresholds: [0, 1, 2] }) >>> 0
-  const channel = (shift: number): number => {
-    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
-    return shift === 24 ? c0 : c1 >= c0 ? c0 + numSegmentStep(reading, f, c1 - c0) : c0 - numSegmentStep(reading, f, c0 - c1)
-  }
-  return ((channel(24) << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0)) >>> 0
-}
-
 const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)
 
 /**
- * Fix round 1 (R1, consensus): a registered literal-num reading wins as its whole CLASS (`CF_NUM_SEGMENT_CLASSES`, the
- * finite committed list of candidates that survive the old captures and match stage2-scale-num-segment's cells as that
- * reading does). A cell paints only where every member gives the same ARGB; anywhere else it is withheld
- * (`cf-num-segment-class-disagreement`). Undefined: the members disagree (or the class is unknown).
+ * The num-segment follow-up, owner ruling (A) after capture stage2-scale-num-segment: whether a 3-colour cell lies in the
+ * withheld UPPER-segment shape. The cell's segment is the upper one (between the second and third thresholds after the
+ * midpoint-above-max re-sort), whatever the bound kinds (literal num, min/max/percent/percentile, mixed or formula-resolved);
+ * the value is strictly inside it; and the step product is a whole number: for some RGB channel whose endpoints differ by
+ * d != 0, `fraction * d` (production's `safeFraction` double times the integer d, one IEEE multiplication) is an integer
+ * (`Number.isInteger`). Excel 16.115 drew 19 such cells of that capture (and T4/V3 of e448d831) one unit smaller per step
+ * than truncation, by a rule the pre-registered readings did not explain; no other cell moved.
  */
-export function numSegmentConsensusColor(reading: CfNumSegmentReading, segment: CfScaleSegment): number | undefined {
-  const o = numSegmentConsensus(reading, segment)
-  return o.kind === 'ready' ? o.value : undefined
+export function upperSegmentWholeProduct(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  if (!(value > tLo && value < tHi)) return false
+  for (const shift of [16, 8, 0]) {
+    const d = Math.abs(((c2 >>> shift) & 0xff) - ((c1 >>> shift) & 0xff))
+    if (d !== 0 && Number.isInteger(fraction * d)) return true
+  }
+  return false
 }
 
-/**
- * The consensus outcome. Fix round 2: a member that cannot be evaluated safely (`Candidate.evaluate` undefined: non-finite
- * raw arithmetic, an overflowing span, a non-finite fraction or channel) withholds the cell as `cf-non-finite-value`,
- * the reason production already gives a non-finite segment fraction; members that evaluate but disagree withhold as
- * `cf-num-segment-class-disagreement`. An unknown class is no consensus (disagreement).
- */
-export function numSegmentConsensus(reading: CfNumSegmentReading, segment: CfScaleSegment): CfOutcome<number> {
-  const members = CF_NUM_SEGMENT_CLASSES[reading]
-  if (!members || members.length === 0) return { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' }
-  let argb: number | undefined
-  let disagree = false
-  for (const id of members) {
-    const c = numSegmentCandidate(id)
-    if (!c) return { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' }
-    const v = c.evaluate(segment)
-    if (v === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
-    if (argb === undefined) argb = v
-    else if (v !== argb) disagree = true
-  }
-  return disagree || argb === undefined ? { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' } : { kind: 'ready', value: argb }
-}
-
-/** A value strictly inside its segment whose fraction is not a binary fraction of resolution 2^-20 (`numSegmentUnmeasured`'s test). */
-const nonDyadicInterior = (s: CfScaleSegment): boolean => s.value > s.lo && s.value < s.hi && !Number.isInteger(s.fraction * 1048576)
-
-/**
- * A 3-colour segment's outcome. The literal-num shape follows its id's registered reading through class consensus (with
- * evidence), else is withheld where `numSegmentUnmeasured`. Every other 3-colour segment (min, max, percent, percentile,
- * mixed or formula-resolved bounds) follows the statistical id: `truncate` paints production's interpolation; any other
- * reading (with evidence) withholds the non-dyadic interior cells (`cf-num-segment-statistical-withheld`, fix round 1 R2:
- * a measured departure from truncation is never answered by switching arithmetic). A non-default colour space or
- * rounding keeps the variant interpolation.
- */
-function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment,
-  checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
-  const variant = colorSpace !== 'sRGB' || rounding !== 'truncate'
-  if (literalNumBound(lo) && literalNumBound(hi)) {
-    const r = cfNumSegmentReading(CF_NUM_SEGMENT_CAP)
-    // Fix round 2: candidates and consensus apply only strictly inside the segment (numSegmentUnmeasured's interior test);
-    // an endpoint or exact threshold keeps today's path and paints its configured colour.
-    if (!variant && r !== undefined && checkEvidence(CF_NUM_SEGMENT_CAP) && seg.value > seg.lo && seg.value < seg.hi) return numSegmentConsensus(r, seg)
-    if (numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
-  } else {
-    const r = cfNumSegmentReading(CF_NUM_SEGMENT_STATISTICAL_CAP)
-    if (!variant && r !== undefined && r !== 'truncate' && checkEvidence(CF_NUM_SEGMENT_STATISTICAL_CAP) && nonDyadicInterior(seg)) {
-      return { kind: 'unresolved', reason: 'cf-num-segment-statistical-withheld' }
-    }
-  }
+/** A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`, else production's interpolation. */
+function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
+  if (literalNumBound(lo) && literalNumBound(hi) && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  if (seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
   return { kind: 'ready', value: interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding) }
 }
 
@@ -751,7 +646,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 3, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[mid]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[0]!, points[mid]!, seg, checkEvidence, colorSpace, rounding)
+      return threeColourSegment(points[0]!, points[mid]!, seg, colorSpace, rounding)
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
@@ -759,7 +654,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t1, hi: t2, fraction, c0: c1, c1: c2, colours: 3, segment: 1, loKind: segmentBoundKind(points[mid]!), hiKind: segmentBoundKind(points[top]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[mid]!, points[top]!, seg, checkEvidence, colorSpace, rounding)
+      return threeColourSegment(points[mid]!, points[top]!, seg, colorSpace, rounding)
     }
   }
 }

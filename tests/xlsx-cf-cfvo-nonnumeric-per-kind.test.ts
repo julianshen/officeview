@@ -113,6 +113,10 @@ function expectTreatments(r: Awaited<ReturnType<typeof run>>, treatmentOf: (sour
       const got = shown(r.out.get(ref))
       if (twin === undefined) { expect(got.withheld, `${ref} (${source} ${position})`).toBe(true); continue }
       const want = shown(r.out.get(`${twin}${ref.slice(col.length)}`))
+      // The num-segment follow-up (owner ruling A): a 3-colour cell strictly inside the upper segment at a whole step product
+      // is withheld (cf-unmeasured-upper-segment-whole-product), the twin S and its formula-bound copy alike (rows 4..5, f = 1/4
+      // and 1/2 of 0..32); the bound still resolved like its twin, so the pair agrees and counts.
+      if (want.withheld && twin === 'S' && position === 'middle') { expect(got.withheld, `${ref} withheld like its twin ${twin}`).toBe(true); painted++; continue }
       expect([got.withheld, want.withheld, want.fill === 'none'], `${ref} twin ${twin}`).toEqual([false, false, false])
       expect(got.fill, `${ref} (${source} ${position}) vs ${twin}`).toBe(want.fill)
       painted++

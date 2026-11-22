@@ -47,7 +47,7 @@ type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; 
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
 /** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
-export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' }
+export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' | 'cf-unmeasured-upper-segment-whole-product' }
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -76,6 +76,23 @@ export const STAGE5_A1_BLANK_BOUND_REFUSALS: ReadonlyArray<Readonly<{ caseId: st
   caseId: 'stage5-cfvo-formulas', sqref: 'K2:K9', formula: 'A2', wrapped: 'XEU1', position: 'first',
   reason: 'anchor-a1: =A2 written on K2, read from A1, lands ten columns left of A; wrapped (formula:relative-wrap) it reads the blank XEU1, a non-numeric bound',
 }]
+
+/**
+ * The num-segment follow-up (owner ruling A after capture stage2-scale-num-segment): Stage 5 cells production withholds
+ * as the upper-segment whole-product shape (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`): a
+ * 3-colour cell strictly inside the upper segment where some channel's f·d is an integer. Enumerated per case, rule and
+ * rows: the 3-colour rules of stage5-cfvo-nonnumeric-v2 over -32, -8, 8, 16, 32, whose midpoint is 0 (rows 4 and 5 sit at
+ * f = 1/4 and 1/2 of 0..32 under FFFFEB84 -> FF63BE7B: step 39 and 78, whole). A formula midpoint is 0 only when its
+ * kind's treatment reads `zero` (`midpointKind`); a literal num 0 always. tests/xlsx-cf-scale-num-segment-case.test.ts
+ * derives this from every measured Stage 5 workbook (the segment production evaluates, through its probe seam).
+ */
+export const STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; refs: readonly string[]; midpointKind?: CfNonNumericBoundKind; reason: string }>> = [
+  ...([['E', 'blank'], ['H', 'text'], ['K', 'empty-string'], ['N', 'error']] as const).map(([col, kind]) => ({
+    caseId: 'stage5-cfvo-nonnumeric-v2', sqref: `${col}2:${col}6`, refs: [`${col}4`, `${col}5`], midpointKind: kind as CfNonNumericBoundKind,
+    reason: `upper segment 0..32 of min / formula (${kind}, read as 0) / max at f = 1/4 and 1/2: the first channel's steps 39 and 78 are whole products (stage2-scale-num-segment withhold)`,
+  })),
+  { caseId: 'stage5-cfvo-nonnumeric-v2', sqref: 'S2:S6', refs: ['S4', 'S5'], reason: 'upper segment 0..32 of min / num 0 / max at f = 1/4 and 1/2: the first channel\'s steps 39 and 78 are whole products (stage2-scale-num-segment withhold)' },
+]
 
 type CfvoPosition = 'first' | 'last' | 'middle'
 /**
@@ -246,6 +263,11 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
   for (const e of STAGE5_BAR_SCOPE_REFUSALS) {
     if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
     for (const m of covering.filter(x => x.ruleType === 'dataBar' && x.sqref === e.sqref)) add(m, { reason: e.reason, refused: e.refused })
+  }
+  for (const e of STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS) {
+    if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
+    if (e.midpointKind !== undefined && cfvoNonNumericTreatmentOf(e.midpointKind, published) !== 'zero') continue
+    for (const m of covering.filter(x => x.ruleType === 'colorScale' && x.sqref === e.sqref)) add(m, { reason: e.reason, refused: 'cf-unmeasured-upper-segment-whole-product' })
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {
     if (e.caseId !== cs.id || !e.refs.includes(ref)) continue

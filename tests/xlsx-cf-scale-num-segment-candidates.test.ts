@@ -9,9 +9,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BASELINE_ID, CANDIDATES, collectSegmentCells, computeNumSegmentClasses, consensusDomain, consensusWithheldShare, evaluateCandidates, SWEEP_N, type SegmentCollection } from '../scripts/cf-refs/num-segment-candidates'
-import { CF_NUM_SEGMENT_CLASSES } from '../src/xlsx/cf/numSegmentClasses'
+import { CF_NUM_SEGMENT_CLASSES } from '../scripts/cf-refs/num-segment-classes'
+import { numSegmentCandidate, numSegmentCandidates } from '../scripts/cf-refs/num-segment-formulas'
 import { S2_NUM_SEGMENT_READINGS } from '../scripts/cf-refs/cases'
-import { injectCfScaleSegmentProbe, scaleColorAt, type CfScaleSegment } from '../src/xlsx/cf/colorScale'
+import { injectCfScaleSegmentProbe, interpolateScaleColor, scaleColorAt, type CfScaleSegment } from '../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 
@@ -32,9 +33,9 @@ describe('the segment probe seam (test-only)', () => {
   it('sees each segment evaluation with its thresholds, colours and cfvo kinds; undefined keeps production', () => {
     const seen: CfScaleSegment[] = []
     injectCfScaleSegmentProbe(s => { seen.push(s); return undefined })
-    expect(scaleColorAt(45, P, [0, 30, 60], all)).toEqual({ kind: 'ready', value: 0xffb1d580 })
+    expect(scaleColorAt(15, P, [0, 30, 60], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(RED, YELLOW, 0.5) })
     expect(scaleColorAt(40, P, [0, 30, 60], all)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' })
-    expect(seen[0]).toEqual({ value: 45, lo: 30, hi: 60, fraction: 0.5, c0: YELLOW, c1: GREEN, colours: 3, segment: 1, loKind: 'num', hiKind: 'num', thresholds: [0, 30, 60] })
+    expect(seen[0]).toEqual({ value: 15, lo: 0, hi: 30, fraction: 0.5, c0: RED, c1: YELLOW, colours: 3, segment: 0, loKind: 'num', hiKind: 'num', thresholds: [0, 30, 60] })
     expect(seen[1]!.fraction).toBe(1 / 3)
   })
 
@@ -108,4 +109,34 @@ describe('the candidate search over every captured colour-scale cell', () => {
     expect(Math.max(...shares.map(([, w]) => w))).toBeLessThan(0.05)
     expect(shares.filter(([, w]) => w === 0).length).toBe(113)
   }, HEAVY)
+})
+
+describe('Candidate.evaluate (pre-capture fix rounds 2-3): every formulation fails closed on a non-finite intermediate', () => {
+  const P = 0xff14f028, Q = 0xffe61efa
+  const seg = (value: number, t: readonly number[], c0 = 0xff00ff00, c1 = 0xffff00ff): CfScaleSegment => {
+    const upper = value > t[1]!
+    const [lo, hi] = upper ? [t[1]!, t[2]!] : [t[0]!, t[1]!]
+    return { value, lo, hi, fraction: Math.max(0, Math.min(1, (value - lo) / (hi - lo))), c0, c1, colours: 3, segment: upper ? 1 : 0, loKind: 'num', hiKind: 'num', thresholds: [...t] }
+  }
+
+  it('the reviewer\'s counterexample: float32-ops/step-truncate at value 1 of 0 / 1e40 / 2e40 (Math.fround(hi) is Infinity) is undefined, not FF00FF00', () => {
+    const c = numSegmentCandidate('float32-ops/step-truncate')!
+    const s = seg(1, [0, 1e40, 2e40])
+    expect(c.colour(s).toString(16).toUpperCase()).toBe('FF00FF00')
+    expect(c.evaluate(s)).toBeUndefined()
+  })
+
+  it('every candidate of the search, on overflow and float32-overflow inputs: undefined or a valid colour; on finite-safe inputs exactly colour()', () => {
+    const all = numSegmentCandidates()
+    expect(all.length).toBe(5803)
+    const unsafe = [seg(5e-324, [0, 2e-323, 4e-323], P, Q), seg(1, [0, 1e40, 2e40]), seg(5e39, [0, 1e40, 2e40]), seg(0, [-9e307, 9e307, 9.5e307]), seg(5e299, [0, 1e300, 2e300]), seg(1.5e300, [0, 1e300, 2e300]), seg(-1e39, [-2e39, 0, 1e39])]
+    const safe = [seg(40, [0, 30, 60], 0xffffeb84, 0xff63be7b), seg(77, [7, 217, 637], P, Q), seg(357, [7, 217, 637], Q, P), seg(1.5, [1, 2, 3]), seg(3e37, [0, 1e38, 2e38], P, Q)]
+    const valid = (v: number | undefined): boolean => v === undefined || (Number.isInteger(v) && v >= 0 && v <= 0xffffffff && v >>> 24 === 0xff)
+    for (const c of all) {
+      for (const s of unsafe) expect(valid(c.evaluate(s)), `${c.id} ${s.thresholds.join('/')} ${s.value}`).toBe(true)
+      for (const s of safe) expect(c.evaluate(s), `${c.id} ${s.thresholds.join('/')} ${s.value}`).toBe(c.colour(s))
+    }
+    // No formulation that converts its inputs to float32 accepts an input outside float32's range.
+    for (const c of all.filter(x => x.id.startsWith('float32-ops/'))) for (const s of [seg(1, [0, 1e40, 2e40]), seg(5e299, [0, 1e300, 2e300])]) expect(c.evaluate(s), `${c.id}`).toBeUndefined()
+  })
 })

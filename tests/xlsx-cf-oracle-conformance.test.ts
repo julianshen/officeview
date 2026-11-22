@@ -34,6 +34,7 @@ import { decodePngSync, ICON_NO_ICON_MEMBER, iconTwinSetClass, iconTwinSetMember
 import { CF_ICON_GLYPH_CLASSES } from '../src/xlsx/cf/iconGlyphs'
 import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 import { stage2Conformance } from './helpers/cf-stage2-conformance'
+import { stage5JustifiedRefusals } from '../scripts/cf-refs/stage5-withhold'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -185,6 +186,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-scope',
     'stage2-scale-composition',
     'stage2-scale-scope-disjoint',
+    'stage2-scale-num-segment',
   ]
 
 
@@ -250,6 +252,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               expect(verdict.violation, cellKey).toBeUndefined()
               if (verdict.withheld) { stage5Withheld++; continue }
               stage5FormulaCompared++
+            } else if (!gotMatched && stage5JustifiedRefusals(c, exp.ref).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')) {
+              // The num-segment follow-up (owner ruling A): a literal 3-colour cell in the upper-segment whole-product shape
+              // is withheld, justified by STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS (stage5-cfvo-nonnumeric-v2 S4, S5).
+              stage5Withheld++
+              continue
             } else stage5Compared++
           }
           if (c.stage === 3) {
@@ -407,8 +414,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const expectedFormulaCells = measured5.flatMap(c => c.expected.cells.filter(exp => stage5FormulaCovered(c, exp.ref))).length
     const expectedOtherCells = measured5.flatMap(c => c.expected.cells.filter(exp => !stage5FormulaCovered(c, exp.ref))).length
     expect(measured5.length).toBeGreaterThan(10)
-    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells)
-    expect(stage5Compared).toBe(expectedOtherCells)
+    // + the 2 literal cells withheld as the upper-segment whole-product shape (stage5-cfvo-nonnumeric-v2 S4, S5).
+    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells + 2)
+    expect(stage5Compared).toBe(expectedOtherCells - 2)
     expect(stage5Compared).toBeGreaterThan(100)
     // Non-vacuous both ways: production paints formula cells Excel's way, and still withholds the unmeasured ones.
     expect(stage5FormulaCompared).toBeGreaterThan(100)
@@ -593,23 +601,25 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     expect(checkedCount).toBeGreaterThan(0)
     // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831)
-    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (recipe-pending; its saved file is the input).
+    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115).
     expect(checkedCount).toBe(491)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 8 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 9 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
     expect(r.violations).toEqual([])
     for (const caseId of STAGE2_MEASURED_CASES) expect(r.caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
-    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831).
-    expect(r.total).toBe(486)
+    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment.
+    expect(r.total).toBe(767)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
-    // stage2-scale-scope-disjoint: 77 exact, 11 twins withheld by the num-segment finding (T4 and V3 among them).
-    // No statistical reading is registered, so the statistical withhold holds nowhere.
-    expect([r.numSegmentWithheld, r.statisticalWithheld]).toEqual([11, 0])
-    expect(r.exact).toBe(364 + 77 + r.stubCompared)
-    expect(r.withheld).toBe(34 + 11 - r.stubCompared)
+    // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
+    // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
+    // withhold (owner ruling A), 172 exact. The upper-segment withhold also takes 5 earlier confirmed-exact cells:
+    // stage2-scale-interpolation E8, E9, E10, stage2-scale-thresholds E5 and stage2-scale-scope-disjoint U4.
+    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([107, 18])
+    expect(r.exact).toBe(364 + 77 - 5 + 172 + r.stubCompared)
+    expect(r.withheld).toBe(34 + 11 + 5 + 109 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

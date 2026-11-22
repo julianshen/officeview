@@ -1,11 +1,11 @@
 /**
  * The num-segment follow-up: every closed candidate formulation of the colour inside a colour-scale segment, built lazily by
- * id (nothing is constructed until asked). Shared by the candidate search (scripts/cf-refs/num-segment-candidates.ts) and
- * production's class-consensus evaluation (`colorScale.ts`, `numSegmentConsensusColor`), so a class member's colour is
- * one implementation everywhere. Ids: `<fraction>/<channel>`, `ratio-step-truncate[-unguarded]`, `int<N>-<form>`,
+ * id (nothing is constructed until asked). Used by the candidate search (scripts/cf-refs/num-segment-candidates.ts) and its
+ * tests. Phase 2 (owner ruling after the capture): no reading was matched, so nothing here is reachable from production;
+ * it documents the search. Ids: `<fraction>/<channel>`, `ratio-step-truncate[-unguarded]`, `int<N>-<form>`,
  * `sweep-fixed-<N>`, `sweep-roundtrip[-reciprocal|-after]-<K>`.
  */
-import type { CfScaleSegment } from './colorScale'
+import type { CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 
 const clamp01 = (f: number): number => Math.max(0, Math.min(1, f))
 /**

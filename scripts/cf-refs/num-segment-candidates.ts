@@ -25,10 +25,10 @@ import { OfficePackage } from '../../src/core/zip'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
-import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
+import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, upperSegmentWholeProduct, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseParseOptionsOf } from './case-clock'
-import { FRACTIONS, numSegmentCandidates, SWEEP_N, type Candidate } from '../../src/xlsx/cf/numSegmentCandidates'
+import { FRACTIONS, numSegmentCandidates, SWEEP_N, type Candidate } from './num-segment-formulas'
 import {
   S2_NUM_SEGMENT,
   S2_NUM_SEGMENT_CAP,
@@ -95,10 +95,17 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
   s.colours === 3 && numSegmentUnmeasured(pointOf(s.loKind, s.lo), pointOf(s.hiKind, s.hi), s.value, s.lo, s.hi, s.fraction)
 
 /** Every captured colour-scale cell of every measured case, mapped to its segment through production's own pipeline. */
-export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<SegmentCollection> {
+/**
+ * The captures the pre-registration search ran on: every measured case but stage2-scale-num-segment itself (its own
+ * confirmation case, captured after the readings were fixed). Pass `{ include: 'all' }` to add it.
+ */
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment']
+
+export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }
   for (const c of manifest.cases) {
     if (c.status !== 'measured' || !c.markers.some(m => m.ruleType === 'colorScale')) continue
+    if ((opts.include ?? 'search') === 'search' && SEARCH_EXCLUDED_CASES.includes(c.id)) continue
     const fills = excelFills(c, rootDir)
     if (!fills) { out.excluded.push({ caseId: c.id, ref: '*', reason: 'no DisplayFormat fill observation in the capture (bar/icon sidecar)', group: 'a' }); continue }
     const bytes = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
@@ -143,6 +150,13 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
       const prod = production.get(ref)
       const truncate = hex(interpolateScaleColor(seg.c0, seg.c1, seg.fraction))
       if (prod === undefined && withheldShape(seg)) { out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' }); continue }
+      // Withheld only by the later upper-segment whole-product rule (owner ruling A): before it, production painted the
+      // truncation here; the cell is evaluated as it was when the search ran.
+      if (prod === undefined && seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+        if (truncate === excel) out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'confirmed' })
+        else out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' })
+        continue
+      }
       if (prod === undefined) { exclude('interpolated, then withheld by a later gate (composition)', true); continue }
       if (prod !== truncate) { exclude(`painted ${prod} by another rule over the scale`, false); continue }
       if (prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
@@ -166,7 +180,7 @@ function sqrefCovers(sqref: string, ref: string): boolean {
 // deterministic formula of the segment; every one clamps the fraction to [0, 1] as production does.
 // ---------------------------------------------------------------------------------------------------------------------
 
-export { CHANNELS, FRACTIONS, SWEEP_K, SWEEP_N, type Candidate } from '../../src/xlsx/cf/numSegmentCandidates'
+export { CHANNELS, FRACTIONS, SWEEP_K, SWEEP_N, type Candidate } from './num-segment-formulas'
 /** Every candidate (src/xlsx/cf/numSegmentCandidates.ts, the one implementation production's consensus evaluates too). */
 export const CANDIDATES: readonly Candidate[] = numSegmentCandidates()
 const clamp01 = (f: number): number => Math.max(0, Math.min(1, f))
@@ -256,7 +270,7 @@ function classNameOf(members: readonly string[]): string {
 /**
  * Fix round 1 (R1): the classes of the survivors (3-colour literal-num scope) on the case's literal-num cells (every
  * evidence rule of scale:num-segment-fraction, separators included), each named by its representative, plus `truncate`
- * (production's arithmetic, a class of one). The committed membership is src/xlsx/cf/numSegmentClasses.ts.
+ * (production's arithmetic, a class of one). The committed membership is scripts/cf-refs/num-segment-classes.ts.
  */
 export function computeNumSegmentClasses(cells: readonly SegmentCell[]): Record<string, string[]> {
   const survivors = survivorsAt(cells, '3-colour-literal-num')
@@ -276,12 +290,13 @@ const CANDIDATES_BY_ID = new Map(CANDIDATES.map(c => [c.id, c]))
 /** Writes the committed class membership (src) and the reading names (catalogue), both derived from `computeNumSegmentClasses`. */
 export function writeNumSegmentClasses(classes: Record<string, string[]>, rootDir: string = REPO_ROOT): void {
   const names = Object.keys(classes)
-  writeFileSync(resolve(rootDir, 'src/xlsx/cf/numSegmentClasses.ts'), [
+  writeFileSync(resolve(rootDir, 'scripts/cf-refs/num-segment-classes.ts'), [
     '// Generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-classes` (do not edit).',
     '/**',
-    ' * Fix round 1 (R1, consensus): the class of each scale:num-segment-fraction reading, the finite list of candidates',
-    ' * (src/xlsx/cf/numSegmentCandidates.ts ids) that survive every earlier capture and predict the reading\'s fills on every',
-    ' * literal-num cell of stage2-scale-num-segment. A registered reading paints only where all its members agree.',
+    ' * The class of each pre-registered scale:num-segment-fraction reading: the finite list of candidates',
+    ' * (scripts/cf-refs/num-segment-formulas.ts ids) that survive every earlier capture and predict the reading\'s fills on every',
+    ' * literal-num cell of stage2-scale-num-segment. The capture matched none of them, so nothing is registered and no production',
+    ' * code reads this; it documents the search (pinned by tests).',
     ' */',
     `export const CF_NUM_SEGMENT_CLASSES: Readonly<Record<string, readonly string[]>> = Object.freeze({`,
     ...names.map(n => `  ${JSON.stringify(n)}: Object.freeze(${JSON.stringify(classes[n])}),`),
@@ -290,7 +305,7 @@ export function writeNumSegmentClasses(classes: Record<string, string[]>, rootDi
   ].join('\n'))
   writeFileSync(resolve(rootDir, 'scripts/cf-refs/num-segment-readings.ts'), [
     '// Generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-classes` (do not edit).',
-    '/** The literal-num readings of stage2-scale-num-segment: `truncate`, then one per class of surviving candidates (src/xlsx/cf/numSegmentClasses.ts). */',
+    '/** The literal-num readings of stage2-scale-num-segment: `truncate`, then one per class of surviving candidates (scripts/cf-refs/num-segment-classes.ts). */',
     `export const S2_NUM_SEGMENT_READINGS: readonly string[] = ${JSON.stringify(names)}`,
     '',
   ].join('\n'))

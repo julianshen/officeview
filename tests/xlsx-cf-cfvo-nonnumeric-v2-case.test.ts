@@ -262,14 +262,21 @@ async function rehearse(w: World, held: readonly Kind[] = KINDS) {
   })
 }
 const resolves = (t: Treatment | undefined, position: Position): boolean => t === 'zero' || (t === 'skipped' && position !== 'middle')
+/**
+ * The num-segment follow-up (owner ruling A): a resolved midpoint of 0 puts rows 4 and 5 (8 and 16) strictly inside the upper
+ * segment 0..32 at whole step products, which production withholds (cf-unmeasured-upper-segment-whole-product, justified by
+ * STAGE5_UPPER_WHOLE_PRODUCT_REFUSALS). The resolving checks read row 3 (-8, lower segment) for a midpoint instead.
+ */
+const upperWhole = (position: Position, r: number): boolean => position === 'middle' && (r === 4 || r === 5)
+const probeRow = (position: Position): number => (position === 'middle' ? 3 : 4)
 
 describe('stage5-cfvo-nonnumeric-v2: the per-kind registration against production on planted worlds (every reading of every id)', () => {
   it('the registered and captured world: no unjustified refusal, no disagreement; blank paints, text, ="" and error withhold', async () => {
     const { disagree, unjustified, painted, withheld } = await rehearse(SUGGESTED)
     expect(disagree).toEqual([])
     expect(unjustified).toEqual([])
-    for (const x of CONFIGS) for (const r of ROWS) expect([painted.has(`${x.col}${r}`), withheld.has(`${x.col}${r}`)], `${x.id} ${r}`).toEqual(x.kind === 'blank' ? [true, false] : [false, true])
-    for (const col of ['P', 'Q', 'R', 'S']) for (const r of ROWS) expect(painted.has(`${col}${r}`), `${col}${r}`).toBe(true)
+    for (const x of CONFIGS) for (const r of ROWS) expect([painted.has(`${x.col}${r}`), withheld.has(`${x.col}${r}`)], `${x.id} ${r}`).toEqual(x.kind === 'blank' && !upperWhole(x.position, r) ? [true, false] : [false, true])
+    for (const col of ['P', 'Q', 'R', 'S']) for (const r of ROWS) expect(painted.has(`${col}${r}`), `${col}${r}`).toBe(!(col === 'S' && (r === 4 || r === 5)))
   }, 300_000)
 
   it('every one of the 81 worlds, registered in full: no unjustified refusal, no disagreement; each resolving bound paints', async () => {
@@ -277,7 +284,7 @@ describe('stage5-cfvo-nonnumeric-v2: the per-kind registration against productio
       const { disagree, unjustified, painted } = await rehearse(w)
       expect(disagree, worldName(w)).toEqual([])
       expect(unjustified, worldName(w)).toEqual([])
-      for (const x of CONFIGS) expect(painted.has(`${x.col}4`), `${worldName(w)} ${x.id}`).toBe(resolves(w[x.kind], x.position))
+      for (const x of CONFIGS) expect(painted.has(`${x.col}${probeRow(x.position)}`), `${worldName(w)} ${x.id}`).toBe(resolves(w[x.kind], x.position))
     }
   }, 600_000)
 
@@ -286,7 +293,7 @@ describe('stage5-cfvo-nonnumeric-v2: the per-kind registration against productio
       const w: World = { blank: 'zero', text: 'zero', 'empty-string': 'zero', error: 'zero' }
       const { disagree, unjustified, painted, withheld } = await rehearse(w, KINDS.filter(k => k !== failed))
       expect([disagree, unjustified], failed).toEqual([[], []])
-      for (const x of CONFIGS) expect(x.kind === failed ? withheld.has(`${x.col}4`) : painted.has(`${x.col}4`), `${failed}: ${x.id}`).toBe(true)
+      for (const x of CONFIGS) expect(x.kind === failed ? withheld.has(`${x.col}${probeRow(x.position)}`) : painted.has(`${x.col}${probeRow(x.position)}`), `${failed}: ${x.id}`).toBe(true)
     }
   }, 300_000)
 })
@@ -306,7 +313,8 @@ describe('the registration against the capture: every measured Stage 5 case', ()
     // This case, compared with its capture: blank bounds paint (agreeing), the others withhold with their justification.
     for (const x of CONFIGS) for (const r of ROWS) {
       const row = rows.find(y => y.caseId === ID && y.ref === `${x.col}${r}`)!
-      expect([row.compared, row.agrees, row.production.unresolved.length > 0], `${x.id} ${r}`).toEqual([true, true, x.kind !== 'blank'])
+      expect([row.compared, row.agrees, row.production.unresolved.length > 0], `${x.id} ${r}`).toEqual([true, true, x.kind !== 'blank' || upperWhole(x.position, r)])
+      if (x.kind === 'blank' && upperWhole(x.position, r)) expect(row.justification.map(j => j.reason).join('; '), `${x.id} ${r}`).toContain('stage2-scale-num-segment withhold')
       if (x.kind !== 'blank') expect(row.justification.map(j => j.reason).join('; '), `${x.id} ${r}`).toContain(`${CF_CFVO_NONNUMERIC_KIND_IDS[x.kind]} = withheld withholds ${x.kind}`)
     }
     expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
