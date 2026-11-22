@@ -966,5 +966,6 @@ The capture cannot be retried, and no prediction, value or reading is edited aft
 - **The 27 literal twins** each drew exactly what their statistical cell drew.
 - **The negative controls moved.** All 11 lower-segment and 2-colour controls just below an integer (A3, A4, D2, D4, E7..E10, E12..E14) were drawn one step smaller (raw floor). With H8, H18 and I5, production paints **14 cells of published shapes one step off Excel**. The other 26 controls are at guarded truncation.
 - **The E4 replica** (E4 and its twin G14) is at FFEFE784, as in both earlier captures. Of the integer cells, A17 moved and E5 did not.
-- **Owner decision needed:** a proposed fail-closed withhold for 2-colour and lower-segment cells within 1e-11 below an integer (14 cells, none of them painted exactly today). Production is unchanged until the ruling.
+- **Owner ruling: the guard-boundary withhold.** 2-colour and 3-colour lower-segment interior cells whose step product lies within 1e-11 strictly below a whole number are withheld (`cf-unmeasured-guard-boundary`). That is the 14 cells here, and none elsewhere. The case is in the conformance pass, and `cf-compare` passes in both modes.
+- **The search with this capture:** `npx tsx scripts/cf-refs/upper-window-candidates.ts` (`--pre-capture` reproduces §10.1). It has 1235 cells and 0 survivors at every scope.
 - **Findings, reach and hypotheses:** `docs/validation/xlsx-cf.md` §14.z.17.

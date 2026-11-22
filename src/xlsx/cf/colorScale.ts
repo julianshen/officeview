@@ -541,6 +541,34 @@ export function upperSegmentProductClass(c1: number, c2: number, value: number, 
 }
 
 /**
+ * The upper-segment window follow-up, owner ruling after capture ed0fccb6 (stage2-scale-upper-window): whether an interior
+ * cell (tLo < value < tHi) of a 2-colour scale or of a 3-colour LOWER segment is withheld because production's truncation
+ * guard changes its step. For some ARGB channel whose endpoints differ by d != 0, p = fraction · |d| (production's
+ * `safeFraction` double times the integer |d|, the one IEEE multiplication `interpolateChannel` performs) has
+ * floor(p + CF_TRUNCATION_GUARD) != floor(p): p lies within 1e-11 strictly below a whole number. Excel 16.115 drew every
+ * captured cell of that shape one step smaller (raw floor: A3, A4, D2, D4, E7..E10, E12..E14 and the twins H8, H18, I5),
+ * where production's guarded truncation paints one step larger; no other lower-segment or 2-colour cell moved. Raw floor
+ * was never pre-registered, so the shape is withheld (`cf-unmeasured-guard-boundary`), never repainted.
+ */
+export function guardBoundaryProduct(c0: number, c1: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  if (!(value > tLo && value < tHi)) return false
+  const f = Math.max(0, Math.min(1, fraction))
+  for (const shift of [24, 16, 8, 0]) {
+    const d = Math.abs(((c1 >>> shift) & 0xff) - ((c0 >>> shift) & 0xff))
+    if (d === 0) continue
+    const p = f * d
+    if (Math.floor(p + CF_TRUNCATION_GUARD) !== Math.floor(p)) return true
+  }
+  return false
+}
+
+/** The outcome of a 2-colour scale or 3-colour lower-segment interpolation: withheld in the guard-boundary shape (truncation only). */
+function guardedInterpolation(c0: number, c1: number, value: number, lo: number, hi: number, fraction: number, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
+  if (rounding === 'truncate' && guardBoundaryProduct(c0, c1, value, lo, hi, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-guard-boundary' }
+  return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+}
+
+/**
  * The upper-segment window follow-up (brief cf-upperwindow, Phase 1 task 2): the readings of Excel's step at a cell in the
  * `window` class of a 3-colour upper segment that is NOT bounded by two literal num cfvo (min, max, percent, percentile, mixed
  * or formula-resolved bounds; the literal shape is withheld as the num-segment shape first). Per RGB channel, the step from
@@ -593,8 +621,9 @@ export function upperWindowReadingColor(reading: CfUpperWindowReading, argb0: nu
 /**
  * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`; an upper-segment cell in the
  * `integer` class is withheld; one in the `window` class follows the window reading when it is registered with its evidence,
- * the segment is not bounded by two literal num cfvo and the default sRGB / truncate variants hold, else is withheld; every
- * other cell is production's interpolation.
+ * the segment is not bounded by two literal num cfvo and the default sRGB / truncate variants hold, else is withheld; a
+ * lower-segment cell in the guard-boundary shape is withheld (`guardBoundaryProduct`); every other cell is production's
+ * interpolation.
  */
 function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
   const literal = literalNumBound(lo) && literalNumBound(hi)
@@ -606,6 +635,7 @@ function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegm
     if (argb !== undefined) return { kind: 'ready', value: argb }
   }
   if (cls !== undefined) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
+  if (seg.segment === 0) return guardedInterpolation(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction, colorSpace, rounding)
   return { kind: 'ready', value: interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding) }
 }
 
@@ -681,7 +711,7 @@ export function scaleColorAt(
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       const probed = segmentProbe?.({ value: numericVal, lo: tLow, hi: tHigh, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[1]!), hiKind: segmentBoundKind(points[0]!), thresholds: [tLow, tHigh] })
       if (probed) return probed
-      return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+      return guardedInterpolation(c0, c1, numericVal, tLow, tHigh, fraction, colorSpace, rounding)
     }
 
     // Normal t0 < t1
@@ -695,7 +725,7 @@ export function scaleColorAt(
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
     const probed = segmentProbe?.({ value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[1]!), thresholds: [t0, t1] })
     if (probed) return probed
-    return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+    return guardedInterpolation(c0, c1, numericVal, t0, t1, fraction, colorSpace, rounding)
   } else {
     // 3-point scale
     let t0 = thresholds[0]!

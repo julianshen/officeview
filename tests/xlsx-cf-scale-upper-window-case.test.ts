@@ -2,16 +2,18 @@
 /**
  * The upper-segment window follow-up (brief cf-upperwindow), Phase 1 tasks 3-4: stage2-scale-upper-window, the
  * pre-registered case for the window class of 3-colour upper segments under statistical bounds, and the rehearsal of each
- * reading's registration. It has no capture yet. Checked here:
+ * reading's registration. Captured since ed0fccb6 (Excel 16.115): no reading matched, and 14 lower-segment / 2-colour cells
+ * just below a whole step were drawn one step smaller, now withheld as the guard-boundary shape (owner ruling; see
+ * tests/xlsx-cf-scale-guard-boundary.test.ts). Checked here:
  * 1. the case design: ownership, registries, size, values, statistical thresholds bit for bit against their literal twins,
  *    every designated cell's class, >= 3 decisive cells per evidence configuration, the text scope's batch estimate;
  * 2. the independent model is production, today (window and integer classes withheld) and under each registration;
  * 3. the evaluator on synthetic observations: each planted reading comes back as the one match; worlds no reading explains
  *    (the literal capture's pattern, a moved control) are refused; it fails closed on broken controls;
  * 4. the audit gate end to end on a synthetic measured capture (real verifyCfCase and auditStage2Manifest);
- * 5. the rehearsal of each registration against every committed capture: guarded paints every Stage 2 cell at Excel's fill
- *    (E4 and D19 recovered); raw-floor contradicts E4 and D19 exactly, so it can never be published as is; Stage 5 records
- *    unchanged; the interactive and paged comparisons pass.
+ * 5. each registration against every committed capture, this one included: unregistered production agrees everywhere;
+ *    guarded is refuted at 17 of this capture's statistical cells, raw-floor at E4, D19 and 5 of them, so neither can be
+ *    published; Stage 5 records unchanged; the interactive and paged comparisons pass unregistered.
  * This checks the case and production, not Excel.
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -79,6 +81,8 @@ const hex = (n: number): string => (n >>> 0).toString(16).toUpperCase().padStart
 const lineFill = (k: number): string => hex(0xff14f028 + k * 0x10000 - k * 0x100 + k)
 const twinK = new Map(s2UpperWindowLayout().twins.map(t => [t.ref, t.k]))
 const predictions = new Map(upperWindowPredictions().map(p => [p.ref, p]))
+/** The guard-boundary cells (owner ruling after ed0fccb6): withheld by production since, whatever a window reading says. */
+const GUARD_BOUNDARY = ['A3', 'A4', 'D2', 'D4', 'E7', 'E8', 'E9', 'E10', 'E12', 'E13', 'E14', 'H8', 'H18', 'I5']
 
 /** Rehearse a registration: the reading selected through the seam and the id's evidence held, around `fn`. */
 async function withRegistration<T>(reading: S2UpperWindowReading, fn: () => Promise<T>): Promise<T> {
@@ -122,7 +126,8 @@ describe('stage2-scale-upper-window: the case', () => {
     expect(CAP).toBe(CF_UPPER_WINDOW_CAP)
     expect([...S2_UPPER_WINDOW_READINGS]).toEqual([...CF_UPPER_WINDOW_READINGS])
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    // Captured (ed0fccb6); no reading matched, so the three ids stay registered non-discriminating.
+    expect(c.status).toBe('measured')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
     expect(c.scaleReadings!.map(x => [x.id, x.capabilityId, Object.keys(x.hypotheses), x.role ?? (x.record ? 'record' : 'evidence')])).toEqual([
       ['pmp', CAP, ['guarded', 'raw-floor'], 'evidence'], ['percent', CAP, ['guarded', 'raw-floor'], 'evidence'], ['mixed', CAP, ['guarded', 'raw-floor'], 'evidence'],
@@ -212,7 +217,7 @@ describe('stage2-scale-upper-window: the case', () => {
     expect(predictions.get('E4')!.readings).toEqual({ guarded: 'FFEFE784', 'raw-floor': 'FFF0E784' })
   })
 
-  it('the independent model is production today: painted cells are the guarded prediction; window and integer cells are withheld (literal ones as num-segment)', async () => {
+  it('the independent model is production today: painted cells are the guarded prediction; window and integer cells are withheld (literal ones as num-segment), and the 14 guard-boundary cells', async () => {
     const c = caseOf()
     const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
     const want = plantedFills(c, 'guarded')
@@ -222,8 +227,8 @@ describe('stage2-scale-upper-window: the case', () => {
       if (got === undefined && e.matched) { withheld.push(e.ref); continue }
       expect(got, e.ref).toBe(e.matched ? want.get(e.ref) : undefined)
     }
-    expect(withheld.sort()).toEqual([...predictions.values()].filter(p => p.production !== 'painted').map(p => p.ref).sort())
-    expect(withheld.length).toBe(27 + 2 + 27)
+    expect(withheld.sort()).toEqual([...[...predictions.values()].filter(p => p.production !== 'painted').map(p => p.ref), ...GUARD_BOUNDARY].sort())
+    expect(withheld.length).toBe(27 + 2 + 27 + 14)
   }, HEAVY)
 
   for (const reading of S2_UPPER_WINDOW_READINGS) {
@@ -233,7 +238,7 @@ describe('stage2-scale-upper-window: the case', () => {
       const want = plantedFills(c, reading)
       for (const e of c.expected.cells) {
         const p = predictions.get(e.ref)
-        const withheldStill = p !== undefined && p.registered !== 'painted' && p.registered !== 'reading'
+        const withheldStill = (p !== undefined && p.registered !== 'painted' && p.registered !== 'reading') || GUARD_BOUNDARY.includes(e.ref)
         expect(fills.get(e.ref), e.ref).toBe(!e.matched || withheldStill ? undefined : want.get(e.ref))
       }
     }, HEAVY)
@@ -338,7 +343,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   const before = [...VERIFIED_STAGE2_CAPABILITIES].sort()
   const published = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
 
-  it('the real (recipe-pending) manifest: Stage 2 audits ok and complete, the three ids unverified-nondiscriminating, the verified set unchanged', async () => {
+  it('the real (measured) manifest: Stage 2 audits ok and complete, the three ids unverified-nondiscriminating, the verified set unchanged', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
@@ -378,29 +383,29 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
     // Unregistered production on that world: every window cell withheld and justified; nothing disagrees.
     const r = await stage2Conformance(m, root, [ID])
     expect(r.violations).toEqual([])
-    expect([r.total, r.withheld, r.upperWholeWithheld, r.numSegmentWithheld]).toEqual([147, 56, 29, 27])
+    expect([r.total, r.withheld, r.upperWholeWithheld, r.numSegmentWithheld, r.guardBoundaryWithheld]).toEqual([147, 70, 29, 27, 14])
   }, HEAVY)
 })
 
 const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
-  it('today (nothing registered): no violation over the measured Stage 2 cases; E4 and D19 withheld', async () => {
+  it('today (nothing registered): no violation over the measured Stage 2 cases, this capture included; E4 and D19 withheld', async () => {
+    expect(STAGE2_MEASURED).toContain(ID)
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED)
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([962, 684, 278, 227, 21])
+    // 962 cells before + this capture's 147: 77 exact, 70 withheld (27 num-segment, 29 upper whole product, 14 guard-boundary).
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1109, 761, 348, 254, 50, 14])
   }, HEAVY)
 
-  it('guarded registered: every measured Stage 2 cell still Excel\'s fill; E4 and D19 now painted exactly (the window\'s cost recovered)', async () => {
+  it('guarded registered: the capture refutes it, at exactly the 17 statistical window cells Excel drew one step smaller', async () => {
     const r = await withRegistration('guarded', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
-    expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([962, 686, 276, 227, 19])
+    expect(r.violations.map(v => v.split(':').slice(0, 2).join(':'))).toEqual(['A11', 'A12', 'A13', 'A14', 'B10', 'B11', 'B12', 'B13', 'B14', 'C5', 'C6', 'C7', 'C8', 'C15', 'D9', 'D10', 'D18'].map(x => `${ID}:${x}`))
   }, HEAVY)
 
-  it('raw-floor registered: exactly E4 and D19 disagree (their captures contradict raw floor), so it could only be published if this case\'s E4 replica moved', async () => {
+  it('raw-floor registered: the earlier E4 and D19 disagree, and this capture\'s E4, D8, D11 (unmoved) and B14, C15 (above an integer, moved)', async () => {
     const r = await withRegistration('raw-floor', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
-    expect(r.violations).toEqual(['stage2-scale-thresholds:E4: production FFF0E784 is not Excel\'s FFEFE784', 'stage2-scale-upper-whole:D19: production FFF0E784 is not Excel\'s FFEFE784'])
-    // This case's raw-floor prediction at its own E4 replica is that same move.
+    expect(r.violations.map(v => v.split(':').slice(0, 2).join(':'))).toEqual(['stage2-scale-thresholds:E4', 'stage2-scale-upper-whole:D19', ...['B14', 'C15', 'D8', 'D11', 'E4'].map(x => `${ID}:${x}`)])
     expect(predictions.get('E4')!.readings['raw-floor']).toBe('FFF0E784')
   }, HEAVY)
 
@@ -411,10 +416,10 @@ describe('the rehearsal: each registration against every committed capture, and 
       const c = m.cases.find(x => x.id === ID)!
       const unregistered = await stage2Conformance(m, root, [ID])
       expect(unregistered.violations, reading).toEqual([])
-      expect([unregistered.total, unregistered.withheld], reading).toEqual([147, 56])
+      expect([unregistered.total, unregistered.withheld], reading).toEqual([147, 70])
       const registered = await withRegistration(reading, () => stage2Conformance(m, root, [ID]))
       expect(registered.violations, reading).toEqual([])
-      expect([registered.total, registered.withheld, registered.upperWholeWithheld], `${reading} registered`).toEqual([147, 29, 2])
+      expect([registered.total, registered.withheld, registered.upperWholeWithheld], `${reading} registered`).toEqual([147, 43, 2])
       for (const mode of ['interactive', 'paged'] as const) {
         const a = await compareCfCase(c, mode, { rootDir: root })
         expect(`${reading} ${mode}: ${a.outcome} ${a.outcome === 'pass' ? '' : a.reason}`).toBe(`${reading} ${mode}: pass `)
@@ -428,12 +433,16 @@ describe('the rehearsal: each registration against every committed capture, and 
     }
   }, 900_000)
 
-  it('the interactive and paged comparisons of the measured Stage 2 cases pass under the guarded registration', async () => {
+  it('the interactive and paged comparisons of the measured Stage 2 cases pass unregistered; under the guarded registration this capture fails (caught)', async () => {
     const { compareCfCase } = await import('../scripts/cf-compare')
+    for (const c of manifest.cases.filter(x => STAGE2_MEASURED.includes(x.id))) for (const mode of ['interactive', 'paged'] as const) {
+      const res = await compareCfCase(c, mode, { rootDir: REPO_ROOT })
+      expect(res.outcome, `${c.id} ${mode}: ${res.reason}`).toBe('pass')
+    }
     await withRegistration('guarded', async () => {
-      for (const c of manifest.cases.filter(x => STAGE2_MEASURED.includes(x.id))) for (const mode of ['interactive', 'paged'] as const) {
-        const res = await compareCfCase(c, mode, { rootDir: REPO_ROOT })
-        expect(res.outcome, `${c.id} ${mode}: ${res.reason}`).toBe('pass')
+      for (const mode of ['interactive', 'paged'] as const) {
+        const res = await compareCfCase(caseOf(), mode, { rootDir: REPO_ROOT })
+        expect(`${res.outcome} ${res.reason}`, mode).toBe('fail Cell A11 observed Excel fill FFA163B5, got FFA064B4')
       }
     })
   }, 900_000)

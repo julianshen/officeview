@@ -37,7 +37,7 @@ import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import type { CfCellState, CfOutcome, CfRule } from '../../src/xlsx/cf/model'
 import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
 import { isCellInSqref } from './verify'
-import { upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, upperWholeShapeAt } from './upper-whole-justify'
 import type { CfOracleCase } from './cases'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -48,7 +48,7 @@ type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; 
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
 /** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
-export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' | 'cf-unmeasured-upper-segment-whole-product' }
+export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' | 'cf-unmeasured-upper-segment-whole-product' | 'cf-unmeasured-guard-boundary' }
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -280,6 +280,8 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
     for (const m of covering.filter(x => x.ruleType === 'colorScale')) {
       const marker = { ruleType: m.ruleType, sqref: m.sqref, scale: { cfvo: m.scale?.cfvo ?? [], colors: m.scale?.colors ?? [] } }
       if (upperWholeShapeAt(marker, ref, value, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'upper segment of a 3-colour scale, strictly inside, at a whole step product (recomputed from the sheet; the stage2-scale-num-segment withhold)', refused: 'cf-unmeasured-upper-segment-whole-product' })
+      // The guard-boundary withhold (owner ruling after capture ed0fccb6, stage2-scale-upper-window), recomputed likewise.
+      if (guardBoundaryShapeAt(marker, ref, value, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'a 2-colour scale or 3-colour lower segment, strictly inside, with a step product within 1e-11 below a whole number (recomputed from the sheet; the stage2-scale-upper-window withhold)', refused: 'cf-unmeasured-guard-boundary' })
     }
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {

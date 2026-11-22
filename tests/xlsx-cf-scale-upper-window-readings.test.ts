@@ -97,7 +97,9 @@ describe('scaleColorAt: default unchanged; a registered reading narrows only the
     f12: { v: 0.6, t: [0.1, 0.4, 1], argb: [P, P210, P] },
     integer: { v: 357, t: [7, 217, 637], argb: [P, P210, P] },
     plain: { v: 300, t: [7, 217, 637], argb: [P, P210, P] },
+    // 0.31: f·210 = 146.99999999999997, the guard-boundary shape (owner ruling after ed0fccb6); 0.33: 161, not that shape.
     lower: { v: 0.31, t: [0.1, 0.4, 1], argb: [P, P210, P] },
+    lowerPlain: { v: 0.33, t: [0.1, 0.4, 1], argb: [P, P210, P] },
   } as const
   const run = (k: keyof typeof cases, kind: 'stat' | 'literal', hasEvidence = all): string => {
     const c = cases[k]
@@ -110,7 +112,8 @@ describe('scaleColorAt: default unchanged; a registered reading narrows only the
     expect(run('e4', 'literal')).toBe('cf-unmeasured-num-segment-fraction')
     expect(run('integer', 'stat')).toBe('cf-unmeasured-upper-segment-whole-product')
     expect(run('plain', 'stat')).toBe(hex(interpolateScaleColor(P210, P, (300 - 217) / 420)))
-    expect(run('lower', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.31 - 0.1) / (0.4 - 0.1))))
+    expect(run('lower', 'stat')).toBe('cf-unmeasured-guard-boundary')
+    expect(run('lowerPlain', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.33 - 0.1) / (0.4 - 0.1))))
   })
 
   for (const reading of CF_UPPER_WINDOW_READINGS) {
@@ -121,7 +124,8 @@ describe('scaleColorAt: default unchanged; a registered reading narrows only the
       expect(run('e4', 'literal')).toBe('cf-unmeasured-num-segment-fraction')
       expect(run('integer', 'stat')).toBe('cf-unmeasured-upper-segment-whole-product')
       expect(run('plain', 'stat')).toBe(hex(interpolateScaleColor(P210, P, (300 - 217) / 420)))
-      expect(run('lower', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.31 - 0.1) / (0.4 - 0.1))))
+      expect(run('lower', 'stat')).toBe('cf-unmeasured-guard-boundary')
+      expect(run('lowerPlain', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.33 - 0.1) / (0.4 - 0.1))))
       // Without the id's evidence the reading is not honoured.
       expect(run('e4', 'stat', without(CF_UPPER_WINDOW_CAP))).toBe('cf-unmeasured-upper-segment-whole-product')
       // A non-default variant keeps the withhold.

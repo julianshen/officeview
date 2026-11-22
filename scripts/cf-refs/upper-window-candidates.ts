@@ -31,7 +31,8 @@
  *   floor steps. This covers every PERCENTILE or percent arithmetic whose result lands within two ulps of production's.
  * Nothing here is registered or reachable from production (brief hard rule).
  *
- * Run: `npx tsx scripts/cf-refs/upper-window-candidates.ts` (docs/validation/xlsx-cf-recipes-stage2.md §10.1);
+ * Run: `npx tsx scripts/cf-refs/upper-window-candidates.ts` (every capture, stage2-scale-upper-window included: recipe §10.6);
+ * `--pre-capture` leaves that capture out and prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §10.1;
  * `--write-predictions` writes docs/validation/xlsx-cf-upper-window-predictions.md from the catalogue (§10.3).
  */
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -236,11 +237,17 @@ export function windowCensus(cells: readonly SegmentCell[]): WindowCensusRow[] {
   })
 }
 
-export async function upperWindowCells(rootDir: string = REPO_ROOT): Promise<SegmentCell[]> {
+/**
+ * The capture that followed this search (stage2-scale-upper-window, ed0fccb6): `{ include: 'pre-capture' }` leaves it out,
+ * reproducing the numbers of recipe §10.1 as they were when the case was designed; the default includes it (recipe §10.6).
+ */
+export const UPPER_WINDOW_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WINDOW_ID]
+
+export async function upperWindowCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, faults } = await collectSegmentCells(manifest, rootDir, { include: 'all' })
   if (faults.length > 0) throw new Error(`upper-window: harness faults ${faults.join('; ')}`)
-  return cells
+  return (opts.include ?? 'all') === 'all' ? cells : cells.filter(c => !UPPER_WINDOW_POST_CAPTURE_CASES.includes(c.caseId))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -310,7 +317,7 @@ function writePredictions(): void {
 
 async function main(): Promise<void> {
   if (process.argv.includes('--write-predictions')) { writePredictions(); return }
-  const cells = await upperWindowCells()
+  const cells = await upperWindowCells(undefined, { include: process.argv.includes('--pre-capture') ? 'pre-capture' : 'all' })
   const short = (k: string): string => k.replace(/^stage\d-(scale-)?/, '')
   const census = windowCensus(cells)
   console.log(`## Census\n\n${cells.length} captured colour-scale cells; ${cells.filter(c => integerShape(c.segment)).length} in the integer shape (not scored); ${scoredCells(cells).length} scored.\n`)

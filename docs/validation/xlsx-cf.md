@@ -3251,7 +3251,7 @@ Both stages recompute the justification independently of production (`scripts/cf
 - **R3:** confirm d-independence at d = 1..8 (for example d = 3, 5, 7 at 1/3, 1/5, 1/7).
 - **R4:** measure the widened window directly: a statistical-bound 3-colour scale with decimal thresholds whose exact product is whole and whose double product is not (F12-like, thresholds 0.4 / 1). Production now withholds it; the capture would say whether E4-like cells there stay at truncation.
 
-### 14.z.17 The upper-segment window follow-up: captured, no reading matched, and a published mispaint found (2026-11-22)
+### 14.z.17 The upper-segment window follow-up: captured, no reading matched; a published mispaint found and withheld (2026-11-22)
 
 **Why.** §14.z.16's window withhold of statistical-bound 3-colour upper-segment cells was unmeasured: only E4 and its replica D19 had been captured, both at guarded truncation. `stage2-scale-upper-window` pre-registered two readings for that class, `guarded` (floor(f·d + 1e-11)) and `raw-floor` (floor(f·d)). Their production behaviour was committed before the capture (1f64662d) and left unregistered. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §10. Interpretation: `.superpowers/sdd/cf-upperwindow/phase2-interpretation.md`.
 
@@ -3306,24 +3306,38 @@ Both stages recompute the justification independently of production (`scripts/cf
   - 9 unformatted, agreeing;
   - 56 justified withholds;
   - **14 wrong**.
+- **Before the ruling:** `cf-compare --stage 2` failed `stage2-scale-upper-window` in both modes (first at A3), and six test files were red.
+
+**Owner ruling (2026-11-22): withhold the guard-boundary shape.** Production now withholds an interior cell (lo < v < hi) of a 2-colour scale, or of a 3-colour **lower** segment after the midpoint-above-max re-sort, when some ARGB channel with d ≠ 0 has floor(p + `CF_TRUNCATION_GUARD`) ≠ floor(p).
+- p = f·|d| is computed exactly as production paints: the `safeFraction` double, then the one IEEE multiplication `interpolateChannel` performs. So the shape is exactly where guarded truncation and raw floor differ.
+- **Production:** `guardBoundaryProduct` in `src/xlsx/cf/colorScale.ts`, with the new reason `cf-unmeasured-guard-boundary`.
+  - It applies to the truncating interpolation only.
+  - The literal num-segment withhold and the upper-segment rules keep their precedence.
+- **Justification:** `guardBoundaryShapeAt` / `independentGuardBoundary` in `scripts/cf-refs/upper-whole-justify.ts`.
+  - It is recomputed from the marker and the sheet without importing production, and its guard is pinned equal to production's.
+  - It is wired into Stage 2 (`stage2GuardBoundaryShape`: cf-compare and the shared conformance pass) and Stage 5 (`stage5JustifiedRefusals` with sheet cells).
+- **Tests:** `tests/xlsx-cf-scale-guard-boundary.test.ts`.
+  - The 14 cells are withheld and justified.
+  - These negative mutations refuse: a cell just above an integer, an exact-integer product, a product 1e-9 below, k = 0, a changed value and a moved threshold.
+  - The reach is pinned.
+- **Reach:**
+
+| Case | Before | After | Newly withheld | Painted exactly before | Painted wrong before |
+|---|---|---|---|---|---|
+| `stage2-scale-upper-window` | 0 | 14 | A3, A4, D2, D4, E7..E10, E12..E14, H8, H18, I5 | 0 | 14 |
+| every other measured case (Stage 2 and Stage 5) | 0 | 0 | — | 0 | 0 |
+
+- **The alternative not taken:** the full window on both sides. It would also have cost the 6 above-integer cells, all exact.
+- **Not registrable:** raw floor for these shapes (W1) was never pre-registered, so it needs its own case. Nothing is painted in its place.
 - **Effect on the passes:**
-  - `cf-compare --stage 2` fails `stage2-scale-upper-window` in both modes (first at A3);
-  - `tests/xlsx-cf-scale-upper-window-case.test.ts` and `-candidates.test.ts` fail;
-  - the conformance pass does not yet include the case.
-
-**Proposed, not implemented (owner decision).**
-- **The withhold:** an interior cell of a 2-colour scale, or of a 3-colour lower segment, where some channel's product p = f·|d| satisfies floor(p + 1e-11) ≠ floor(p).
-  - This is exactly where guarded truncation and raw floor differ.
-  - It would get a new reason code, an independent mirror in the justification, and the literal num-segment precedence kept.
-- **Its reach:**
-
-| Case | Newly withheld | Painted exactly before | Painted wrong before |
-|---|---|---|---|
-| `stage2-scale-upper-window` | 14 | 0 | 14 |
-| every other measured case (Stage 2 and Stage 5) | 0 | 0 | 0 |
-
-- **Alternative:** withhold the full window on both sides. That also costs the 6 above-integer cells, all exact today.
-- **Not registrable:** raw floor for these shapes was never pre-registered, so it needs its own case.
+  - The case joins `STAGE2_MEASURED_CASES`. The Stage 2 conformance pass reports 1109 cells: 761 exact and 348 withheld (254 num-segment, 50 upper whole product, 14 guard-boundary), with 0 violations.
+  - `cf-compare --stage 2` passes paged and interactive; the only failures are the two clock-dependent `stage1-timeperiod` interactive cases.
+  - Both audits are ok and complete. The Stage 5 records are unchanged (0 disagreeing).
+  - No capability changed, so nothing was republished.
+- **The candidate harnesses:**
+  - `collectSegmentCells` counts a withheld guard-boundary cell as a scored cell, as it does the upper-segment one.
+  - The num-segment search set and the upper-whole search stay recorded as of their own captures.
+  - The upper-window search is pinned both pre-capture (§10.1) and with this capture (1235 cells; 0 survivors at every scope; the best misses the 14 guard-boundary cells plus 7).
 
 **Hypotheses for a future pre-registered case** (none registrable from this capture):
 - **W1:** lower segments and 2-colour scales use raw floor, floor(f·d). That is exact on every captured lower or 2-colour cell.
