@@ -1,6 +1,6 @@
 /** Render worker (§9.2): one DocumentHost per Bun Worker; one job at a time. */
 import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
-import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
+import { DocumentHost, PaintablesUnbuilt, RenderRefusal, type MarkSpec, type NotesJob, type Projection, type SheetMode } from '../render'
 import type { FfmpegInfo } from '../media/ffmpeg'
 import type { ProbeKillRequest, ProbeRunReply, ProbeRunRequest } from '../media/probe-host'
 import type { ProbeRunner, ProbeRunResult } from '../media/probe'
@@ -24,7 +24,7 @@ export type WorkerRequest =
   /** Piece 5 (D21): the projected part written 0600 into `dir` (the media dir) as `name` (the pool's choice, so it can
    * delete the file if no reply comes); the caller adopts it. */
   | { type: 'media-part'; id: number; docKey: string; partPath: string; dir: string; name?: string }
-  | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full'; servedCacheBytes?: number }
+  | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full'; servedCacheBytes?: number; /** Stage 4a (R5): absent = `'units'`. */ sheetMode?: SheetMode }
   | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
   | { type: 'drop'; id: number; docKey: string }
   /** Stage 3c notes job: plan or draw unit i's notes image. */
@@ -68,6 +68,15 @@ function probeAnswered(r: ProbeRunReply): void {
   probes.delete(r.id)
   if (r.ok) p.ok(r.result); else p.fail(new Error(`probe: ${r.error}`))
 }
+/** A units path (R5): run it; if the entry's paintables are not built yet (a tiles-mode open), build them once and
+ * run again. The job's own checks run first, so a refused job never builds. */
+async function unitsPath<T>(docKey: string, run: () => T): Promise<T> {
+  try { return run() } catch (e) {
+    if (!(e instanceof PaintablesUnbuilt)) throw e
+    await host.ensurePaintables(docKey)
+    return run()
+  }
+}
 const stats = (): WorkerStats => ({ parses: host.parses, pages: host.pages, docs: host.docCount, probes: host.mediaProbes })
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
@@ -84,10 +93,10 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     }
     else if (m.type === 'media-refs') result = await host.mediaRefs(m.docKey, m.unit)
     else if (m.type === 'media-part') result = await host.mediaPart(m.docKey, m.partPath, m.dir, m.name)
-    else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy) }
+    else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy, m.sheetMode ? { sheetMode: m.sheetMode } : {}) }
     else if (m.type === 'drop') { host.drop(m.docKey); result = null }
     // A prepare without a grant is refused (grant 0) — the pool always sends one.
-    else if (m.type === 'text') result = host.text(m.docKey, m.job, m.grant ?? 0)
+    else if (m.type === 'text') result = await unitsPath(m.docKey, () => host.text(m.docKey, m.job, m.grant ?? 0))
     else if (m.type === 'notes') result = await host.notes(m.docKey, m)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
@@ -99,7 +108,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         : m.type === 'show-plan' ? await host.showPlan(m.docKey, m.job, m.grant)
         : m.type === 'show-track' ? await host.showTrack(m.docKey, m.job, m.grant)
         : m.type === 'show-morph' ? await host.showMorph(m.docKey, m.job, m.grant)
-        : host.render(m.docKey, m)
+        : await unitsPath(m.docKey, () => host.render(m.docKey, m))
     }
     const transfer: ArrayBuffer[] = []
     const r = result as { png?: Uint8Array; ops?: Uint8Array } | null

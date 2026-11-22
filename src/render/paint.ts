@@ -147,12 +147,16 @@ export function sheetPaintable(sheet: XlsxSheet, assets: RenderSheetAssets, wate
   const m = computeMetrics(sheet)
   if (m.exportLimits?.length) return refusalPaintable(sheet, m.exportLimits, watermark)
   return {
-    spec: { widthPx: m.widthPx, heightPx: m.heightPx },
+    spec: staticSpecOf(m),
     paint: (ctx) => renderSheet(sheet, ctx, m, watermark, assets),
   }
 }
 
 const REFUSAL_SPEC: PageSpec = { widthPx: 480, heightPx: 96 }
+const staticSpecOf = (m: ReturnType<typeof computeMetrics>): PageSpec => m.exportLimits?.length ? { ...REFUSAL_SPEC } : { widthPx: m.widthPx, heightPx: m.heightPx }
+/** @internal A static sheet unit's size without building it (the stream server's tiles mode): the `computeMetrics`
+ * size, or the refusal unit's when the sheet is too large to export. Pure: it records no diagnostic. */
+export function staticSheetSpec(sheet: XlsxSheet): PageSpec { return staticSpecOf(computeMetrics(sheet)) }
 export const LARGE_EXPORT_MESSAGE = 'This sheet is too large to export as one image. Choose a range or print selected pages.'
 /** A static unit that explains the refusal instead of painting a truncated grid. */
 function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[], watermark?: ResolvedWatermark): Paintable {

@@ -14,7 +14,8 @@ import { OfficePackage } from '../../src/core/zip'
 import type { WatermarkOptions } from '../../src/core/watermark'
 import { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec } from './mark/visible'
 import { detectAndParse } from '../../src/components/loadOfficeSource'
-import { getPaintables, type PaintableArray } from '../../src/render/paint'
+import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
+import type { XlsxDocument } from '../../src/xlsx/types'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
 import type { Asset } from '../../src/stream/ops'
 import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
@@ -99,7 +100,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse, retained for the tile paths. */ parsed?: XlsxDocument; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -115,7 +116,12 @@ export type NotesRaster = RenderedUnit & { kind: 'raster'; truncated: boolean; c
  * `morph` (Task 7): the shown units entered by a Morph transition (a `show-morph` names one as its `to`). */
 /** `media` (piece 5, D19): the shown units whose plan ships an audio record or a transition sound (structural: from
  * the slide's metadata and package, no probe), so the manifest marks them `media` and a show asks for their plan. */
-export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; media: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; media: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; /** 0 until the paintables exist (a tiles-mode XLSX open builds none). */ fontDiagnostics: number; /** XLSX: the projected (visible) sheet names in tab order. */ sheets?: readonly string[] }
+/** Stage 4a (R5): how an XLSX open treats its static per-sheet units. `units` builds them at open (today);
+ * `tiles` builds none, sizing the units from `staticSheetSpec`, and the first units use builds them. */
+export type SheetMode = 'units' | 'tiles'
+/** A units path reached an entry whose paintables are not built yet: `ensurePaintables` first, then retry. */
+export class PaintablesUnbuilt extends Error { constructor() { super('paintables not built'); this.name = 'PaintablesUnbuilt' } }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -174,11 +180,14 @@ export class DocumentHost {
   private served: ServedCache
   parses = 0
   pages = 0
+  /** TEST-visible: static paintable sets built (an eager open's, or a lazy build's). */
+  paintablesBuilt = 0
   /** Reads a 'full' deck's hidden units after its paintables exist (TEST-ONLY override: fault injection). */
   hiddenReader: (doc: PptxDocument, paintables: PaintableArray) => Promise<number[]> = (doc, paintables) => hiddenUnits(doc, paintables.length)
   constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(gateBackend(backend)); this.served = new ServedCache(servedCacheBytes) }
 
-  async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
+  async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full', o: { sheetMode?: SheetMode } = {}): Promise<OpenResult> {
+    const sheetMode = o.sheetMode ?? 'units'
     const contentPolicyId = contentPolicy === 'full' ? 'full@1' : 'visible-only@1'
     const fingerprint = layoutFingerprint(contentPolicyId)
     const key = `${docRef}|${contentPolicyId}|${fingerprint}`
@@ -189,23 +198,27 @@ export class DocumentHost {
       const original = await OfficePackage.load(bytes)
       const projected = await projectPackage(original, admitted.format, contentPolicy)
       const parsed = await detectAndParse(projected.pkg)
-      const paintables = await getPaintables(parsed, { registerFont })
+      // R5: a tiles-mode XLSX open builds no paintables; its units are sized from the sheet metrics alone.
+      const lazy = admitted.format === 'xlsx' && sheetMode === 'tiles'
+      const xlsx = admitted.format === 'xlsx' ? parsed as XlsxDocument : undefined
+      const paintables = lazy ? undefined : await getPaintables(parsed, { registerFont })
       this.parses++
-      const raw = paintables.map((p) => ({ widthPx: p.spec.widthPx, heightPx: p.spec.heightPx }))
+      if (paintables) this.paintablesBuilt++
+      const raw = paintables ? paintables.map((p) => ({ widthPx: p.spec.widthPx, heightPx: p.spec.heightPx })) : xlsx!.sheets.map(staticSheetSpec)
       let hidden: number[] = []
       // The lease is ours until the doc is cached: a refusal here must release it.
       if (contentPolicy === 'full' && admitted.format === 'pptx') {
-        try { hidden = await this.hiddenReader(parsed as PptxDocument, paintables) } catch (e) { paintables.dispose(); throw e }
+        try { hidden = await this.hiddenReader(parsed as PptxDocument, paintables!) } catch (e) { paintables!.dispose(); throw e }
       }
       // Projected slide parts keep their original paths; a list that does not line up with the units serves no notes.
       const handle = admitted.format === 'pptx' ? pptxPackageHandle(parsed as PptxDocument) : undefined
-      const notes = handle && handle.slideParts.length === paintables.length ? { pkg: original, slideParts: [...handle.slideParts] } : undefined
+      const notes = handle && handle.slideParts.length === raw.length ? { pkg: original, slideParts: [...handle.slideParts] } : undefined
       // Projection read every original entry through the cache: the retained package keeps the archive, not those reads.
       original.dropCache()
       const units = raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) }))
       let show: ShowDoc | undefined
       const anim: number[] = [], morph: number[] = [], mediaUnits: number[] = []
-      if (handle && handle.slideParts.length === paintables.length) {
+      if (handle && handle.slideParts.length === raw.length) {
         try {
           show = await openShow(docRef, key, projected.contentPolicyId, fingerprint, parsed as PptxDocument, handle, units, hidden)
           for (let i = 0; i < units.length; i++) {
@@ -233,27 +246,57 @@ export class DocumentHost {
           mediaUnits.length = 0
         }
       }
-      const opened = { key, docRef, paintables, raw, hidden, anim, morph, mediaUnits, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
+      const opened = { key, docRef, ...(paintables ? { paintables } : {}), ...(xlsx ? { parsed: xlsx, sheets: Object.freeze(xlsx.sheets.map((s) => s.name)) } : {}), raw, hidden, anim, morph, mediaUnits, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
       opened.media = this.mediaTableFor(opened)
       if (show) show.media = opened.media
       doc = opened
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    // A units-mode open stays eager (R5), also when it joins an entry a tiles open created.
+    if (sheetMode === 'units') await this.buildPaintables(doc)
+    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables?.fontDiagnostics?.length ?? 0, ...(doc.sheets ? { sheets: [...doc.sheets] } : {}) }
+  }
+
+  /** Builds the entry's static paintables if a tiles-mode open left them out (R5); every units path awaits this first. */
+  async ensurePaintables(docKey: string): Promise<void> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    await this.buildPaintables(doc)
+  }
+
+  /** The entry's single build: concurrent first uses share one promise; a failed build is retried by the next use.
+   * A build that settles after its entry was dropped disposes what it built. */
+  private buildPaintables(doc: OpenDoc): Promise<PaintableArray> {
+    if (doc.paintables) return Promise.resolve(doc.paintables)
+    doc.paintablesBuild ??= getPaintables(doc.parsed!, { registerFont }).then((p) => {
+      this.paintablesBuilt++
+      doc.paintablesBuild = undefined
+      if (this.docs.get(doc.key) !== doc) { p.dispose(); throw new RenderRefusal('unknown-doc') }
+      doc.paintables = p
+      return p
+    }, (e: unknown) => { doc.paintablesBuild = undefined; throw e })
+    return doc.paintablesBuild
+  }
+
+  /** The static paintables every units path paints from (synchronous: `ensurePaintables` builds them). */
+  private paintablesOf(doc: OpenDoc): PaintableArray {
+    if (!doc.paintables) throw new PaintablesUnbuilt()
+    return doc.paintables
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
-  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { this.droppedProbes += d.media.probes; d.paintables.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
+  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { this.droppedProbes += d.media.probes; d.paintables?.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
   get docCount() { return this.docs.size }
 
   render(docKey: string, job: { unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: readonly string[] }, observers: readonly PaintObserver[] = []): RenderedUnit {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
-    if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.paintables.length) throw new RenderRefusal('unit-range')
+    if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.units.length) throw new RenderRefusal('unit-range')
     if (!(SCALE_BUCKETS as readonly number[]).includes(job.scale)) throw new RenderRefusal('scale')
-    const r = doc.raw[job.unitIndex]!, paintable = doc.paintables[job.unitIndex]!
+    const r = doc.raw[job.unitIndex]!
     const w = sizeCeil(Math.max(1, r.widthPx * job.scale)), h = sizeCeil(Math.max(1, r.heightPx * job.scale))
     if (!unitSurfaceAllowed(w, h)) throw new RenderRefusal('oversize')
+    const paintable = this.paintablesOf(doc)[job.unitIndex]!
     const page = { widthPx: r.widthPx, heightPx: r.heightPx }
     const mark = markOptions(job.mark)
     this.pages++
@@ -476,14 +519,14 @@ export class DocumentHost {
     if (!job || typeof job !== 'object') throw new RenderRefusal('bad-job')
     if (job.op === 'prepare') {
       const u = job.unit
-      if (!Number.isInteger(u) || u < 0 || u >= doc.paintables.length) throw new RenderRefusal('unit-range')
+      if (!Number.isInteger(u) || u < 0 || u >= doc.units.length) throw new RenderRefusal('unit-range')
       const unit = this.served.get(docKey, u) ?? this.prepare(doc, u, grant)
       this.served.put(docKey, u, unit)
       return { op: 'prepare', served: unit.served, withheld: unit.withheld, bytes: unit.bytes, causes: { ...unit.causes, occluded: { ...unit.causes.occluded } } }
     }
     if (!['search', 'select', 'copy', 'a11y'].includes(job.op)) throw new RenderRefusal('bad-job')
     try {
-      return answerText(job, doc.paintables.length, (u) => this.served.get(docKey, u))
+      return answerText(job, doc.units.length, (u) => this.served.get(docKey, u))
     } catch (err) {
       if (err instanceof TextRefusal) throw new RenderRefusal(err.code)
       throw err
@@ -497,10 +540,11 @@ export class DocumentHost {
   setServedCacheBytes(limit: number): void { this.served.limit = limit }
 
   private prepare(doc: OpenDoc, index: number, grant: number): ServedUnit {
-    const r = doc.raw[index]!, paintable = doc.paintables[index]!
+    const r = doc.raw[index]!
     const w = sizeCeil(Math.max(1, r.widthPx)), h = sizeCeil(Math.max(1, r.heightPx))
     if (!unitSurfaceAllowed(w, h)) throw new RenderRefusal('oversize')
     if (!(prepareWorkspace(w, h) <= grant)) throw new RenderRefusal('grant', `prepare needs ${prepareWorkspace(w, h)} bytes, granted ${grant}`)
+    const paintable = this.paintablesOf(doc)[index]!
     // Bounded text work: running caps on recorded spans and on the visual
     // pass's observer records, both inside TEXT_PREPARE_ALLOWANCE.
     let spans

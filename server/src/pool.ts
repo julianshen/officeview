@@ -17,7 +17,7 @@ import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-r
 import { SHOW_BUILD_BYTES, showRequestBytes } from './show/grant'
 import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
 import type { BuiltMorph, MorphJob } from './show/morph'
-import type { MarkSpec, MediaUnitRefs, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
+import type { MarkSpec, MediaUnitRefs, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit, SheetMode } from './render'
 import type { FfmpegInfo } from './media/ffmpeg'
 import { PROBE_DECK_MS, PROBE_PART_MS } from './media/probe'
 import { createWorkerProbes, type ProbeKillRequest, type ProbeRunRequest, type WorkerProbes } from './media/probe-host'
@@ -300,12 +300,14 @@ export class Pool {
   }
 
   /** Opens (parses) under its own deadline; a wedged parse retires the worker. */
-  private async ensureOpen(slot: Slot, docRef: string, policy: 'visible-only' | 'full', force = false): Promise<{ docKey: string; open?: OpenResult }> {
+  /** `sheetMode`: a re-open (after a worker recycle) is `'tiles'`: an XLSX entry's paintables come back lazily on its
+   * first units use (R5). Only `open` passes the caller's mode. */
+  private async ensureOpen(slot: Slot, docRef: string, policy: 'visible-only' | 'full', force = false, sheetMode: SheetMode = 'tiles'): Promise<{ docKey: string; open?: OpenResult }> {
     const k = `${docRef}|${policy}`, docKey = slot.docs.get(k)
     if (docKey && !force) return { docKey }
     const bytes = this.sources.get(docRef)
     if (!bytes) throw new RenderFailed('document not registered')
-    const reply = await this.post(slot, { type: 'open', id: this.nextId++, docRef, bytes, contentPolicy: policy, ...(this.servedCacheBytes !== undefined ? { servedCacheBytes: this.servedCacheBytes } : {}) }, this.openDeadlineMs)
+    const reply = await this.post(slot, { type: 'open', id: this.nextId++, docRef, bytes, contentPolicy: policy, sheetMode, ...(this.servedCacheBytes !== undefined ? { servedCacheBytes: this.servedCacheBytes } : {}) }, this.openDeadlineMs)
     if (reply === 'timeout') { await this.replace(slot); this.retired++; throw new RenderTimeout() }
     if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
     const open = reply.result as OpenResult
@@ -315,12 +317,12 @@ export class Pool {
   }
 
   /** Registers the bytes and parses on the docRef's worker. */
-  async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
+  async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full', o: { sheetMode?: SheetMode } = {}): Promise<OpenResult> {
     if (this.disposed) throw new RenderFailed('pool disposed')
     this.sources.set(docRef, bytes)
     this.dropShowRefusals(docRef)
     const slot = this.pick(docRef)
-    return this.exclusive(slot, async () => (await this.ensureOpen(slot, docRef, contentPolicy, true)).open!)
+    return this.exclusive(slot, async () => (await this.ensureOpen(slot, docRef, contentPolicy, true, o.sheetMode ?? 'units')).open!)
   }
 
   /** Admits, waits for the worker, renders under the deadline. Every exit
