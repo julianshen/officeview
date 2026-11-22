@@ -5599,6 +5599,21 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     }
   })
 
+  it('a single-cell sqref written as a range matches its collapsed form: Excel 16.115 resaves G14:G14 as G14', () => {
+    // stage2-scale-upper-window.rejected.xlsx: the authored sqref "G14:G14" came back as "G14", the same cell; other cells refuse.
+    const sheetXml = (sqref: string): Map<string, Uint8Array> => new Map([['xl/worksheets/sheet1.xml', new TextEncoder().encode(
+      `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><conditionalFormatting sqref="${sqref}"><cfRule type="colorScale" priority="16"><colorScale><cfvo type="num" val="1"/><cfvo type="num" val="2.2"/><cfvo type="num" val="10"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting></worksheet>`)]])
+    const marker: CfPartMarker = { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId: 'scale:upper-window-literal', sqref: 'G14:G14', ruleType: 'colorScale', priority: 16, formulas: [], scale: { cfvo: [{ type: 'num', val: '1' }, { type: 'num', val: '2.2' }, { type: 'num', val: '10' }], colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] } }
+    const ok = (sqref: string, m: CfPartMarker = marker): boolean => verifyMarkerInArchive(sheetXml(sqref), m).ok
+    expect(ok('G14:G14')).toBe(true)
+    expect(ok('G14'), 'collapsed single cell').toBe(true)
+    expect(ok('G14', { ...marker, sqref: 'G14' })).toBe(true)
+    expect(ok('G14:G14', { ...marker, sqref: 'G14' }), 'either direction').toBe(true)
+    expect(ok('G15'), 'another cell').toBe(false)
+    expect(ok('G14:G15'), 'a real range').toBe(false)
+    expect(ok('G14:H14'), 'a real row range').toBe(false)
+  })
+
   it('scale literal cfvo val compares by double, not text: Excel 16.115 resaves 2.2 as 2.2000000000000002', () => {
     // stage2-scale-upper-whole.rejected.xlsx: Excel rewrote <cfvo type="num" val="2.2"/> as val="2.2000000000000002"
     // (the same IEEE double) and kept 0.1, 0.4, 0.7, 1.3 verbatim. The rule is unchanged; a different double still refuses.

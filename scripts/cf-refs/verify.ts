@@ -60,7 +60,12 @@ const textOf = (node: unknown): string | undefined => {
   return undefined
 }
 
-const normalizeSqref = (s: string | undefined): string => (s ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
+// A degenerate range "G14:G14" is the cell "G14": Excel 16.115 resaves it collapsed (stage2-scale-upper-window.rejected.xlsx).
+const normalizeSqref = (s: string | undefined): string =>
+  (s ?? '').trim().replace(/\s+/g, ' ').toUpperCase().split(' ').map(r => {
+    const [a, b, ...rest] = r.split(':')
+    return rest.length === 0 && b !== undefined && a === b ? a! : r
+  }).join(' ')
 const normalizeSqrefRaw = normalizeSqref
 
 /**
