@@ -4,6 +4,8 @@
 
 **Date:** 2026-10-10. **Status (2026-10-16):** runtime packages merged through `fb0ddc7` (tree 7effb20, identical to the benchmarked `9cfb090`). Desktop Chrome release benchmark ADMITTED (13/13 rows) and Chromium/WebKit browser suite 70 passed / 8 skipped on that tree; mobile/physical-device, Safari and VoiceOver final-tree checks remain not-run or deferred by user decision. Checkbox reconciliation below is the reviewed docs follow-up.
 
+**Latest record (2026-11-05):** the viewer lifecycle reconciliation (provider ownership retained until cancelled providers drain), merged to main through PR #59 (`151bc898`), is recorded with its validation receipts in [`../../validation/interactive-viewer-lifecycle-2026-11-05.md`](../../validation/interactive-viewer-lifecycle-2026-11-05.md). The 2026-10-16 status above is historical.
+
 **Specification:** [`../specs/2026-10-10-interactive-viewer.md`](../specs/2026-10-10-interactive-viewer.md). The specification owns behavior, limits and acceptance IDs; this plan owns decomposition, paths, test counterexamples and delivery gates. Resolve contradictions in both documents before implementing the affected package.
 
 **Goal:** Provide immutable spreadsheet viewing, navigation, selection, sort, filter, search and copy over the complete Excel coordinate domain of 1,048,576 rows × 16,384 columns, with bounded loading, memory and visible rendering work on desktop and mobile.
