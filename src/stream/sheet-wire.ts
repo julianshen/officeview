@@ -6,6 +6,9 @@
  */
 import type { AxisSizeInterval } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
+import { InvalidOperand } from './ops'
+import { decodeRasterBody, encodeRasterBody } from './raster'
+import { decodeUnit, encodeUnit } from './unit'
 
 /** The HELLO capability that selects tiles mode for an XLSX session. */
 export const SHEET_TILES_FEATURE = 'sheet-tiles@1'
@@ -23,6 +26,55 @@ export const HELLO_FEATURES_MAX = 16, HELLO_FEATURE_CHARS = 32
 /** A tiles manifest lists at most 256 sheets, each name at most 31 characters (Excel's own bound). A workbook past
  * either bound is served in units mode. */
 export const MAX_SHEETS = 256, SHEET_NAME_CHARS = 31
+
+// ---- XLSX_TILE body (S4 §6.5, R13) ----
+
+/** One `XLSX_TILE` (kind 5) body: an `encodeUnit` body with `unitId = sheetIndex` and discriminator 3, whose body is
+ * `u32 viewGen, u8 zoomStep, u8 dpr, u16 0, u32 col, u32 row`, then the `UNIT_RASTER` raster body
+ * (`u32 w, u32 h, u32 pngLen, PNG`) with `w = h = 512`. */
+export interface TileBody { sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; col: number; row: number; png: Uint8Array; w: number; h: number }
+const TILE_HEAD_BYTES = 16
+const u32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
+function tileFieldsProblem(t: { sheetIndex: unknown; viewGen: unknown; zoomStep: unknown; dpr: unknown; col: unknown; row: unknown; w: unknown; h: unknown }): string | undefined {
+  if (!u32(t.sheetIndex) || !u32(t.viewGen) || !u32(t.col) || !u32(t.row)) return 'header field'
+  if (!Number.isInteger(t.zoomStep) || (t.zoomStep as number) < 0 || (t.zoomStep as number) >= TILE_ZOOM_STEPS.length) return 'zoomStep'
+  if (t.dpr !== 1 && t.dpr !== 2) return 'dpr'
+  if (t.w !== TILE_PX || t.h !== TILE_PX) return 'tile size'
+  return undefined
+}
+
+/** Throws `InvalidOperand` for a field outside the wire contract. The PNG is not inspected (the server encodes it). */
+export function encodeTileBody(t: TileBody): Uint8Array {
+  const problem = tileFieldsProblem(t)
+  if (problem) throw new InvalidOperand(`XLSX_TILE: ${problem}`)
+  const raster = encodeRasterBody(t.w, t.h, t.png)
+  const body = new Uint8Array(TILE_HEAD_BYTES + raster.length), v = new DataView(body.buffer)
+  v.setUint32(0, t.viewGen, true); v.setUint8(4, t.zoomStep); v.setUint8(5, t.dpr); v.setUint16(6, 0, true); v.setUint32(8, t.col, true); v.setUint32(12, t.row, true)
+  body.set(raster, TILE_HEAD_BYTES)
+  return encodeUnit({ unitId: t.sheetIndex, discriminator: 3, body })
+}
+
+/** The inverse of `encodeTileBody`. Throws `InvalidOperand` for anything else: a short or malformed unit header, a
+ * discriminator other than 3, a reserved field not 0, a `zoomStep` past `TILE_ZOOM_STEPS`, a `dpr` outside {1, 2},
+ * a raster body that is not a PNG whose IHDR is 512 × 512. Reads the IHDR only (nothing is decoded). */
+export function decodeTileBody(bytes: Uint8Array): TileBody {
+  try {
+    const unit = decodeUnit(bytes)
+    if (unit.discriminator !== 3) throw new InvalidOperand('XLSX_TILE: discriminator')
+    if (unit.body.length < TILE_HEAD_BYTES) throw new InvalidOperand('XLSX_TILE: truncated')
+    const v = new DataView(unit.body.buffer, unit.body.byteOffset, unit.body.byteLength)
+    if (v.getUint16(6, true) !== 0) throw new InvalidOperand('XLSX_TILE: reserved')
+    const head = { sheetIndex: unit.unitId, viewGen: v.getUint32(0, true), zoomStep: v.getUint8(4), dpr: v.getUint8(5), col: v.getUint32(8, true), row: v.getUint32(12, true) }
+    const r = decodeRasterBody(unit.body.subarray(TILE_HEAD_BYTES), { maxRgbaBytes: TILE_PX * TILE_PX * 4 })
+    const t = { ...head, png: r.png, w: r.w, h: r.h }
+    const problem = tileFieldsProblem(t)
+    if (problem) throw new InvalidOperand(`XLSX_TILE: ${problem}`)
+    return t as TileBody
+  } catch (e) {
+    if (e instanceof InvalidOperand) throw e
+    throw new InvalidOperand(`XLSX_TILE: ${(e as Error).message}`)
+  }
+}
 
 // ---- sheet-layout (S4 §6.4, R14) ----
 

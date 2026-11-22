@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'bun:test'
-import { DocumentLedger, LruBytes, renderKey, type RenderKeyFields } from '../src/cache'
+import { describe, expect, it, test } from 'bun:test'
+import { DocumentLedger, LruBytes, renderKey, viewStateHash, type RenderKeyFields } from '../src/cache'
 
 const base: RenderKeyFields = {
   docRef: 'a'.repeat(24), contentPolicyId: 'visible-only@1', layoutFingerprint: 'f'.repeat(64), recorderVersion: 1, scaleBucket: 1,
@@ -28,6 +28,35 @@ describe('§9.3 render key', () => {
     }
     expect(keys(0)).toEqual([false, false, false, false])
     expect(keys(1)).toEqual([false, false, false, false])
+  })
+})
+
+describe('Stage 4a tile key (S4 §6.5)', () => {
+  // Printed by `renderKey` at a56fa675, before `tile` and `viewStateHash` existed: unit keys keep their hashes.
+  test('unit-key golden', () => {
+    expect(renderKey(base)).toBe('e93595d59c4d7ec3c895b4775e16e0cf525cfe494199a7991068bb4b1a5f5d03')
+    expect(renderKey({ ...base, projectionMode: 'commands', policyDetails: { projection: 'visible-only@1', missingFaces: ['carlito-bold'] }, unitId: 3, scaleBucket: 2 })).toBe('dbba2996e482a21267dcd8bea21bb2916e6dc9f235448af437c6f22a3c15392c')
+  })
+  const clock = { day: '2026-11-23', timeZone: 'UTC' }
+  const vsh = viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock })
+  const tileBase: RenderKeyFields = { ...base, scaleBucket: 1, policyDetails: { projection: 'visible-only@1', viewStateHash: vsh }, tile: { sheetIndex: 0, zoomStep: 5, dpr: 1, palette: 'light', col: 0, row: 0 } }
+  test('viewStateHash is the sha256 hex of the canonical view, clock included', () => {
+    expect(vsh).toMatch(/^[0-9a-f]{64}$/)
+    expect(viewStateHash({ clock, authorHiddenTier: 'none', sizes: [], filters: [], sort: null })).toBe(vsh)
+    expect(viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock: { ...clock, day: '2026-11-24' } })).not.toBe(vsh)
+    expect(viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock: { ...clock, timeZone: 'Europe/London' } })).not.toBe(vsh)
+  })
+  const tileVariants: Array<[string, Partial<NonNullable<RenderKeyFields['tile']>>]> = [
+    ['sheetIndex', { sheetIndex: 1 }], ['zoomStep', { zoomStep: 4 }], ['dpr', { dpr: 2 }], ['palette', { palette: 'dark' }], ['col', { col: 1 }], ['row', { row: 1 }],
+  ]
+  it.each(tileVariants)('a tile key changes when %s changes', (_n, patch) => {
+    expect(renderKey({ ...tileBase, tile: { ...tileBase.tile!, ...patch } })).not.toBe(renderKey(tileBase))
+  })
+  test('the tile field and the view-state hash are keyed', () => {
+    const { tile: _t, ...noTile } = tileBase
+    expect(renderKey(noTile)).not.toBe(renderKey(tileBase))
+    expect(renderKey({ ...tileBase, policyDetails: { projection: 'visible-only@1' } })).not.toBe(renderKey(tileBase))
+    expect(renderKey({ ...tileBase, policyDetails: { projection: 'visible-only@1', viewStateHash: 'e'.repeat(64) } })).not.toBe(renderKey(tileBase))
   })
 })
 
