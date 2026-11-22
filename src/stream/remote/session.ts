@@ -398,6 +398,8 @@ export class StreamSession {
     send: (m) => this.send(m),
     dropReassembly: (reqId) => this.reasm?.drop(reqId),
     onSent: () => this.ensureSweeper(),
+    now: () => this.now(),
+    inReassembly: (reqId) => !!this.reasm?.has(reqId),
   })
   /** Piece 5: `media-request`s by their current reqId, and those waiting for a pacing slot (oldest first). */
   private readonly mediaReqs = new Map<number, MediaReq>()
@@ -1517,7 +1519,7 @@ export class StreamSession {
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
     if (size > FRAGMENT_CAP) return this.end(new StreamSessionError('oversized-frame'), 4007, 'oversized-frame')
     // R29: any fragment for a unit send is evidence the server received it (also for an aborted request).
-    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) { const id = new DataView(data).getUint32(6, true); this.unitAnswered(id); this.mediaAnswered(id) }
+    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) { const id = new DataView(data).getUint32(6, true); this.unitAnswered(id); this.mediaAnswered(id); this.sheet.touch(id) }
     const gen = this.gen
     this.inbox = this.inbox.then(async () => {
       if (gen !== this.gen) return
@@ -1765,6 +1767,8 @@ export class StreamSession {
       for (const req of [...this.mediaReqs.values()]) {
         if (req.sent && req.start && !req.complete && now >= req.deadline && !this.reasm.has(req.reqId)) req.resolve({ refused: 'policy-refused' })
       }
+      // Stage 4a: a tile batch or layout with nothing arriving for SHEET_REPLY_MS expires (sheet-channel.ts).
+      this.sheet.sweep(now)
       if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && !this.mediaReqs.size && !this.sheet.pending && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }

@@ -8,7 +8,7 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
 import { encodeSheetLayout, encodeTileBody, TILE_PX, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { StreamSession, type SessionOptions } from '../../src/stream/remote/session'
-import { TILE_RETRY_FALLBACK_MS, TILE_RETRY_MAX_MS, type DecodedTile } from '../../src/stream/remote/sheet-channel'
+import { SHEET_REPLY_MS, TILE_RETRY_FALLBACK_MS, TILE_RETRY_MAX_MS, type DecodedTile } from '../../src/stream/remote/sheet-channel'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { openRemoteDocument } from '../../src/stream/remote/open'
 
@@ -378,4 +378,64 @@ describe('sheetLayout (S4 §6.4)', () => {
     for (const part of parts) next.text({ reqId: r2.reqId, ...part })
     expect(await p).toEqual(layout)
   })
+})
+
+describe('sheet request deadlines (fix round 1)', () => {
+  it('a stalled batch expires: its outstanding tiles are refused policy-refused', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const { p, reqId, got } = await batch(s, sock, [{ col: 0, row: 0 }, { col: 1, row: 0 }])
+    sock.frame(5, reqId, tile(0, 0))
+    await settle()
+    t = SHEET_REPLY_MS - 1
+    await settle(1100)
+    expect(s.stats()).toMatchObject({ sheetPending: 1 })
+    t = SHEET_REPLY_MS
+    await settle(1100)
+    expect(await p).toEqual({ refused: [{ col: 1, row: 0, code: 'policy-refused' }] })
+    expect(got.map(key)).toEqual(['0,0'])
+    expect(s.stats()).toMatchObject({ sheetPending: 0 })
+    // A late answer for it is dropped.
+    sock.frame(5, reqId, tile(1, 0))
+    sock.text({ reqId, type: 'tiles-done', refused: [] })
+    await settle()
+    expect(got.map(key)).toEqual(['0,0'])
+  }, 15_000)
+
+  it('a stalled layout rejects policy-refused', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const p = s.sheetLayout('0'); void p.catch(() => {})
+    await settle()
+    sock.text({ reqId: sock.of('sheet-layout')[0]!.reqId, ...encodeSheetLayout(layout)[0]! })
+    await settle()
+    t = SHEET_REPLY_MS
+    await settle(1100)
+    expect((await p.then(() => undefined, (x) => x) as StreamSessionError).code).toBe('policy-refused')
+    expect(s.stats()).toMatchObject({ sheetPending: 0 })
+  }, 15_000)
+
+  it('a slow but valid reply inside the deadline succeeds (each arrival restarts it)', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const { p, reqId, got } = await batch(s, sock, [{ col: 0, row: 0 }, { col: 1, row: 0 }])
+    t = SHEET_REPLY_MS - 1
+    await settle(1100)
+    sock.frame(5, reqId, tile(0, 0))
+    await settle()
+    // Past the first deadline, but inside the one the tile restarted.
+    t = 2 * SHEET_REPLY_MS - 2
+    await settle(1100)
+    sock.frame(5, reqId, tile(1, 0))
+    sock.text({ reqId, type: 'tiles-done', refused: [] })
+    expect(await p).toEqual({ refused: [] })
+    expect(got.map(key)).toEqual(['0,0', '1,0'])
+    // A layout answered after 4.999 s.
+    const l = s.sheetLayout('0')
+    await settle()
+    t += SHEET_REPLY_MS - 1
+    await settle(1100)
+    for (const part of encodeSheetLayout(layout)) sock.text({ reqId: sock.of('sheet-layout')[0]!.reqId, ...part })
+    expect(await l).toEqual(layout)
+  }, 20_000)
 })

@@ -15,6 +15,7 @@
  */
 import type { Manifest } from '../manifest'
 import { decodeSheetLayout, decodeTileBody, LAYOUT_LIMITS, LAYOUT_PART_BYTES, TILE_BATCH_MAX, TILE_PALETTES, TILE_ZOOM_STEPS, type StreamSheetLayout, type TilePalette } from '../sheet-wire'
+import { REASSEMBLY_MS } from '../frame'
 import { StreamSessionError, type StreamErrorCode } from './errors'
 import { utf8Bytes } from './text-wire'
 
@@ -28,6 +29,13 @@ export interface TilesResult { refused: Array<TileCoord & { code: string }>; ret
 export const TILE_RETRY_FALLBACK_MS = 1_000
 /** A server's `retryAfterMs` is clamped to the `'tile'` rate window (R4: 600 per 10 s). */
 export const TILE_RETRY_MAX_MS = 10_000
+/**
+ * A sent request with nothing in reassembly for it fails when nothing for it has arrived for this long (`now()`):
+ * the notes deadline (REASSEMBLY_MS, 5 s), restarted by every fragment or text message for it. Far above the ≈ 1 s a
+ * tile or layout job may take after a worker recycle. On expiry a batch's outstanding tiles are refused
+ * `policy-refused` (the notes timeout's code) and a layout rejects `policy-refused`.
+ */
+export const SHEET_REPLY_MS = REASSEMBLY_MS
 /** A refusal code longer than this is not one (it is reported `policy-refused`). */
 const CODE_CHARS = 32
 /** The layout refusals that reject with their own code; any other is `policy-refused`. */
@@ -46,6 +54,10 @@ export interface SheetChannelHost {
   dropReassembly(reqId: number): void
   /** A request went out (the session's reassembly sweeper runs while any is pending). */
   onSent(): void
+  /** The session's monotonic ms clock. */
+  now(): number
+  /** A message for `reqId` is partly reassembled (the reassembler's own timeout covers it). */
+  inReassembly(reqId: number): boolean
 }
 
 interface Batch {
@@ -55,6 +67,8 @@ interface Batch {
   /** Sent on the current socket (false while it waits out a resume). */
   sent: boolean
   rotatedRetry: boolean
+  /** While sent, it fails at this time (`now()`) unless something for it arrives (SHEET_REPLY_MS). */
+  deadline: number
   /** The coordinates not yet delivered, in request order. */
   readonly pending: Map<string, TileCoord>
   readonly onTile: (t: DecodedTile) => void
@@ -66,6 +80,7 @@ interface LayoutReq {
   reqId: number
   sent: boolean
   rotatedRetry: boolean
+  deadline: number
   /** The current issue's parts, in arrival order. */
   parts: unknown[]
   resolve: (l: StreamSheetLayout) => void
@@ -113,7 +128,7 @@ export class SheetChannel {
       }
       const onAbort = () => req.fail(signal!.reason ?? abortError())
       const req: LayoutReq = {
-        sheetId, reqId: 0, sent: false, rotatedRetry: false, parts: [],
+        sheetId, reqId: 0, sent: false, rotatedRetry: false, deadline: 0, parts: [],
         resolve: (l) => settle(() => resolve(l)),
         fail: (e) => settle(() => reject(e)),
       }
@@ -159,7 +174,7 @@ export class SheetChannel {
       }
       const b: Batch = {
         req: { sheetId: r.sheetId, viewGen: r.viewGen, zoomStep: r.zoomStep, dpr: r.dpr, palette: r.palette },
-        sheetIndex: Number(r.sheetId), reqId: 0, sent: false, rotatedRetry: false, pending, onTile,
+        sheetIndex: Number(r.sheetId), reqId: 0, sent: false, rotatedRetry: false, deadline: 0, pending, onTile,
         finish: (x) => settle(() => resolve(x)),
         fail: (e) => settle(() => reject(e)),
       }
@@ -190,10 +205,27 @@ export class SheetChannel {
   onText(m: Record<string, unknown>, data: string): boolean {
     if (!u32(m.reqId)) return false
     const b = this.batches.get(m.reqId)
-    if (b?.sent) { this.onBatchText(b, m, data); return true }
+    if (b?.sent) { this.touch(m.reqId); this.onBatchText(b, m, data); return true }
     const l = this.layouts.get(m.reqId)
-    if (l?.sent) { this.onLayoutText(l, m, data); return true }
+    if (l?.sent) { this.touch(m.reqId); this.onLayoutText(l, m, data); return true }
     return false
+  }
+
+  /** Something for `reqId` arrived (a fragment or a text message): a live request's deadline restarts. */
+  touch(reqId: number): void {
+    const r = this.batches.get(reqId) ?? this.layouts.get(reqId)
+    if (r?.sent) r.deadline = this.host.now() + SHEET_REPLY_MS
+  }
+
+  /** The sweeper's tick: a sent request past its deadline with nothing in reassembly expires. */
+  sweep(now: number): void {
+    for (const b of [...this.batches.values()]) {
+      if (!b.sent || now < b.deadline || this.host.inReassembly(b.reqId)) continue
+      b.finish({ refused: [...b.pending.values()].map((t) => ({ col: t.col, row: t.row, code: 'policy-refused' })) })
+    }
+    for (const l of [...this.layouts.values()]) {
+      if (l.sent && now >= l.deadline && !this.host.inReassembly(l.reqId)) l.fail(new StreamSessionError('policy-refused', 'the sheet-layout request timed out'))
+    }
   }
 
   /** The socket dropped: nothing in flight is live on it any more (a resume re-sends). */
@@ -230,6 +262,7 @@ export class SheetChannel {
       this.host.send({ reqId: b.reqId, type: 'tiles', token: this.host.token(), ...b.req, tiles: [...b.pending.values()].map((t) => ({ col: t.col, row: t.row })) })
     } catch { return b.fail(new StreamSessionError('policy-refused', 'the tiles request could not be sent')) }
     b.sent = true
+    b.deadline = this.host.now() + SHEET_REPLY_MS
     this.host.onSent()
   }
 
@@ -242,6 +275,8 @@ export class SheetChannel {
       this.host.send({ reqId: l.reqId, type: 'sheet-layout', token: this.host.token(), sheetId: l.sheetId })
     } catch { return l.fail(new StreamSessionError('policy-refused', 'the sheet-layout request could not be sent')) }
     l.sent = true
+    l.deadline = this.host.now() + SHEET_REPLY_MS
+    this.host.onSent()
   }
 
   /** A batch's whole-request refusal or its `tiles-done`. Any other message for it is ignored. */
