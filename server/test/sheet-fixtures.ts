@@ -367,3 +367,47 @@ export async function savedFormula(): Promise<Uint8Array> {
 export async function plainSeven(): Promise<Uint8Array> {
   return sheetWorkbook([{ r: 1, cells: [{ ref: 'A1', v: 7 }] }], [])
 }
+
+/** `frozenMerges` (Task 6, F6): its merges, as authored. */
+export const FROZEN_MERGES = Object.freeze(['A5:C6', 'D10:E20', 'B30:B31', 'H2:J2'])
+/**
+ * Task 6 (F6): frozen panes (2 columns, 3 rows; scrolling pane from C4) plus FROZEN_MERGES on sheet `S`, with
+ * authored sizes on both axes: columns B:C are 20 characters wide and rows 7 and 25 are 30 pt high. A1:A40 hold
+ * numbers so the used range is A1:A40 (J2 is inside a merge, not a cell).
+ */
+export async function frozenMerges(): Promise<Uint8Array> {
+  const rows = Array.from({ length: 40 }, (_, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v: i + 1 }] }))
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(setRowAttrs(xml, [7, 25], { ht: '30', customHeight: '1' }), 'sheetViews', freezeXml(2, 3)))
+  }, { cols: '<col min="2" max="3" width="20" customWidth="1"/>', merges: [...FROZEN_MERGES] })
+}
+
+/** `autoFilterCollapsed` (Task 6, F6): the declared autoFilter range and the two hidden rows (1-based). */
+export const AUTO_FILTER = Object.freeze({ ref: 'A1:B8', hiddenInside: 4, hiddenOutside: 10, lastRow: 11 })
+/**
+ * Task 6 (F6): A1:B11 hold `H-r-c` text (row 1 is the header), under a worksheet `<autoFilter ref="A1:B8"/>`.
+ * Row 4 (inside the filter range) and row 10 (outside it, but inside the used range) are hidden, as a saved
+ * filter or the author leaves them.
+ */
+export async function autoFilterCollapsed(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = Array.from({ length: AUTO_FILTER.lastRow }, (_, i) => ({ r: i + 1, cells: [0, 1].map((j) => textCell(st, `${colName(j)}${i + 1}`, `H-${i + 1}-${j + 1}`)) }))
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(setRowAttrs(xml, [AUTO_FILTER.hiddenInside, AUTO_FILTER.hiddenOutside], { hidden: '1' }), 'autoFilter', `<autoFilter ref="${AUTO_FILTER.ref}"/>`))
+  })
+}
+
+/**
+ * Task 6 (F6): `n` two-column merges on sheet `S`, and no cells. By default one per row (`A{r}:B{r}`, r = 1..n);
+ * with `perRow`, `perRow` side by side per row (merge i at row ⌊i / perRow⌋ + 1, columns 2(i mod perRow) and the
+ * next), which keeps a few thousand merges inside an 8192 px static unit. 20,000 chunk a layout into several parts;
+ * 70,000 are over the 65,536-merge cap (R14).
+ */
+export async function manyMerges(n: number, o: { perRow?: number } = {}): Promise<Uint8Array> {
+  const per = o.perRow ?? 1
+  const merges = Array.from({ length: n }, (_, i) => {
+    const r = Math.floor(i / per) + 1, c = 2 * (i % per)
+    return `${colName(c)}${r}:${colName(c + 1)}${r}`
+  })
+  return sheetWorkbook([], [], undefined, { merges })
+}

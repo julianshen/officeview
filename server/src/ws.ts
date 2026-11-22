@@ -46,7 +46,7 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
+import { encodeSheetLayout, LayoutTooLarge, MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -693,6 +693,39 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
+  /**
+   * Stage 4a (S4 §6.4, R14): `sheet-layout {reqId, token, sheetId}` on an XLSX tiles session (units mode refuses it
+   * `unsupported-op` before this). In order: the token (`textOp`); `sheetId` the canonical decimal index of a visible
+   * sheet, else `policy-refused`; the `'unit'` rate, charged once per request (its later parts charge nothing; S4
+   * §6.8); the fingerprint and the document ledger (as `onUnit`); the build on the docRef's worker (F23); the encode
+   * (an R14 cap ⇒ `layout-too-large`); then every part, while the session lives.
+   */
+  async function onSheetLayout(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const sheets = sd.doc.sheets ?? []
+    const id = msg.sheetId
+    if (typeof id !== 'string' || !/^(0|[1-9][0-9]{0,8})$/.test(id) || Number(id) >= sheets.length) return refuse(ws, reqId, 'policy-refused')
+    const rate = ws.data.rates.check('unit', now())
+    if (rate === 'close') return close(ws, 'rate-limited')
+    if (rate === 'refuse') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    let parts: object[]
+    try {
+      const layout = await o.pool.sheetLayout(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: Number(id), clock: sd.clock }, undefined, ws.data.gone.signal)
+      if (!alive()) return
+      parts = encodeSheetLayout(layout)
+    } catch (e) {
+      if (!alive()) return
+      if (e instanceof LayoutTooLarge || (e instanceof RenderFailed && e.refusal === 'layout-too-large')) return refuse(ws, reqId, 'layout-too-large')
+      return refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
+    for (const p of parts) send(ws, { reqId, ...p })
+  }
+
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
    * audited and charged before `print-start`; everything after the token
    * await up to `print-start` is synchronous, so two prints cannot both pass
@@ -1278,8 +1311,11 @@ export function createStreamServer(o: StreamServerOptions) {
     // Stage 4a (R6): an XLSX tiles session serves no unit or Stage 3 text op (each would render units); print works.
     const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
     if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
-    // The tile ops: stubs until their tasks land (and never served in units mode).
-    if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') return refuse(ws, m.reqId, 'unsupported-op')
+    // The tile ops (never served in units mode): `sheet-layout` (Task 6); `tiles` and `sheet-cancel` are stubs until their tasks land.
+    if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') {
+      if (mode !== 'tiles' || m.type !== 'sheet-layout') return refuse(ws, m.reqId, 'unsupported-op')
+      return onSheetLayout(ws, m)
+    }
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)

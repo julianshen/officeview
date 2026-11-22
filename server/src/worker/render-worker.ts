@@ -7,6 +7,7 @@ import type { ProbeRunner, ProbeRunResult } from '../media/probe'
 import type { ShowPlanJob } from '../show/build'
 import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
+import type { SheetClock } from '../sheet/clock'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -41,6 +42,8 @@ export type WorkerRequest =
   | { type: 'show-morph'; id: number; docKey: string; job: MorphJob; grant?: number; hangMs?: number; crash?: boolean }
   /** Piece 4 D7: a show-plan layer's per-session Layer-1 (the page basis cropped to its rest). */
   | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
+  /** Stage 4a (F23): one sheet's `sheet-layout` (from its servable snapshot under the session clock). */
+  | { type: 'layout'; id: number; docKey: string; sheetIndex: number; clock: SheetClock }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -98,6 +101,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     // A prepare without a grant is refused (grant 0) — the pool always sends one.
     else if (m.type === 'text') result = await unitsPath(m.docKey, () => host.text(m.docKey, m.job, m.grant ?? 0))
     else if (m.type === 'notes') result = await host.notes(m.docKey, m)
+    // Before the final `else`: an unlisted type would fall through to `render`.
+    else if (m.type === 'layout') result = await host.sheetLayout(m.docKey, m.sheetIndex, m.clock)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }

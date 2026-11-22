@@ -23,6 +23,8 @@ import { PROBE_DECK_MS, PROBE_PART_MS } from './media/probe'
 import { createWorkerProbes, type ProbeKillRequest, type ProbeRunRequest, type WorkerProbes } from './media/probe-host'
 import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
+import type { SheetClock } from './sheet/clock'
+import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
 
@@ -56,6 +58,10 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
 /** Admission charge of one text op itself (index assembly, answer text);
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
+/** Stage 4a (F23): a `sheet-layout` job on the docRef's worker: sheet `sheetIndex` under the session clock. */
+export interface PoolLayoutJob { docRef: string; contentPolicy: 'visible-only' | 'full'; sheetIndex: number; clock: SheetClock }
+/** Admission charge of one layout job (the snapshot it may build, and the layout it copies out). */
+export const LAYOUT_JOB_BYTES = 16 * 1024 * 1024
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
 export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
 
@@ -355,6 +361,24 @@ export class Pool {
         const r = await this.runJob(slot, admitted, { type: 'notes', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, mark: job.mark, draw: job.draw })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as NotesPlan | NotesRaster
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** Stage 4a (F23): one sheet's layout, with the same affinity, admission, deadline and recycle paths as `notes`. */
+  async sheetLayout(sessionId: string, job: PoolLayoutJob, bytesEstimate = LAYOUT_JOB_BYTES, signal?: AbortSignal): Promise<StreamSheetLayout> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const slot = this.pick(job.docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+        if (signal?.aborted) throw new ShowCancelled()
+        const r = await this.runJob(slot, admitted, { type: 'layout', id: this.nextId++, docKey, sheetIndex: job.sheetIndex, clock: { day: job.clock.day, timeZone: job.clock.timeZone } })
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r as StreamSheetLayout
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)

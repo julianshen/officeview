@@ -17,6 +17,8 @@ import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { prepareSheetAssets } from '../../src/components/xlsx/sheetAssets'
 import { clockEpochMs, type SheetClock } from './sheet/clock'
+import { buildStreamLayout, LayoutUnavailable } from './sheet/layout'
+import { LayoutTooLarge, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { buildSheetSnapshot, servableSheet, type ServableSheet, type SheetSnapshot } from './sheet/snapshot'
 import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
 import type { XlsxDocument } from '../../src/xlsx/types'
@@ -72,7 +74,7 @@ export type RenderedUnit = (
 ) & { evidence?: OcclusionEvidence }
 /** `wrap` may interpose on the context the painter receives (the visible mark is painted outside it). */
 export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; afterUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; wrap?(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D }
-export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant' | 'media-part', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
+export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant' | 'media-part' | 'layout-too-large', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
 
 /** §7.7: every paint pass that serves a unit records occlusion evidence. */
 function observe(ctx: CanvasRenderingContext2D, w: number, h: number, scale: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
@@ -341,6 +343,25 @@ export class DocumentHost {
       built.catch(() => { if (snapshots.get(key) === built) snapshots.delete(key) })
     }
     return built
+  }
+
+  /**
+   * Stage 4a (S4 §6.4, F23): the `sheet-layout` of sheet `sheetIndex` (wire `sheetId` = its decimal index among the
+   * visible sheets, R12), from its servable snapshot under the session clock and the same parse's declared filters.
+   * A layout too fragmented to fit any answer is `RenderRefusal('layout-too-large')`; a diagnostic geometry `bad-job`.
+   * The caller encodes (and applies the R14 caps to) the result.
+   */
+  async sheetLayout(docKey: string, sheetIndex: number, clock: SheetClock): Promise<StreamSheetLayout> {
+    const snap = await this.sheetSnapshot(docKey, sheetIndex, clock)
+    const saved = this.docs.get(docKey)?.savedParse
+    if (!saved) throw new RenderRefusal('unknown-doc')
+    const sheet = saved.sheets[sheetIndex]!
+    const declared = saved.declaredFilters?.find((d) => sheet.sourcePartPath !== undefined ? d.partPath === sheet.sourcePartPath : d.sheetId === sheet.sheetId)
+    try { return buildStreamLayout(snap, String(sheetIndex), declared) } catch (e) {
+      if (e instanceof LayoutTooLarge) throw new RenderRefusal('layout-too-large', e.message)
+      if (e instanceof LayoutUnavailable) throw new RenderRefusal('bad-job', e.message)
+      throw e
+    }
   }
 
   /** The static paintables every units path paints from (synchronous: `ensurePaintables` builds them). */

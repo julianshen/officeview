@@ -234,5 +234,19 @@ export class Client {
     }
   }
   private mediaSeq = 0
+  /**
+   * Stage 4a Task 6: sends `sheet-layout` and collects its reqId: every `sheet-layout` part (with its UTF-8 size as
+   * received) up to the one with `last: true`, or any other answer (`refused`) as `end`.
+   */
+  async sheetLayout(reqId: number, sheetId: unknown, o: { token?: string; ms?: number } = {}) {
+    this.send({ reqId, type: 'sheet-layout', token: o.token ?? this.manifest!.session.token, sheetId })
+    const parts: Array<{ text: Record<string, any>; bytes: number }> = []
+    for (;;) {
+      const m = await this.next((m) => 'text' in m && m.text.reqId === reqId, o.ms) as { text: Record<string, any>; bytes: number }
+      if (m.text.type !== 'sheet-layout') return { parts, end: m.text }
+      parts.push(m)
+      if (m.text.last === true) return { parts }
+    }
+  }
   close() { this.ws.close() }
 }
