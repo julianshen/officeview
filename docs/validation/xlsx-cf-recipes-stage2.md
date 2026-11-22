@@ -726,3 +726,246 @@ The capture cannot be retried, and nothing here is edited after it. Whatever Exc
   - The case now has 73 exact cells and 122 withheld.
   - The predictions file's production column is regenerated.
 - **Findings, the reach table and the refined hypotheses R1–R4:** `docs/validation/xlsx-cf.md` §14.z.16.
+
+## 10. The upper-segment window follow-up (`stage2-scale-upper-window`)
+
+**Why.** PR #99 widened the upper-segment whole-product withhold (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`) from `Number.isInteger(f·d)` to production's 1e-11 truncation-guard window: a channel counts as whole when k = round(f·d), 0 < k < d and |f·d − k| ≤ 1e-11. That ruling came from literal-num evidence (§9.5). The only statistical-bound cells inside the window are E4 of `stage2-scale-thresholds` and its replica D19, both drawn at guarded truncation. So the window's withhold of statistical shapes is unmeasured, and today it costs E4 and D19. This case measures it.
+
+### 10.1 Census and candidate search (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/upper-window-candidates.ts` (about 40 s; pinned by `tests/xlsx-cf-scale-upper-window-candidates.test.ts`).
+
+**Cells.** The harness of §8.1 (`collectSegmentCells`, every measured case, both follow-up captures included): 1101 captured colour-scale cells. 155 are in the **integer shape** (an upper-segment interior cell of a 3-colour scale with an IEEE-integer whole product on some channel). These stay withheld whatever a window reading says, so they are not scored. 946 are scored.
+
+**The census.** Every captured interior cell with a channel inside the window and no IEEE-integer channel. Every product below was computed, not reasoned about.
+
+| Cell | Scale | Bounds | Value | lo .. hi | f (production) | f·d per channel (class) | Excel | Guarded | Raw floor | Outcome |
+|---|---|---|---|---|---|---|---|---|---|---|
+| thresholds:E4 | 3-colour, upper | percentile / max | 3 | 2.2 .. 10 | 0.10256410256410255 | 156: 15.999999999999996 (below); 45, 9: not whole | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:D19 | 3-colour, upper | percentile / max | 3 | 2.2 .. 10 | 0.10256410256410255 | as E4 | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:F8 | 3-colour, upper | num / num | 3 | 2.2 .. 10 | 0.10256410256410255 | as E4 | FFEFE784 | FFEFE784 | FFF0E784 | guarded |
+| upper-whole:F11 | 3-colour, upper | num / num | 7.4 | 2.2 .. 10 | 0.6666666666666667 | 104.00000000000001, 30.000000000000004, 6.000000000000001 (above) | FF97CD7E | FF97CD7E | = | both |
+| upper-whole:F12 | 3-colour, upper | num / num | 0.6 | 0.4 .. 1 | 0.33333333333333326 | 210: 69.99999999999999 (below) | FFA163B5 | FFA064B4 | FFA163B5 | raw floor |
+| upper-whole:F13 | 3-colour, upper | num / num | 0.8 | 0.4 .. 1 | 0.6666666666666667 | 210: 140.00000000000003 (above) | FF5AAA6E | FF5AAA6E | = | both |
+| upper-whole:F15 | 3-colour, upper | num / num | 0.44 | 0.4 .. 1 | 0.06666666666666664 | 210: 13.999999999999995 (below) | FFD92BED | FFD82CEC | FFD92BED | raw floor |
+| upper-whole:F16 | 3-colour, upper | num / num | 0.5 | 0.4 .. 1 | 0.16666666666666663 | 210: 34.99999999999999 (below) | FFC440D8 | FFC341D7 | FFC440D8 | raw floor |
+| upper-whole:F18 | 3-colour, upper | num / num | 1.48 | 1.3 .. 2.2 | 0.1999999999999999 | 210: 41.99999999999998 (below) | FFBD47D1 | FFBC48D0 | FFBD47D1 | raw floor |
+| upper-whole:F19 | 3-colour, upper | num / num | 1.36 | 1.3 .. 2.2 | 0.06666666666666672 | 210: 14.00000000000001 (above) | FFD92BED | FFD82CEC | = | **neither** (one smaller than both) |
+| num-segment:K15 | 2-colour | num / num | 29 | 0 .. 210 | 0.1380952380952381 | 210: 29.000000000000004 (above) | FF31D345 | FF31D345 | = | both |
+| cfvo-scope-v2:W17 | 2-colour | num / num | −25 | −40 .. 45 | 0.17647058823529413 | 85: 15.000000000000002 (above) | FFDE786D | FFDE786D | = | both |
+| cfvo-scope-v2:W20 | 2-colour | num / num | 20 | −40 .. 45 | 0.7058823529411765 | 85: 60.00000000000001 (above) | FF8FA576 | FF8FA576 | = | both |
+
+"Guarded" is production's `interpolateChannel` (floor(f·d + 1e-11)); "raw floor" is floor(f·d). They differ only where a product is just below an integer.
+
+- **The window shape** (the cells a window reading paints) is the ten upper-segment 3-colour cells. Two are statistical-bound (E4, D19), both at guarded truncation. The eight literal ones are withheld as the num-segment shape anyway.
+- **Below an integer:** the 4/39 cells (E4, D19, F8) are at guarded truncation; F12, F15, F16 and F18 are one smaller (raw floor). **Above an integer:** F11 and F13 are at k; F19 is one smaller than both readings.
+- **No captured 2-colour or lower-segment cell lies below an integer inside the window.** The three 2-colour cells are above it, where both readings agree.
+
+**Scopes.** A candidate replaces production's arithmetic strictly inside a scope, and elsewhere guarded truncation stands: `window` (the 10 window cells), `upper` (every upper-segment interior 3-colour cell, 47 scored), `3-colour` (138), `all` (667). A survivor reproduces Excel at every one of the 946 scored cells. Evaluation fails closed on any non-finite intermediate or invalid channel.
+
+**Families** (48,603 candidates):
+- the 48,345 of the extended search (§9.1: `origin`, `f32`, `precision`, `rational`);
+- `form` (208): the step product in 13 other operation orders (product before division, reciprocal multiplies, from the maximum, split quotients and products, percent round trips, a 15-digit fraction). The differences v − lo, hi − lo and hi − v are optionally snapped to 15, 16 or 17 significant decimals. The step is floor, guarded floor, floor of the 15-digit product, or strictly below the product;
+- `threshold` (48): Excel's statistical threshold modelled as another double. Each statistical bound (never a literal num) is moved by up to two ulps either way, with guarded or raw-floor steps. This covers any PERCENTILE or percent arithmetic that lands within two ulps of production's result;
+- the two readings the case pre-registers whatever the search finds (`reading/guarded`, `reading/raw-floor`).
+
+**Survivors: 0, at every scope, in every family.**
+
+| Family | Best at `window` (10 cells) | Its mismatches |
+|---|---|---|
+| `origin` | 1 | F19 (`origin/g-reverse-difference/step-truncate`) |
+| `f32` | 1 (23 candidates) | F13 (all `f32/g-remap[0001x]/…`) |
+| `precision` | 1 (1171) | F19, F12 or F16 |
+| `rational` | 3 | F16, F18, F19 |
+| `form` | 1 (4) | F19 (`form/none/reciprocal-span/floor`, `form/none/percent-roundtrip/floor`, …) |
+| `threshold` | 2 | F8, F19 |
+| `reading` | guarded 5, raw floor 4 | guarded: F12, F15, F16, F18, F19; raw floor: E4, D19, F8, F19 |
+
+- **The near misses.** 1199 candidates miss exactly one window cell, and that cell is always a literal-num one (F19 184, F13 23, F12 856, F16 136). None misses E4 or D19. They are not survivors, so none is pre-registered.
+- **F19 separates the readings from any per-product rule.** It is above an integer (14.00000000000001), yet Excel drew it one smaller, like F12, F15, F16 and F18 below an integer. F11 and F13, also above, did not move, and E4, D19 and F8, below, did not either.
+- **Both pre-registered readings are contradicted by captured cells.** Guarded truncation is contradicted at five literal cells, which are withheld anyway. Raw floor is contradicted at E4 and D19, the only statistical-bound window cells. §10.3 covers what that means for the case.
+
+### 10.2 Readings and the registration rule (Phase 1 task 2)
+
+The search left no survivor (§10.1). So the readings are the two the brief fixed in advance. Both are implemented in `src/xlsx/cf/colorScale.ts` and selectable, and neither is registered.
+
+- **The window class** (`upperSegmentProductClass`) splits PR #99's widened shape in two:
+  - `integer`: some RGB channel's product `fraction · d` is an IEEE integer k with 0 < k < d. Captures 377564e0 and 54fc3388 measured this shape, and it **stays withheld under every reading**.
+  - `window`: no channel is an IEEE integer, but some channel is within 1e-11 of such a k.
+- **The scope of a reading:** window-class cells of a 3-colour upper segment that is **not** bounded by two literal num cfvo. That means min, max, percent, percentile, mixed or formula-resolved bounds. Literal-num window cells are withheld as the num-segment shape first. Lower segments and 2-colour scales are untouched.
+- **`guarded`:** floor(f·d + 1e-11), production's `interpolateChannel`, which is what was painted before #99.
+- **`raw-floor`:** floor(f·d) with no guard. It is one smaller exactly where the product is just below an integer.
+- **Selection.** `CF_UPPER_WINDOW_PRODUCTION_READINGS` is empty, so the default is main: the window class stays withheld (`cf-unmeasured-upper-segment-whole-product`). A reading applies only when all of the following hold:
+  - it is selected through the test seam `injectCfUpperWindowReadings`;
+  - `scale:upper-window-statistical`'s evidence is held;
+  - the default sRGB / truncate variants are in use.
+
+  Any non-finite intermediate withholds.
+- **The audit.** `CF_STAGE2_PRODUCTION_READINGS` spreads the table. The id is named by this case's readings, so the mandatory Stage 2 reading gate applies: the id verifies only on a discriminating match whose reading is registered there.
+- **The justification.** `upperWholeShapeAt` (`scripts/cf-refs/upper-whole-justify.ts`) mirrors the split independently (`independentProductClass`). Once a reading is registered with its evidence, it stops justifying window-class cells whose upper segment is not bounded by two literal num cfvo. It reads only the registration table, never production's arithmetic. The integer class and the literal-num segments stay justified.
+- **Pinned by** `tests/xlsx-cf-scale-upper-window-readings.test.ts`.
+
+### 10.3 The case
+
+It is appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical. It owns three ids:
+- `scale:upper-window-statistical`: the question. It is registered in `CF_STAGE2_NONDISCRIMINATING` until the capture. Its configurations are `pmp`, `percent` and `mixed`, plus the negative control `controls` and the record-only `integer`;
+- `scale:upper-window-literal`: the literal-num twin of every statistical window cell, with the same thresholds and so the same double f. It is judged against the same readings and recorded, and is never registrable;
+- `scale:upper-window-twin`: the twin line, comparison references only.
+
+**Colours.** The P line, P + k·(1, −1, 1) with P = `FF14F028`, is used as in §9.2. Every block but the E4 replica uses P / P+210 / P, so the upper segment runs from P+210 down to P with d = 210 on every channel, as in F12..F19 of 54fc3388. Every P-line fill is a `twin:` token, and the twin line (2-colour num 0 / 210) shows step k. The stock palette's four fills are literal tokens, each vouched by a literal cellIs positive control.
+
+**Bit-identical thresholds.** The statistical thresholds are either data values or the halved maximum:
+- percentile 50 over an odd count, balanced by lower-segment cells, is the median exactly;
+- percent 50 over a zero minimum is max/2 exactly. A test checks this in seven operation orders.
+
+So each literal twin, written with the same decimals, resolves to the same doubles. A test checks this against production's resolver.
+
+**Blocks** (priority order; P/P+210/P unless stated):
+
+| Priority | sqref | Rule | Window cells (below / above an integer) | Other designated cells |
+|---|---|---|---|---|
+| 1 | `A2:A18` | min / percentile 50 / max over 0.1 .. 1 (median 0.4) | 0.6, 0.44, 0.5 (F12, F15, F16's doubles), 0.58 / 0.8 (F13's) | 7 lower controls (0.13, 0.21 just below an integer; 0.27 an integer; 0.125, 0.155, 0.305, 0.355 not whole), 0.65 (not whole), 0.52 (integer, recorded) |
+| 2 | `B2:B15` | min / percentile 50 / max over 0.7 .. 2.2 (median 1.3) | 1.48 (F18's), 1.39, 1.66, 1.93 / 1.36 (F19's) | 6 lower controls, 1.5 (not whole) |
+| 3 | `C2:C10` | min / percent 50 / max over 0 .. 2.2 (mid 1.1) | 1.21, 1.32, 1.43, 1.54 / none | 0.3, 0.75 (lower), 1.6 (not whole) |
+| 4 | `C11:C19` | min / percent 50 / max over 0 .. 1.4 (mid 0.7) | none / 0.77, 0.84, 0.98, 1.12 | 0.2 (lower, just above an integer), 0.5 (lower, integer), 1.005 (not whole) |
+| 5 | `D2:D12` | num 0.1 / percentile 50 / num 0.8 (median 0.2) | 0.26, 0.32, 0.38, 0.5 / none | 5 lower controls, 0.45 (not whole) |
+| 6 | `D13:D20` | min / num 0.6 / max over 0.3 .. 1.2 | 1.14 / 0.66, 0.78, 0.9 | 0.455 (lower), 1.05 (not whole) |
+| 7 | `E2:E6` | min / percentile 30 / max over 1, 2, 3, 4, 10, stock palette: the replica of `stage2-scale-thresholds` E2:E6 | 3 (E4's double) / none | 2 (lower), 4 (integer, recorded) |
+| 8 | `E7:E10` | 2-colour num 0.4 / 1, P+210 → P | | 0.6, 0.44, 0.5, 0.58: the window doubles of block 1 under 2-colour (controls) |
+| 9 | `E11:E15` | 2-colour min / max over 1.1 .. 2.2 | | 1.21, 1.32, 1.43 (controls) |
+| 10..16 | `F2:F15`, `G2:G14` | the literal-num twins: num 0.1 / 0.4 / 1, 0.7 / 1.3 / 2.2, 0 / 1.1 / 2.2, 0 / 0.7 / 1.4, 0.1 / 0.2 / 0.8, 0.3 / 0.6 / 1.2, 1 / 2.2 / 10 (stock) | the 27 window values of blocks 1..7 | |
+| 17..19 | `H2:H20`, `I2:I20`, `J2:J4` | 2-colour num 0 / 210, P → P+210, value k: the twin line (41 steps) | | |
+| 20..23 | `K2:K5` | cellIs `= 1`, one dxf fill per stock-palette predicted fill (4) | | |
+
+**Controls.** Row 21 holds each data column's unformatted control, A21..G21, each with the value of its column's first designated cell. `H21` (value 0) is shared by the twins and `K21` (value 1) by the positive controls.
+
+**Size.** There are 147 cells:
+- 93 designated: 11 `pmp`, 8 `percent`, 8 `mixed`, 37 `controls`, 2 `integer` and 27 `literal`;
+- 41 twins, 4 positive controls and 9 controls.
+
+The capture range is `A1:K21`. The text scope's admitted-batch estimate for the whole range is 2,472,920 bytes against the 8,388,608-byte cap (`estimateCfPrepareBytes`, 23 rules).
+
+**Decisive cells** (the readings differ only below an integer):
+
+| Configuration | Cells | Decisive (guarded ≠ raw-floor) | Above an integer (the readings agree) |
+|---|---|---|---|
+| `pmp` | 11 | 9: A11, A12, A13, A14, B10, B11, B12, B13, E4 | 2: A15, B14 |
+| `percent` | 8 | 4: C5, C6, C7, C8 | 4: C14..C17 |
+| `mixed` | 8 | 5: D8, D9, D10, D11, D18 | 3: D15, D16, D17 |
+| `literal` (recorded) | 27 | 18 | 9 |
+| `controls` (negative control) | 37 | 0 | — |
+
+The pair is separated at ≥ 4 decisive cells in every evidence configuration (the verifier needs 2). A move at a cell above an integer (F19's pattern) contradicts both readings, so that world registers nothing.
+
+**Predictions.** The colour of every designated cell under each reading, its class, its token, today's production and production under a registration are in [xlsx-cf-upper-window-predictions.md](xlsx-cf-upper-window-predictions.md). That file is generated by `npx tsx scripts/cf-refs/upper-window-candidates.ts --write-predictions` from the catalogue. The decisive cells:
+
+| Cell | Config | Value (lo .. hi) | f·210 (double) | guarded | raw-floor |
+|---|---|---|---|---|---|
+| A11 | pmp | 0.6 (0.4 .. 1) | 69.99999999999999 | FFA064B4 | FFA163B5 |
+| A12 | pmp | 0.44 | 13.999999999999995 | FFD82CEC | FFD92BED |
+| A13 | pmp | 0.5 | 34.99999999999999 | FFC341D7 | FFC440D8 |
+| A14 | pmp | 0.58 | 62.999999999999986 | FFA75DBB | FFA85CBC |
+| B10 | pmp | 1.48 (1.3 .. 2.2) | 41.99999999999998 | FFBC48D0 | FFBD47D1 |
+| B11 | pmp | 1.39 | 20.999999999999964 | FFD133E5 | FFD232E6 |
+| B12 | pmp | 1.66 | 83.99999999999996 | FF9272A6 | FF9371A7 |
+| B13 | pmp | 1.93 | 146.99999999999994 | FF53B167 | FF54B068 |
+| E4 | pmp | 3 (2.2 .. 10, stock, d = 156) | 156: 15.999999999999996 | FFEFE784 | FFF0E784 |
+| C5 | percent | 1.21 (1.1 .. 2.2) | 20.999999999999975 | FFD133E5 | FFD232E6 |
+| C6 | percent | 1.32 | 41.99999999999999 | FFBC48D0 | FFBD47D1 |
+| C7 | percent | 1.43 | 62.999999999999964 | FFA75DBB | FFA85CBC |
+| C8 | percent | 1.54 | 83.99999999999999 | FF9272A6 | FF9371A7 |
+| D8 | mixed | 0.26 (0.2 .. 0.8) | 20.999999999999996 | FFD133E5 | FFD232E6 |
+| D9 | mixed | 0.32 | 41.99999999999999 | FFBC48D0 | FFBD47D1 |
+| D10 | mixed | 0.38 | 62.999999999999986 | FFA75DBB | FFA85CBC |
+| D11 | mixed | 0.5 | 104.99999999999997 | FF7D8791 | FF7E8692 |
+| D18 | mixed | 1.14 (0.6 .. 1.2) | 188.99999999999997 | FF29DB3D | FF2ADA3E |
+
+The literal twins F2..G14 carry the same predictions at the same doubles.
+
+**Raw floor is already contradicted by two captures.** E4 of `stage2-scale-thresholds` and D19 of `stage2-scale-upper-whole` are statistical-bound window cells at E4's double, both drawn at guarded truncation (FFEFE784). Raw floor predicts FFF0E784 there. This case's E4 replica carries the same prediction, so raw floor can match only if Excel draws the replica differently from both earlier captures, which would itself be a finding. Registering raw floor as is would mispaint E4 and D19 (§10.4). It is pre-registered because the brief fixes it. In practice it is the alternative that the E4 replica decides against.
+
+### 10.4 Rehearsal (Phase 1 task 4)
+
+`tests/xlsx-cf-scale-upper-window-case.test.ts`.
+
+**The model is production.**
+- Today (nothing registered), production paints exactly the guarded prediction at every cell it paints. It withholds exactly 56 designated cells: 27 statistical window cells and 2 integer cells (upper whole product), and 27 literal twins (num-segment).
+- Under each registration, every statistical window cell paints that reading's prediction. The integer and literal cells stay withheld.
+
+**The evaluator** (synthetic observations):
+- Each planted reading comes back as the one match, for the question and for the literal twins.
+- **No reading matches** (`formula-hypothesis-none`) for these worlds:
+  - the literal capture's pattern by double: raw floor below an integer except E4's double, and F19's double one smaller;
+  - a mixed world: E4 guarded and every other window cell raw.
+- **It fails closed on:**
+  - a formatted control;
+  - a missing or wrong positive control;
+  - a twin rendering nothing;
+  - a lower-segment control moved one step (A3);
+  - a 2-colour control at raw floor (E7).
+
+**The audit gate** (the real `verifyCfCase` and `auditStage2Manifest` on a synthetic measured capture). For each reading:
+- the capture matches that reading;
+- with the registry entry kept, the id is `unverified-nondiscriminating`;
+- with the entry removed but nothing registered, it is `supported-structural` (withheld by the production-reading gate);
+- with that reading registered, exactly this id joins the verified Stage 2 set;
+- with the other reading registered, it is withheld.
+
+The no-match world never verifies under either registration, and unregistered production on it has no violation (56 justified withholds).
+
+**Against every committed capture** (the shared conformance pass, `tests/helpers/cf-stage2-conformance.ts`, over the 10 measured Stage 2 cases):
+
+| Registration | Violations | Exact | Withheld (num-segment, upper whole product) |
+|---|---|---|---|
+| none (main) | 0 | 684 | 278 (227, 21) |
+| `guarded` | 0 | 686 | 276 (227, 19): E4 and D19 painted exactly |
+| `raw-floor` | **2**: `stage2-scale-thresholds:E4` and `stage2-scale-upper-whole:D19` (FFF0E784 against Excel's FFEFE784) | | |
+
+- **Stage 5:** every measured case agrees with Excel, and the records are byte-for-byte unchanged under both registrations. No 3-colour Stage 5 cell is in the window class.
+- **This case on a synthetic capture:**
+  - both planted worlds pass the conformance pass and the interactive and paged comparisons, unregistered and under their own registration (147 cells, 29 withheld);
+  - the other reading registered on a world disagrees at the 18 decisive cells.
+- **The measured Stage 2 cases:** they pass the interactive and paged comparisons under the guarded registration.
+
+**Gates on the committed manifest** (recipe-pending):
+- `bun scripts/cf-compare.ts --stage 2 --mode interactive` and `--mode paged`: `stage2-scale-upper-window` is recipe-pending with all 147 cell expectations verified, and every other Stage 2 case passes. The two interactive failures, `stage1-timeperiod-today-clock` and `-2`, depend on the clock and fail identically on main.
+- `npx tsx scripts/cf-refs/audit.ts --stage 2` reports `ok=true`, `structural=12/12`, `unverifiedNonDiscriminating=18` (15 + the three new ids), `stageComplete=true` and `blockedCapabilities=0`. `--stage 5` reports `ok=true`, `stageComplete=true` and `blockedCapabilities=0`.
+
+### 10.5 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-upper-window.xlsx   # 609e04980b85c4f56228b2b6290d0d0ab09248129df1d285010ef21c2d3f8d11
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-upper-window
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-upper-window
+npx vitest run tests/xlsx-cf-scale-upper-window-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-upper-window`.
+
+The capture cannot be retried, and no prediction, value or reading is edited after it.
+- **Exactly one reading matches `scale:upper-window-statistical`:**
+  - `guarded`: register it. Remove the id's `CF_STAGE2_NONDISCRIMINATING` entry and set `CF_UPPER_WINDOW_PRODUCTION_READINGS[scale:upper-window-statistical] = 'guarded'`. Production then paints the statistical window class at guarded truncation, and E4 and D19 are recovered.
+  - `raw-floor`: this would mean the E4 replica moved against two earlier captures. That is a finding for the owner before any registration, since registering raw floor would mispaint E4 and D19.
+- **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The window class stays withheld.
+- **The literal twins** are recorded whatever they show: they test "same double, same outcome" and register nothing.
+
+### 10.6 Run result (captured, ed0fccb6, Excel 16.115)
+
+- **Status:** captured (measured).
+  - The first build was rejected structurally: Excel resaved the degenerate sqref `G14:G14` as `G14`. That build is kept as `tests/fixtures/xlsx-cf/stage2-scale-upper-window.rejected.xlsx`.
+  - 5877c3eb matches a degenerate single-cell sqref to its collapsed form. The rebuild opened repair-free, and the capture verified with a minimum contrast of 123.
+- **`verifyCfCase`:** `formula-hypothesis-none` for `scale:upper-window-statistical` and for `scale:upper-window-literal`. The twin line is non-discriminating.
+  - The audit keeps all three ids `unverified-nondiscriminating`. **Nothing is registered**, and the window class stays withheld.
+- **The capture is sound.** Every pixel equals its DisplayFormat fill (147/147), all 9 controls are white, and all 4 positive controls show their dxf fill.
+- **The twin line is not.** 38 of the 41 twins are on the line. H8, H18 and I5 (2-colour num 0 / 210 at k = 57, 108 and 127; f·210 = 56.99999999999999, 107.99999999999999 and 126.99999999999999) were drawn one step smaller.
+- **What Excel drew at the 27 statistical window cells:**
+  - **The decisive cells:** raw floor at 15 of the 18 (A11..A14, B10..B13, C5..C8, D9, D10 and D18), and guarded truncation at 3 (E4, D8 and D11).
+  - **Above an integer:** B14 and C15 were drawn one step smaller than both readings; the other 7 are at k.
+  - So neither reading matches.
+- **The 27 literal twins** each drew exactly what their statistical cell drew.
+- **The negative controls moved.** All 11 lower-segment and 2-colour controls just below an integer (A3, A4, D2, D4, E7..E10, E12..E14) were drawn one step smaller (raw floor). With H8, H18 and I5, production paints **14 cells of published shapes one step off Excel**. The other 26 controls are at guarded truncation.
+- **The E4 replica** (E4 and its twin G14) is at FFEFE784, as in both earlier captures. Of the integer cells, A17 moved and E5 did not.
+- **Owner ruling: the guard-boundary withhold.** 2-colour and 3-colour lower-segment interior cells whose step product lies within 1e-11 strictly below a whole number are withheld (`cf-unmeasured-guard-boundary`). That is the 14 cells here, and none elsewhere. The case is in the conformance pass, and `cf-compare` passes in both modes.
+- **The search with this capture:** `npx tsx scripts/cf-refs/upper-window-candidates.ts` (`--pre-capture` reproduces §10.1). It has 1235 cells and 0 survivors at every scope.
+- **Findings, reach and hypotheses:** `docs/validation/xlsx-cf.md` §14.z.17.

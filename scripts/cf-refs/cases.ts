@@ -3351,6 +3351,292 @@ function stage2UpperWholeCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The upper-segment window follow-up (brief cf-upperwindow): PR #99 widened the upper-segment whole-product withhold to
+// production's 1e-11 truncation-guard window from literal-num evidence (capture 54fc3388: F12, F15, F16, F18 one smaller
+// than guarded truncation below an integer, F19 one smaller above one; F8, F11, F13 at it). The only statistical-bound
+// window cells captured are stage2-scale-thresholds E4 and its replica D19, both at guarded truncation, so the window's
+// withhold of statistical shapes is unmeasured. This case PRE-REGISTERS two readings of the window class on segments not
+// bounded by two literal num cfvo (scale:upper-window-statistical): `guarded` (floor(f·d + 1e-11), production's
+// interpolation) and `raw-floor` (floor(f·d)). The candidate search (scripts/cf-refs/upper-window-candidates.ts,
+// docs/validation/xlsx-cf-recipes-stage2.md §10.1) left no other survivor. Statistical blocks (min / percentile 50 / max;
+// min / percent 50 / max; mixed percentile / num and num / max; the E4 replica) hold window cells below and above an
+// integer; each window cell has a literal-num twin with bit-identical thresholds (scale:upper-window-literal, recorded);
+// lower-segment, non-whole and 2-colour cells are negative controls; integer-class cells are recorded only. Every
+// prediction comes from an independent model (`s2UpperWindowColour`), never from the viewer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_UPPER_WINDOW_ID = 'stage2-scale-upper-window'
+/** The question: the window class of a 3-colour upper segment not bounded by two literal num cfvo. */
+export const S2_UPPER_WINDOW_CAP = 'scale:upper-window-statistical'
+/** The literal-num twins of every statistical window cell (same thresholds, same double f): recorded, never registrable. */
+export const S2_UPPER_WINDOW_LITERAL = 'scale:upper-window-literal'
+/** The twin line (2-colour num 0 / 210, P to P+210): one cell per predicted P-line fill, a comparison reference only. */
+export const S2_UPPER_WINDOW_TWIN = 'scale:upper-window-twin'
+/** The pre-registered readings (the search left no survivor; brief decisions: at least guarded and raw-floor). */
+export const S2_UPPER_WINDOW_READINGS = ['guarded', 'raw-floor'] as const
+export type S2UpperWindowReading = (typeof S2_UPPER_WINDOW_READINGS)[number]
+
+/** A cell's role: a window-class cell (evidence), a negative control, an integer-class cell (recorded) or scope only. */
+export type S2UpperWindowRole = 'window' | 'control' | 'integer' | 'scope'
+export type S2UpperWindowGroup = 'pmp' | 'percent' | 'mixed' | 'two-colour' | 'literal'
+
+export interface S2UpperWindowBlock {
+  id: string
+  group: S2UpperWindowGroup
+  col: string
+  firstRow: number
+  /** cfvo in authored order. */
+  cfvo: ReadonlyArray<{ type: string; val?: string }>
+  colors: readonly string[]
+  /** The thresholds the rule resolves to, ascending, as decimals (a statistical block's are checked bit for bit). */
+  thresholds: readonly string[]
+  values: ReadonlyArray<{ text: string; role: S2UpperWindowRole }>
+}
+
+const S2UWIN_STOCK = ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] as const
+/** The P-line palette with the upper segment from P+210 down to P (d = 210 on every channel, as F12..F19 of 54fc3388). */
+const S2UWIN_PQP = [s2UwLine(0), s2UwLine(210), s2UwLine(0)] as const
+const s2uwinNum = (...v: string[]): Array<{ type: string; val: string }> => v.map(val => ({ type: 'num', val }))
+const s2uwinV = (role: S2UpperWindowRole, ...texts: string[]): Array<{ text: string; role: S2UpperWindowRole }> => texts.map(text => ({ text, role }))
+const S2UWIN_PMP = [{ type: 'min' }, { type: 'percentile', val: '50' }, { type: 'max' }] as const
+const S2UWIN_PERCENT = [{ type: 'min' }, { type: 'percent', val: '50' }, { type: 'max' }] as const
+
+/**
+ * The blocks. Statistical thresholds are data values (percentile 50 over an odd count, balanced by lower-segment cells, is
+ * the median exactly) or the halved maximum (percent 50 over a zero minimum is max/2 exactly, in every operation order), so
+ * a literal twin with the same decimals has bit-identical thresholds. Window cells: below an integer (guarded and raw-floor
+ * differ by one) and above one (they agree; a move there contradicts both). A: min / percentile 50 / max over 0.1 / 0.4 / 1
+ * (F12, F15, F16, F13 of 54fc3388 under statistical bounds, and 0.58). B: over 0.7 / 1.3 / 2.2 (F18, F19, and 1.39, 1.66,
+ * 1.93). C: min / percent 50 / max over 0 / 1.1 / 2.2 (all below) and 0 / 0.7 / 1.4 (all above). D: num 0.1 / percentile 50
+ * / num 0.8 over a median of 0.2 (below), and min / num 0.6 / max over 0.3 .. 1.2 (above, and 1.14 below). E: the replica of
+ * stage2-scale-thresholds E2:E6 (E4's double); the 2-colour controls. F, G: the literal-num twins.
+ */
+export function s2UpperWindowBlocks(): S2UpperWindowBlock[] {
+  return [
+    { id: 'pmp-tenths', group: 'pmp', col: 'A', firstRow: 2, cfvo: S2UWIN_PMP, colors: S2UWIN_PQP, thresholds: ['0.1', '0.4', '1'],
+      values: [...s2uwinV('scope', '0.1'), ...s2uwinV('control', '0.13', '0.21', '0.27', '0.125', '0.155', '0.305', '0.355'), ...s2uwinV('scope', '0.4'), ...s2uwinV('window', '0.6', '0.44', '0.5', '0.58', '0.8'), ...s2uwinV('control', '0.65'), ...s2uwinV('integer', '0.52'), ...s2uwinV('scope', '1')] },
+    { id: 'pmp-binade', group: 'pmp', col: 'B', firstRow: 2, cfvo: S2UWIN_PMP, colors: S2UWIN_PQP, thresholds: ['0.7', '1.3', '2.2'],
+      values: [...s2uwinV('scope', '0.7'), ...s2uwinV('control', '0.75', '0.85', '0.95', '1.05', '1.15', '1.25'), ...s2uwinV('scope', '1.3'), ...s2uwinV('window', '1.48', '1.39', '1.66', '1.93', '1.36'), ...s2uwinV('control', '1.5'), ...s2uwinV('scope', '2.2')] },
+    { id: 'percent-below', group: 'percent', col: 'C', firstRow: 2, cfvo: S2UWIN_PERCENT, colors: S2UWIN_PQP, thresholds: ['0', '1.1', '2.2'],
+      values: [...s2uwinV('scope', '0'), ...s2uwinV('control', '0.3', '0.75'), ...s2uwinV('window', '1.21', '1.32', '1.43', '1.54'), ...s2uwinV('control', '1.6'), ...s2uwinV('scope', '2.2')] },
+    { id: 'percent-above', group: 'percent', col: 'C', firstRow: 11, cfvo: S2UWIN_PERCENT, colors: S2UWIN_PQP, thresholds: ['0', '0.7', '1.4'],
+      values: [...s2uwinV('scope', '0'), ...s2uwinV('control', '0.2', '0.5'), ...s2uwinV('window', '0.77', '0.84', '0.98', '1.12'), ...s2uwinV('control', '1.005'), ...s2uwinV('scope', '1.4')] },
+    { id: 'mixed-percentile-num', group: 'mixed', col: 'D', firstRow: 2, cfvo: [{ type: 'num', val: '0.1' }, { type: 'percentile', val: '50' }, { type: 'num', val: '0.8' }], colors: S2UWIN_PQP, thresholds: ['0.1', '0.2', '0.8'],
+      values: [...s2uwinV('control', '0.11', '0.13', '0.15', '0.125', '0.175'), ...s2uwinV('scope', '0.2'), ...s2uwinV('window', '0.26', '0.32', '0.38', '0.5'), ...s2uwinV('control', '0.45')] },
+    { id: 'mixed-num-max', group: 'mixed', col: 'D', firstRow: 13, cfvo: [{ type: 'min' }, { type: 'num', val: '0.6' }, { type: 'max' }], colors: S2UWIN_PQP, thresholds: ['0.3', '0.6', '1.2'],
+      values: [...s2uwinV('scope', '0.3'), ...s2uwinV('control', '0.455'), ...s2uwinV('window', '0.66', '0.78', '0.9', '1.14'), ...s2uwinV('control', '1.05'), ...s2uwinV('scope', '1.2')] },
+    { id: 'e4-replica', group: 'pmp', col: 'E', firstRow: 2, cfvo: [{ type: 'min' }, { type: 'percentile', val: '30' }, { type: 'max' }], colors: S2UWIN_STOCK, thresholds: ['1', '2.2', '10'],
+      values: [...s2uwinV('scope', '1'), ...s2uwinV('control', '2'), ...s2uwinV('window', '3'), ...s2uwinV('integer', '4'), ...s2uwinV('scope', '10')] },
+    // 2-colour controls: the window cells of A and C under 2-colour scales (literal num 0.4 / 1; min / max over 1.1 .. 2.2).
+    { id: 'two-colour-num', group: 'two-colour', col: 'E', firstRow: 7, cfvo: s2uwinNum('0.4', '1'), colors: [s2UwLine(210), s2UwLine(0)], thresholds: ['0.4', '1'],
+      values: s2uwinV('control', '0.6', '0.44', '0.5', '0.58') },
+    { id: 'two-colour-minmax', group: 'two-colour', col: 'E', firstRow: 11, cfvo: [{ type: 'min' }, { type: 'max' }], colors: [s2UwLine(210), s2UwLine(0)], thresholds: ['1.1', '2.2'],
+      values: [...s2uwinV('scope', '1.1'), ...s2uwinV('control', '1.21', '1.32', '1.43'), ...s2uwinV('scope', '2.2')] },
+    // The literal-num twins: the same thresholds as decimals, the same window values.
+    { id: 'literal-tenths', group: 'literal', col: 'F', firstRow: 2, cfvo: s2uwinNum('0.1', '0.4', '1'), colors: S2UWIN_PQP, thresholds: ['0.1', '0.4', '1'], values: s2uwinV('window', '0.6', '0.44', '0.5', '0.58', '0.8') },
+    { id: 'literal-binade', group: 'literal', col: 'F', firstRow: 7, cfvo: s2uwinNum('0.7', '1.3', '2.2'), colors: S2UWIN_PQP, thresholds: ['0.7', '1.3', '2.2'], values: s2uwinV('window', '1.48', '1.39', '1.66', '1.93', '1.36') },
+    { id: 'literal-percent-below', group: 'literal', col: 'F', firstRow: 12, cfvo: s2uwinNum('0', '1.1', '2.2'), colors: S2UWIN_PQP, thresholds: ['0', '1.1', '2.2'], values: s2uwinV('window', '1.21', '1.32', '1.43', '1.54') },
+    { id: 'literal-percent-above', group: 'literal', col: 'G', firstRow: 2, cfvo: s2uwinNum('0', '0.7', '1.4'), colors: S2UWIN_PQP, thresholds: ['0', '0.7', '1.4'], values: s2uwinV('window', '0.77', '0.84', '0.98', '1.12') },
+    { id: 'literal-percentile-num', group: 'literal', col: 'G', firstRow: 6, cfvo: s2uwinNum('0.1', '0.2', '0.8'), colors: S2UWIN_PQP, thresholds: ['0.1', '0.2', '0.8'], values: s2uwinV('window', '0.26', '0.32', '0.38', '0.5') },
+    { id: 'literal-num-max', group: 'literal', col: 'G', firstRow: 10, cfvo: s2uwinNum('0.3', '0.6', '1.2'), colors: S2UWIN_PQP, thresholds: ['0.3', '0.6', '1.2'], values: s2uwinV('window', '0.66', '0.78', '0.9', '1.14') },
+    { id: 'literal-e4', group: 'literal', col: 'G', firstRow: 14, cfvo: s2uwinNum('1', '2.2', '10'), colors: S2UWIN_STOCK, thresholds: ['1', '2.2', '10'], values: s2uwinV('window', '3') },
+  ]
+}
+
+/** The layout's fixed slots: twin columns, positive-control slots, the control row. */
+export const S2_UPPER_WINDOW = {
+  twinCols: ['H', 'I', 'J'] as const,
+  positiveControlCols: ['K'] as const,
+  firstRow: 2,
+  lastDataRow: 20,
+  /** Row 21: each data column's unformatted control (the column's first designated value), the twin's and the positive controls'. */
+  controlRow: 21,
+  twinControl: 'H21',
+  positiveControlShared: 'K21',
+}
+
+export interface S2UpperWindowCell {
+  ref: string
+  block: S2UpperWindowBlock
+  text: string
+  value: number
+  role: S2UpperWindowRole
+  /** 0: lower (or only) segment; 1: upper. */
+  segment: 0 | 1
+  /** The configuration (designated cells only): the block's group for window cells, `controls` or `integer`. */
+  configuration?: string
+  lo: number
+  hi: number
+  from: string
+  to: string
+}
+
+/** Every cell of every block, with its segment (thresholds ascending; no midpoint re-sort in this case). */
+export function s2UpperWindowCells(): S2UpperWindowCell[] {
+  return s2UpperWindowBlocks().flatMap(b => b.values.map((x, i): S2UpperWindowCell => {
+    const value = Number(x.text)
+    const t = b.thresholds.map(Number)
+    const segment: 0 | 1 = t.length === 2 || value <= t[1]! ? 0 : 1
+    const configuration = x.role === 'scope' ? undefined : x.role === 'window' ? (b.group === 'literal' ? 'literal' : b.group) : x.role === 'control' ? 'controls' : 'integer'
+    return { ref: `${b.col}${b.firstRow + i}`, block: b, text: x.text, value, role: x.role, segment, configuration, lo: t[segment]!, hi: t[segment + 1]!, from: b.colors[segment]!, to: b.colors[segment + 1]! }
+  }))
+}
+
+/**
+ * The independent model's class of a cell (the window follow-up's split of the widened shape), from f = (v − lo)/(hi − lo)
+ * in doubles and each RGB channel's span d: `integer` when some f·d is an IEEE integer k, 0 < k < d; `window` when none is
+ * but some is within 1e-11 of such a k; `none` otherwise (and for every lower-segment or 2-colour cell).
+ */
+export function s2UpperWindowClass(c: Pick<S2UpperWindowCell, 'block' | 'segment' | 'value' | 'lo' | 'hi' | 'from' | 'to'>): 'integer' | 'window' | 'none' {
+  if (c.block.colors.length !== 3 || c.segment !== 1 || !(c.value > c.lo && c.value < c.hi)) return 'none'
+  const f = (c.value - c.lo) / (c.hi - c.lo)
+  let window = false
+  for (const i of [2, 4, 6]) {
+    const d = Math.abs(parseInt(c.to.slice(i, i + 2), 16) - parseInt(c.from.slice(i, i + 2), 16))
+    if (d === 0) continue
+    const p = f * d, k = Math.round(p)
+    if (!(k > 0 && k < d)) continue
+    if (Number.isInteger(p)) return 'integer'
+    if (Math.abs(p - k) <= 1e-11) window = true
+  }
+  return window ? 'window' : 'none'
+}
+
+/** A reading's colour between `from` and `to` at f = (v − lo)/(hi − lo): `guarded` floor(f·d + 1e-11), `raw-floor` floor(f·d). */
+export function s2UpperWindowColour(reading: S2UpperWindowReading, from: string, to: string, v: number, lo: number, hi: number): string {
+  if (reading === 'guarded') return s2NumSegmentColour('truncate', from, to, v, lo, hi)
+  const f = Math.max(0, Math.min(1, (v - lo) / (hi - lo)))
+  return [0, 2, 4, 6].map(k => {
+    const c0 = parseInt(from.slice(k, k + 2), 16), c1 = parseInt(to.slice(k, k + 2), 16)
+    const c = k === 0 ? c0 : c1 >= c0 ? c0 + Math.floor(f * (c1 - c0)) : c0 - Math.floor(f * (c0 - c1))
+    return c.toString(16).toUpperCase().padStart(2, '0')
+  }).join('')
+}
+
+/** What a reading predicts at a cell: the reading's colour in the window class, guarded truncation everywhere else. */
+export function s2UpperWindowPrediction(c: S2UpperWindowCell, reading: S2UpperWindowReading): string {
+  return s2UpperWindowColour(s2UpperWindowClass(c) === 'window' ? reading : 'guarded', c.from, c.to, c.value, c.lo, c.hi)
+}
+
+const S2UWIN_CONFIGURATIONS: ReadonlyArray<{ id: string; capabilityId: string; role?: 'negative-control'; record?: string; note: string }> = [
+  { id: 'pmp', capabilityId: S2_UPPER_WINDOW_CAP, note: 'min / percentile 50 / max window cells (0.1 / 0.4 / 1, 0.7 / 1.3 / 2.2) and the E4 replica (min / percentile 30 / max).' },
+  { id: 'percent', capabilityId: S2_UPPER_WINDOW_CAP, note: 'min / percent 50 / max window cells (0 / 1.1 / 2.2 below an integer, 0 / 0.7 / 1.4 above).' },
+  { id: 'mixed', capabilityId: S2_UPPER_WINDOW_CAP, note: 'mixed bounds: num 0.1 / percentile 50 / num 0.8, and min / num 0.6 / max.' },
+  { id: 'controls', capabilityId: S2_UPPER_WINDOW_CAP, role: 'negative-control', note: 'Negative controls: lower-segment cells, clearly non-whole upper-segment cells and 2-colour cells of the window doubles; every reading predicts guarded truncation, Excel must match it, never evidence.' },
+  { id: 'integer', capabilityId: S2_UPPER_WINDOW_CAP, record: 'Integer-class cells (an IEEE-integer step product under statistical bounds): withheld whatever a window reading says; recorded only, never evidence.', note: 'recorded' },
+  { id: 'literal', capabilityId: S2_UPPER_WINDOW_LITERAL, note: 'The literal-num twins of every statistical window cell (bit-identical thresholds): same double f, recorded.' },
+]
+
+/**
+ * The configurations, the twin line and the literal positive controls. Predictions on the P line are twin tokens (the twin
+ * line's cell of step k); the stock palette's fills are literal tokens vouched by literal cellIs positive controls.
+ */
+export function s2UpperWindowLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: Array<{ ref: string; k: number }> } {
+  const fx = S2_UPPER_WINDOW
+  const cells = s2UpperWindowCells().filter(c => c.configuration !== undefined)
+  const fills = [...new Set(cells.flatMap(c => S2_UPPER_WINDOW_READINGS.map(r => s2UpperWindowPrediction(c, r))))].sort()
+  const steps = [...new Set(fills.map(s2nsLineStep).filter((k): k is number => k !== undefined))].sort((a, b) => a - b)
+  const slots = (cols: readonly string[]): string[] => cols.flatMap(col => Array.from({ length: fx.lastDataRow - fx.firstRow + 1 }, (_, i) => `${col}${fx.firstRow + i}`))
+  const twinSlots = slots(fx.twinCols)
+  if (steps.length > twinSlots.length) throw new Error(`${S2_UPPER_WINDOW_ID}: ${steps.length} twins exceed ${twinSlots.length} slots`)
+  const twins = steps.map((k, i) => ({ ref: twinSlots[i]!, k }))
+  const twinOf = new Map(twins.map(t => [t.k, t.ref]))
+  const literals = fills.filter(f => s2nsLineStep(f) === undefined)
+  const pcSlots = slots(fx.positiveControlCols)
+  if (literals.length > pcSlots.length) throw new Error(`${S2_UPPER_WINDOW_ID}: ${literals.length} literal fills exceed ${pcSlots.length} positive-control slots`)
+  const positiveControls = literals.map((token, i) => ({ ref: pcSlots[i]!, token }))
+  const pcOf = new Map(positiveControls.map(p => [p.token, p.ref]))
+  const tokenOf = (fill: string): string => { const k = s2nsLineStep(fill); return k === undefined ? fill : `twin:${twinOf.get(k)!}` }
+  const configurations: S5Configuration[] = S2UWIN_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    const hypotheses = Object.fromEntries(S2_UPPER_WINDOW_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2UpperWindowPrediction(c, h))]))]))
+    const tokens = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)))]
+    const twinRefs = tokens.filter(t => t.startsWith('twin:')).map(t => t.slice('twin:'.length)).sort()
+    const lits = tokens.filter(t => !t.startsWith('twin:')).sort()
+    return {
+      id: cfg.id, capabilityId: cfg.capabilityId, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(cfg.record ? { record: cfg.record } : {}),
+      twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])),
+      ...(lits.length > 0 ? { positiveControls: Object.fromEntries(lits.map(t => [pcOf.get(t)!, t])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins }
+}
+
+/** The data columns (A..G) and the control of each: the column's first designated cell's value, unformatted, in the control row. */
+export function s2UpperWindowColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2UpperWindowCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_UPPER_WINDOW.controlRow}`, text: cells.find(c => c.configuration !== undefined && /^[A-Z]+/.exec(c.ref)![0] === col)!.text }))
+}
+
+/** The colour rules (one per block), then the twin line's (one per twin column), in priority order; positive controls follow, unmarked. */
+export function s2UpperWindowMarkers(): CfPartMarker[] {
+  const { twins } = s2UpperWindowLayout()
+  const twinRules = S2_UPPER_WINDOW.twinCols.map(col => ({ col, rows: twins.filter(t => /^[A-Z]+/.exec(t.ref)![0] === col).map(t => Number(t.ref.slice(col.length))) })).filter(x => x.rows.length > 0)
+  return [
+    ...s2UpperWindowBlocks().map(b => ({ cap: b.group === 'literal' ? S2_UPPER_WINDOW_LITERAL : S2_UPPER_WINDOW_CAP, sqref: `${b.col}${b.firstRow}:${b.col}${b.firstRow + b.values.length - 1}`, cfvo: b.cfvo, colors: b.colors })),
+    ...twinRules.map(x => ({ cap: S2_UPPER_WINDOW_TWIN, sqref: `${x.col}${x.rows[0]!}:${x.col}${x.rows.at(-1)!}`, cfvo: s2uwinNum('0', '210'), colors: [s2UwLine(0), s2UwLine(210)] })),
+  ].map((m, i) => s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1))
+}
+
+/** The capture range: through the last positive-control column and the control row. */
+export const s2UpperWindowRange = (): string => `A1:${S2_UPPER_WINDOW.positiveControlCols.at(-1)!}${S2_UPPER_WINDOW.controlRow}`
+
+function stage2UpperWindowCase(): CfOracleCase {
+  const fx = S2_UPPER_WINDOW
+  const { configurations, positiveControls, twins } = s2UpperWindowLayout()
+  const all = s2UpperWindowCells()
+  const colControl = new Map(s2UpperWindowColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const designated: CfCellExpectation[] = all.filter(c => c.configuration !== undefined).map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  // A twin's control is the shared unformatted H21 (value 0); a positive control's is K21 (value 1). The evaluator reads a
+  // designated cell's or a twin's own DisplayFormat fill, never its control (the control only gates pixel contrast).
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: fx.twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: fx.positiveControlShared, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: fx.twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: fx.positiveControlShared, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const count = (cfg: string): number => all.filter(c => c.configuration === cfg).length
+  return {
+    id: S2_UPPER_WINDOW_ID,
+    stage: 2,
+    question:
+      `The upper-segment window follow-up of PR #99 (the 1e-11 window withhold, measured only on literal-num cells; E4 and D19 the only statistical-bound window cells, both at guarded truncation): how does Excel draw a 3-colour upper-segment cell under statistical bounds whose step product is within 1e-11 of a whole number but not an IEEE integer? Two readings pre-registered (guarded truncation, raw floor; the candidate search left no other survivor) on ${count('pmp')} min / percentile / max cells (the E4 replica included), ${count('percent')} min / percent 50 / max cells and ${count('mixed')} mixed-bound cells, below and above an integer; ${count('literal')} literal-num twins with bit-identical thresholds (recorded); ${count('controls')} negative controls (lower-segment, non-whole and 2-colour cells) and ${count('integer')} integer-class cells (recorded). A 2-colour twin line shows every predicted P-line fill; literal cellIs positive controls the stock palette's.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_UPPER_WINDOW_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_UPPER_WINDOW_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2UpperWindowRange(),
+    requiredAppearances: ['screen'],
+    markers: s2UpperWindowMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_UPPER_WINDOW_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_UPPER_WINDOW_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -4513,8 +4799,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   stage2ScopeDisjointCase(),
   // 10. stage2-scale-num-segment (the num-segment follow-up: earlier inputs stay byte-identical)
   stage2NumSegmentCase(),
-  // 11. stage2-scale-upper-whole (the upper-segment whole-product follow-up, exploratory, appended last)
+  // 11. stage2-scale-upper-whole (the upper-segment whole-product follow-up, exploratory)
   stage2UpperWholeCase(),
+  // 12. stage2-scale-upper-window (the upper-segment window follow-up, appended last: earlier inputs stay byte-identical)
+  stage2UpperWindowCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -4660,6 +4948,15 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The controls of stage2-scale-upper-whole (lower-segment mirrors in the base rule, 2-colour twins): expected at truncation; recorded by the control reading, never a question themselves.',
   'scale:upper-segment-whole-product-twin':
     'The 2-colour twin line of stage2-scale-upper-whole (num 0 / 210, P to Q, one cell per predicted P-line fill): comparison references, never a question themselves.',
+  // The upper-segment window follow-up (stage2-scale-upper-window): the question is registered until its capture (a matched
+  // reading is published only by removing this entry and registering it in CF_UPPER_WINDOW_PRODUCTION_READINGS); the
+  // literal twins and the twin line are comparisons, never questions.
+  'scale:upper-window-statistical':
+    'Pre-registered (stage2-scale-upper-window, two readings: guarded, raw-floor), awaiting its capture: the window class of a 3-colour upper segment not bounded by two literal num cfvo stays withheld (cf-unmeasured-upper-segment-whole-product) until a matched reading is registered.',
+  'scale:upper-window-literal':
+    'The literal-num twins of stage2-scale-upper-window (bit-identical thresholds, the same double f as each statistical window cell): recorded against the same readings to test "same double, same outcome"; withheld as the num-segment shape, never registrable.',
+  'scale:upper-window-twin':
+    'The 2-colour twin line of stage2-scale-upper-window (num 0 / 210, P to P+210, one cell per predicted P-line fill): comparison references, never a question themselves.',
 }
 
 /**

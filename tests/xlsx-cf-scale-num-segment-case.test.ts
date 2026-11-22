@@ -86,8 +86,8 @@ const judge = (c: CfOracleCase, sidecar: Record<string, unknown>) => evaluateFor
 
 describe('stage2-scale-num-segment: the case', () => {
   it('is appended last; owns its four ids, registered as recorded findings (the two questions) and as comparisons (the 2-colour twins, the twin line)', () => {
-    // Appended last at its time; the exploratory follow-up stage2-scale-upper-whole is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual([ID, 'stage2-scale-upper-whole'])
+    // Appended last at its time; the exploratory follow-up stage2-scale-upper-whole and the window follow-up are appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual([ID, 'stage2-scale-upper-whole', 'stage2-scale-upper-window'])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toBeDefined()
