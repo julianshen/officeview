@@ -318,7 +318,9 @@ export class Pool {
     if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
     const open = reply.result as OpenResult
     slot.docs.set(k, open.docKey)
-    this.unitSizes.set(k, open.units)
+    // Ruling B1: a tiles-mode open advertises an over-limit unit as the refusal unit; the prepare grants (units-mode
+    // text ops) keep the true sizes, so a tiles (re)open never replaces sizes a units open recorded.
+    if (sheetMode === 'units' || !this.unitSizes.has(k)) this.unitSizes.set(k, open.units)
     return { docKey: open.docKey, open }
   }
 

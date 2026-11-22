@@ -180,6 +180,15 @@ async function openShow(docRef: string, docKey: string, contentPolicyId: string,
   return createShowDoc({ docRef, docKey, contentPolicyId, fingerprint, doc, handle, index, store, acquire: (i) => underlay.acquire(store, i), sink, units, hidden })
 }
 
+/** Ruling B1 (Task 6 fix round 1): the static size of the refusal unit (`REFUSAL_SPEC`, src/render/paint.ts). */
+export const TILES_REFUSAL_UNIT: Readonly<UnitSize> = Object.freeze({ w: 480, h: 96 })
+/** Ruling B1: what a tiles-mode XLSX open advertises. A unit over MAX_UNIT_PX (it could never be rendered) is listed as
+ * the refusal unit, as an `exportLimits` sheet is, so the manifest validates; its print still refuses (`render`
+ * reads the entry's own size and refuses it `oversize`). Units mode returns the entry's sizes unchanged. */
+export function tilesUnits(units: readonly UnitSize[]): UnitSize[] {
+  return units.map((u) => unitSurfaceAllowed(u.w, u.h) ? u : { ...TILES_REFUSAL_UNIT })
+}
+
 export class DocumentHost {
   readonly backend: CanvasBackend
   private docs = new Map<string, OpenDoc>()
@@ -264,7 +273,7 @@ export class DocumentHost {
     if (sheetMode === 'units') await this.buildPaintables(doc)
     // A tiles open joining a units-created entry: the entry kept no projected package, so re-project these bytes (F1).
     else if (doc.format === 'xlsx' && !doc.savedParse) await this.buildSavedParse(doc, bytes, contentPolicy)
-    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables?.fontDiagnostics?.length ?? 0, ...(doc.sheets ? { sheets: [...doc.sheets] } : {}) }
+    return { docKey: key, units: sheetMode === 'tiles' && doc.format === 'xlsx' ? tilesUnits(doc.units) : doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables?.fontDiagnostics?.length ?? 0, ...(doc.sheets ? { sheets: [...doc.sheets] } : {}) }
   }
 
   /** Builds the entry's static paintables if a tiles-mode open left them out (R5); every units path awaits this first. */

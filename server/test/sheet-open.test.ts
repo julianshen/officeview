@@ -2,7 +2,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { DocumentHost, PaintablesUnbuilt, RenderRefusal, type OpenResult } from '../src/render'
+import { DocumentHost, MAX_UNIT_PX, PaintablesUnbuilt, RenderRefusal, type OpenResult } from '../src/render'
 import { buildXlsx } from '../../src/testdata/ooxml-builders'
 import { Pool } from '../src/pool'
 import { grid500x100 } from './sheet-fixtures'
@@ -10,6 +10,9 @@ import { hiddenFixtures } from '../../scripts/stream-s0/hidden-fixtures'
 
 /** `fontDiagnostics` of a units-mode open of grid500x100, measured on the base ac749246 before this change (F11). */
 const BASE_UNITS_FONT_DIAGNOSTICS = 0
+
+/** Ruling B1: the size tiles mode advertises for a unit over MAX_UNIT_PX (the static refusal unit, REFUSAL_SPEC). */
+const TILES_REFUSAL_UNIT = { w: 480, h: 96 }
 
 const small = () => buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', t: 's', v: 0 }, { ref: 'B1', v: 42 }] }] }], ['small sheet'])
 
@@ -30,7 +33,10 @@ describe('xlsx open modes (R5)', () => {
     expect(h.paintablesBuilt).toBe(0)
     expect(h.pages).toBe(0)
     const u = await fresh().open('grid', bytes, 'visible-only')
-    expect(t.units).toEqual(u.units)
+    // Ruling B1 (Task 6 fix round 1): grid500x100's 6400 × 10000 unit is over MAX_UNIT_PX, so tiles mode advertises
+    // the refusal spec for it; units mode is unchanged.
+    expect(u.units).toEqual([{ w: 6400, h: 10000 }])
+    expect(t.units).toEqual([TILES_REFUSAL_UNIT])
     expect(t.sheets).toEqual(['S'])
     expect(t.fontDiagnostics).toBe(0)
   }, 60_000)
@@ -101,18 +107,27 @@ describe('xlsx open modes (R5)', () => {
     const names = readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.xlsx')).sort()
     expect(names.length).toBeGreaterThan(0)
     const outcome = async (o: Promise<OpenResult>) => { try { const r = await o; return { units: r.units, sheets: r.sheets } } catch (e) { return { error: (e as Error).message } } }
-    let compared = 0
-    for (const name of names) {
-      const bytes = new Uint8Array(readFileSync(resolve(dir, name)))
+    let compared = 0, exempt = 0
+    // Ruling B1: grid500x100 (6400 × 10000) joins the corpus so the over-limit exemption is exercised and asserted.
+    const inputs: Array<[string, Uint8Array]> = [...names.map((n): [string, Uint8Array] => [n, new Uint8Array(readFileSync(resolve(dir, n)))]), ['grid500x100', await grid500x100()]]
+    for (const [name, bytes] of inputs) {
       const th = new DocumentHost(), uh = new DocumentHost()
       const t = await outcome(th.open(name, bytes, 'visible-only', { sheetMode: 'tiles' }))
       const u = await outcome(uh.open(name, bytes, 'visible-only'))
-      expect({ name, ...t }).toEqual({ name, ...u })
+      // Ruling B1: a unit over MAX_UNIT_PX is exempt from equality; tiles mode advertises it as the refusal spec.
+      const over = (x: { w: number; h: number }) => Math.max(x.w, x.h) > MAX_UNIT_PX
+      const uu = u.units, tu = t.units
+      if (uu && tu) {
+        uu.forEach((x, i) => { if (over(x)) { exempt++; expect({ name, i, unit: tu[i] }).toEqual({ name, i, unit: TILES_REFUSAL_UNIT }) } })
+        expect({ name, ...t, units: tu.map((x, i) => over(uu[i]!) ? uu[i]! : x) }).toEqual({ name, ...u })
+      } else expect({ name, ...t }).toEqual({ name, ...u })
       if ('units' in t) compared++
       expect(th.paintablesBuilt).toBe(0)
       for (const h of [th, uh]) for (const k of [...(h as unknown as { docs: Map<string, unknown> }).docs.keys()]) h.drop(k)
     }
     expect(compared).toBeGreaterThan(0)
+    expect(exempt).toBeGreaterThanOrEqual(1)
+    console.log(`tiles/units corpus parity: ${compared} compared, ${exempt} over-limit unit(s) exempt`)
   }, 600_000)
 
   test('pool: a tiles open, then units renders, and a recycled re-open builds lazily', async () => {

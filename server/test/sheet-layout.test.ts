@@ -25,13 +25,12 @@ const UTC: SheetClock = { day: '2026-11-23', timeZone: 'UTC' }
  * exactly four parts. */
 const FOUR_PART_MERGES = 6_000
 const fourPartFixture = () => manyMerges(FOUR_PART_MERGES, { perRow: 64 })
-type Policy = 'visible-only' | 'full'
 
 const hosts: DocumentHost[] = []
 /** The server's own geometry of sheet 0: `buildSheetGeometry` over the servable snapshot's sheet. */
-async function serverGeometry(bytes: Uint8Array, policy: Policy = 'visible-only') {
+async function serverGeometry(bytes: Uint8Array) {
   const host = new DocumentHost(); hosts.push(host)
-  const o = await host.open('ref', bytes, policy, { sheetMode: 'tiles' })
+  const o = await host.open('ref', bytes, 'visible-only', { sheetMode: 'tiles' })
   const snap = await host.sheetSnapshot(o.docKey, 0, UTC)
   const g = buildSheetGeometry(snap.sheet)
   if (g.kind !== 'ready') throw new Error('server geometry is a diagnostic')
@@ -44,25 +43,10 @@ async function tilesClient(url: string) {
   await c.ready()
   return { c, m }
 }
-/**
- * FINDING (pre-existing, Task 6 report): a sheet whose static unit is over 8192 px (`grid500x100` is 6400 × 10000)
- * gets a manifest `validateManifest` rejects (`units.list[0].h`, capped at 8192), in units and tiles mode alike.
- * This HELLO keeps the manifest unvalidated so the layout of such a sheet can still be tested; remove it (use
- * `tilesClient`) once the manifest is fixed.
- */
-async function unvalidatedTilesClient(url: string) {
-  const c = new Client(url)
-  await c.opened()
-  c.send({ reqId: 1, type: 'hello', client: 'officeview/1.0', recVersions: [1], features: TILES })
-  const m = await c.next((x) => 'binary' in x && x.binary.kind === 1) as { binary: { payload: Uint8Array } }
-  c.manifest = JSON.parse(new TextDecoder().decode(m.binary.payload))
-  await c.ready()
-  return { c, m: c.manifest! }
-}
-async function layoutOf(bytes: Uint8Array, o: { sheetId?: string; policy?: Policy; unvalidated?: boolean } = {}) {
+async function layoutOf(bytes: Uint8Array, o: { sheetId?: string } = {}) {
   const sheetId = o.sheetId ?? '0'
-  const h = await start({ doc: bytes, ...(o.policy === 'full' ? { policy: { contentPolicy: 'full' as const } } : {}) })
-  const { c } = await (o.unvalidated ? unvalidatedTilesClient : tilesClient)(h.url)
+  const h = await start({ doc: bytes })
+  const { c } = await tilesClient(h.url)
   const r = await c.sheetLayout(10, sheetId)
   c.close(); await h.stop()
   if (r.end) throw new Error(`refused: ${JSON.stringify(r.end)}`)
@@ -74,12 +58,11 @@ const rect = (m: { minRow: number; maxRow: number; minCol: number; maxCol: numbe
 describe('sheet-layout (S4 §6.4)', () => {
   test('layout round-trips and matches the server geometry', async () => {
     const rowsAt = [0, 1, 2, 9, 10, 20, 499, 65_535, 1_048_575], colsAt = [0, 1, 99, 16_383]
-    const cases: Array<[() => Promise<Uint8Array>, Policy, boolean]> = [[grid500x100, 'visible-only', true], [millionRows, 'visible-only', false], [frozenMerges, 'visible-only', false]]
-    for (const [make, policy, unvalidated] of cases) {
+    for (const make of [grid500x100, millionRows, frozenMerges]) {
       const bytes = await make()
-      const layout = decoded(await layoutOf(bytes, { policy, unvalidated }))
+      const layout = decoded(await layoutOf(bytes))
       const client = streamSheetGeometry(layout)
-      const { geometry: server, sheet } = await serverGeometry(bytes, policy)
+      const { geometry: server, sheet } = await serverGeometry(bytes)
       for (const i of rowsAt) expect([make.name, i, client.metrics.rows.start(i)]).toEqual([make.name, i, server.metrics.rows.start(i)])
       for (const j of colsAt) expect([make.name, j, client.metrics.cols.start(j)]).toEqual([make.name, j, server.metrics.cols.start(j)])
       expect(client.metrics.rows.totalCss()).toBe(server.metrics.rows.totalCss())
@@ -250,6 +233,18 @@ describe('sheet-layout (S4 §6.4)', () => {
     }
     await h.stop()
   }, 180_000)
+
+  test('an oversize sheet opens on a validating client in tiles mode; its print refuses (B1)', async () => {
+    const h = await start({ doc: await grid500x100() })
+    const { c, m } = await tilesClient(h.url)
+    expect(m.sheetMode).toBe('tiles')
+    expect(m.units.list).toEqual([{ w: 480, h: 96 }])
+    const p = await c.print(60, 0, 0)
+    expect(p.pages).toEqual([])
+    expect(p.end.type).toBe('refused')
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+    c.close(); await h.stop()
+  }, 60_000)
 
   test('units mode still refuses sheet-layout', async () => {
     const h = await start({ doc: await autoFilterCollapsed() })
