@@ -14,7 +14,7 @@ import type { AuthDecision } from '../src/hooks'
 import { serverBackend } from '../src/backend'
 import { ORIGIN, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const backend = serverBackend()
 type Json = Record<string, any>
 type Sock = WebSocket & { terminate?: () => void }

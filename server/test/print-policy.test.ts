@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { printPolicy, effectivePolicy } from '../src/hooks'
 import { Client, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 describe('printPolicy (fail closed, like copyPolicy)', () => {
   test('undefined and true are uncapped', () => {

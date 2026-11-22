@@ -30,7 +30,7 @@ import { messageFor } from '../src/mark/message'
 import { DEFAULT_PARAMS } from '../src/mark/params'
 import { Client, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 type Policy = AuthDecision['policy']
 const error = (reqId: number, code: string) => ({ reqId, type: 'error', code })

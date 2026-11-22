@@ -16,7 +16,7 @@ import { AuditStore } from '../src/audit-store'
 import { morphSweepDeck } from './show-fixtures'
 import { ORIGIN, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const MiB = 1024 * 1024
 /** A decode yielding a closable bitmap of the PNG's IHDR size (the session path never needs the pixels here). */

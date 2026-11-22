@@ -9,7 +9,7 @@ import { Client, start, corpus, disposePool } from './harness'
 
 const host = new DocumentHost()
 const deck = corpus('pypptx-test.pptx')
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 async function rgba(png: Uint8Array, w: number, h: number) {
   const c = host.backend.createCanvas(w, h), ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D

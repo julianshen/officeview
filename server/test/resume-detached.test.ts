@@ -3,7 +3,7 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { Client, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const settle = (ms: number) => Bun.sleep(ms)
 
 /** Drop the socket without a close handshake from the client's side (abnormal). */

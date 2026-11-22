@@ -9,7 +9,7 @@ import { AdmissionRefused, type Pool } from '../src/pool'
 import { BUN_DEFAULT_BACKPRESSURE_LIMIT, planPrint, PRINT_CONCURRENCY, PRINT_ENCODED_CAP, PRINT_JOB_MAX_DECODED, PRINT_MAX_FRAMED_BYTES, PRINT_RATE_PER_MIN, PRINT_SEND_HIGH_WATER, printSizeOk } from '../src/print'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const KIB48 = 48 * 1024
 /** Six visible slides, 960 × 720 (pypptx-test.pptx has only one unit). */

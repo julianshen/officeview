@@ -11,7 +11,7 @@ const sheet = new Uint8Array(readFileSync(resolve(root, 'corpus/poi-56295.xlsx')
 const job = (docRef: string, extra: Partial<RenderJob> = {}): RenderJob => ({ docRef, contentPolicy: 'visible-only', unitIndex: 0, scale: 1, projection: 'final-raster', mark: { kind: 'fixed' }, ...extra })
 const pools: Pool[] = []
 const mk = (o: ConstructorParameters<typeof Pool>[0]) => { const p = new Pool(o); pools.push(p); return p }
-afterAll(() => { for (const p of pools) p.dispose() })
+afterAll(async () => { await Promise.all(pools.map((p) => p.dispose())) })
 
 describe('render pool (§9.2/§14)', () => {
   it('per-session caps: 8 running, then a queue of 32, then refusal', async () => {

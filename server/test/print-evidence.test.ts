@@ -18,7 +18,7 @@ import { augmentedFixtures } from './fixtures'
 import type { Pool } from '../src/pool'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const TAU = { abs: 7.99, margin: 3.85 }
 const DOC = 'pypptx-test.pptx'
 

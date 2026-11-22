@@ -37,7 +37,7 @@ import type { AuthDecision } from '../src/hooks'
 import { Client, disposePool, start } from './harness'
 import { inkPixels } from './show-classify-helper'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 type Policy = AuthDecision['policy']
 const MARKS_OFF: Policy = { contentPolicy: 'full', visibleMark: 'off', forensicMark: false }

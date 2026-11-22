@@ -19,9 +19,9 @@ import { renderPages, type PageLayout, type Segment } from '../../src/docx/layou
 import { rejection } from './fixtures/rejection'
 import { MARKS_FAMILY, STACKING_MARK } from './fixtures/marks-font'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const pools: Pool[] = []
-afterAll(() => { for (const p of pools) p.dispose() })
+afterAll(async () => { await Promise.all(pools.map((p) => p.dispose())) })
 
 const deck = corpus('pypptx-test.pptx')
 let refs = 0

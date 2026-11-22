@@ -10,7 +10,7 @@ import type { TextJob, TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
 import { Client, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const NAMES = ['Alfa', 'Bravo', 'Charlie', 'Delta', 'Echo']
 const para = (name: string) => `Item ${name} sits here.`

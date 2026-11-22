@@ -12,7 +12,7 @@ import { Pool } from '../src/pool'
 import { SHOW_BUILD_BYTES } from '../src/show/grant'
 
 let pool: Pool | undefined
-afterEach(() => { pool?.dispose(); pool = undefined })
+afterEach(async () => { const closed = pool?.dispose(); pool = undefined; await closed })
 
 const DOC = 'reopen'
 const mark = { kind: 'off' } as const

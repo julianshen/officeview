@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { Client, disposePool, start } from './harness'
 import { effectivePolicy, type AuthDecision } from '../src/hooks'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 async function open(policy: AuthDecision['policy']) {
   const h = await start({ policy })

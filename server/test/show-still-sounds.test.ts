@@ -27,7 +27,7 @@ const root = mkdtempSync(join(tmpdir(), 'ov-t11b-'))
 const temp = await createMediaTemp(root)
 let mediaPool: Pool | undefined
 const poolOn = () => (mediaPool ??= new Pool({ workers: 1, media: { info: info!, dir: temp.dir } }))
-afterAll(async () => { mediaPool?.dispose(); disposePool(); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
+afterAll(async () => { await Promise.all([mediaPool?.dispose(), disposePool()]); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
 
 const inkBox = { id: 2, name: 'Ink', prst: 'rect', off: ['3619500', '2476500'] as [string, string], ext: ['1905000', '1905000'] as [string, string], fill: '13F00D' }
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, media: true, ...over })

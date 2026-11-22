@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
 import { Client, start, disposePool } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const odt = async () => { const z = new JSZip(); z.file('mimetype', 'application/vnd.oasis.opendocument.text'); z.file('content.xml', '<a/>'); return z.generateAsync({ type: 'uint8array' }) }
 const binaries = (c: Client) => c.msgs.filter((m) => 'binary' in m).length
 

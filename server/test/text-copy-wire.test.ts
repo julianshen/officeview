@@ -12,7 +12,7 @@ import { chunkSelect, chunkText, COPY_MAX_BYTES, rangeArg, runCopy, runSelect, T
 import type { TextJob, TextRange, TextReply, UnitPoint } from '../src/text/served'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 const KIB48 = 48 * 1024
 const NAMES = ['Alfa', 'Bravo', 'Charlie', 'Delta', 'Echo']

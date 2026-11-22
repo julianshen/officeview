@@ -26,7 +26,7 @@ import { rejectionMessage } from '../fixtures/rejection'
 
 const info = await ffmpegForTests()
 const scratch = mkdtempSync(join(tmpdir(), 'ov-t13-life-'))
-afterAll(() => { disposePool(); rmSync(scratch, { recursive: true, force: true }) })
+afterAll(async () => { await disposePool(); rmSync(scratch, { recursive: true, force: true }) })
 
 /** ~150 s of noise: a ~2.4 MB encode (three chunks), about a second of ffmpeg. */
 const noise = (name = 'n150.m4a', seed = 1) => source(info!, scratch, name, `anoisesrc=c=pink:r=48000:a=0.5:seed=${seed}`, 150)

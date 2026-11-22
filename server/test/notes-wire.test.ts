@@ -13,7 +13,7 @@ import type { Pool } from '../src/pool'
 import { hiddenSlideDeck } from './fixtures'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 
 /** Six slides, 960 × 720; every slide has a notes part, units 4 and 5 carry notes text. */
 const DECK = 'lo-tdf104788.pptx'

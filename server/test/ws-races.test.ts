@@ -9,7 +9,7 @@ import type { RenderedUnit } from '../src/render'
 import type { Pool } from '../src/pool'
 import { Client, disposePool, pool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const settle = (ms: number) => Bun.sleep(ms)
 
 describe('async open and close (review r2-1)', () => {

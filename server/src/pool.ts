@@ -140,6 +140,8 @@ export class Pool {
   /** `${docRef}|${policy}` → unit sizes from the last parse (prepare charges). */
   private unitSizes = new Map<string, OpenResult['units']>()
   private disposed = false
+  /** `dispose()`'s result: every slot's worker closed. */
+  private disposedWait?: Promise<void>
   /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
   private waiters = new Map<number, (started: boolean) => void>()
   /** Worker-time preparation reservations (owner ruling, round 13b). */
@@ -777,9 +779,12 @@ export class Pool {
 
   /** Shuts down: queued jobs are cancelled (refunded, rejected), in-flight
    * posts settle as failures (their callers refund), slot waiters wake and
-   * reject; no worker is respawned. */
-  dispose(): void {
-    if (this.disposed) return
+   * reject; no worker is respawned. The returned promise resolves once every slot's worker has fired `close` (a
+   * terminate deferred by the start gate during a load included: it resolves when that load ends and the worker
+   * closes); a later call returns the same promise. Callers that ignore it are unchanged. Nothing attaches a worker
+   * once `disposed` is set (`replace` checks it after its close), so each slot's current `whenClosed` is its last. */
+  dispose(): Promise<void> {
+    if (this.disposedWait) return this.disposedWait
     this.disposed = true
     this.unitSizes.clear()
     for (const [id, wake] of this.waiters) { this.admission.cancel(id); wake(false) }
@@ -790,5 +795,6 @@ export class Pool {
       s.worker.terminate()
       for (const wake of s.queue.splice(0)) wake()
     }
+    return this.disposedWait = Promise.all(this.slots.map((s) => s.whenClosed)).then(() => {})
   }
 }

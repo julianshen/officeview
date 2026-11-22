@@ -11,7 +11,7 @@ import { AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, typ
 import { messageFor } from '../src/mark/message'
 import { Client, corpus, disposePool, start } from './harness'
 
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 const dbPath = () => { const d = mkdtempSync(join(tmpdir(), 'ov-audit-')); dirs.push(d); return join(d, 'audit.db') }

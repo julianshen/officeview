@@ -3,8 +3,9 @@
  * `.resolves`), anywhere under server/test (`no-expect-rejects.test.ts` enforces it).
  *
  * Bun 1.4.5 (measured; 1.3.10 delivered the Worker messages): while `expect(p).rejects/.resolves` waits on a pending
- * `p` and a Worker is alive anywhere in the process (an earlier test file's counts, e.g. harness `disposePool()`,
- * which does not wait for its workers to close), the process does not dispatch Worker `message` events or
+ * `p` and a Worker is alive anywhere in the process (an earlier test file's counts: after-hooks now await
+ * `disposePool()` / `pool.dispose()`, which resolve once the pool's workers closed, but any pool left undisposed or
+ * not awaited still exposes later files), the process does not dispatch Worker `message` events or
  * `setImmediate` callbacks (timers, Worker `close`, subprocess exits, fetch, `MessageChannel` and `process.nextTick`
  * still run). So a `p` that needs a worker's reply never settles there (a pool test hangs to its timeout, or settles
  * some other way, e.g. a render deadline, and asserts the wrong outcome), and a `p` that is pure in-process JSZip work

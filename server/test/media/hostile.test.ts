@@ -17,7 +17,7 @@ import { planOf, session, settled, sidOf, spawnLog, withPart } from './battery'
 import { ffmpegForTests } from './ffmpeg-gate'
 
 const info = await ffmpegForTests()
-afterAll(() => disposePool())
+afterAll(async () => { await disposePool() })
 const FIX = resolve(import.meta.dir, '../fixtures/media')
 /** The Task 3 hostile fixtures (probe.test.ts): a truncated and a bad-header m4a, an HLS playlist, an ffconcat list,
  * and a mov whose track is an external data reference. */
