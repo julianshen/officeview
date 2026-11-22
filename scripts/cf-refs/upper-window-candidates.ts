@@ -242,12 +242,18 @@ export function windowCensus(cells: readonly SegmentCell[]): WindowCensusRow[] {
  * reproducing the numbers of recipe §10.1 as they were when the case was designed; the default includes it (recipe §10.6).
  */
 export const UPPER_WINDOW_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WINDOW_ID]
+/**
+ * Captures after this search's own follow-up, left out in every mode: the search is recorded as of ed0fccb6 (recipe §10.6).
+ * stage2-scale-raw-floor (ce3f701d) is counted by scripts/cf-refs/raw-floor-census.ts.
+ */
+export const UPPER_WINDOW_LATER_CASES: readonly string[] = ['stage2-scale-raw-floor']
 
 export async function upperWindowCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, faults } = await collectSegmentCells(manifest, rootDir, { include: 'all' })
   if (faults.length > 0) throw new Error(`upper-window: harness faults ${faults.join('; ')}`)
-  return (opts.include ?? 'all') === 'all' ? cells : cells.filter(c => !UPPER_WINDOW_POST_CAPTURE_CASES.includes(c.caseId))
+  const recorded = cells.filter(c => !UPPER_WINDOW_LATER_CASES.includes(c.caseId))
+  return (opts.include ?? 'all') === 'all' ? recorded : recorded.filter(c => !UPPER_WINDOW_POST_CAPTURE_CASES.includes(c.caseId))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

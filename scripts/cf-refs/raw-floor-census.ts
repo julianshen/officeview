@@ -18,8 +18,9 @@
  * Guarded truncation (floor(f·|d| + 1e-11), production's `interpolateChannel`) is reported alongside. Nothing here is
  * registered or reachable from production.
  *
- * Run: `npx tsx scripts/cf-refs/raw-floor-census.ts` (about 30 s; pinned by tests/xlsx-cf-scale-raw-floor-census.test.ts and
- * docs/validation/xlsx-cf-recipes-stage2.md §11.1).
+ * Run: `npx tsx scripts/cf-refs/raw-floor-census.ts` (about 30 s; every capture, stage2-scale-raw-floor included: recipe
+ * §11.7); `--pre-capture` leaves that capture out and prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §11.1.
+ * Both are pinned by tests/xlsx-cf-scale-raw-floor-census.test.ts.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -107,10 +108,18 @@ export function rawFloorCensus(collection: SegmentCollection): { rows: CensusRow
   return { rows, endpoints, endpointsRawExact, upper: collection.cells.length - lower.length }
 }
 
+/**
+ * The capture that followed this census (stage2-scale-raw-floor, ce3f701d): `{ include: 'pre-capture' }` leaves it out,
+ * reproducing the numbers of recipe §11.1 as they were when the case was designed; the default includes it (recipe §11.7).
+ */
+export const RAW_FLOOR_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-raw-floor']
+
 /** Every captured cell of the manifest's measured colour-scale cases, through production's own pipeline. */
-export async function rawFloorCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT): Promise<{ collection: SegmentCollection } & ReturnType<typeof rawFloorCensus>> {
+export async function rawFloorCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof rawFloorCensus>> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
-  const collection = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const all = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'all') === 'all' || !RAW_FLOOR_POST_CAPTURE_CASES.includes(x.caseId)
+  const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, ...rawFloorCensus(collection) }
 }
 
@@ -157,7 +166,7 @@ export function channelTable(collection: SegmentCollection): Array<{ key: string
 }
 
 async function main(): Promise<void> {
-  const { collection, rows, endpoints, endpointsRawExact, upper } = await rawFloorCensusOf()
+  const { collection, rows, endpoints, endpointsRawExact, upper } = await rawFloorCensusOf(undefined, REPO_ROOT, { include: process.argv.includes('--pre-capture') ? 'pre-capture' : 'all' })
   const misses = rows.filter(r => r.rawFloor !== r.excel)
   console.log(`segment cells ${collection.cells.length}; 2-colour or lower-segment interior ${rows.length}; endpoints or clamped ${endpoints} (raw floor exact ${endpointsRawExact}); upper-segment ${upper}; harness faults ${collection.faults.length}`)
   const gated = collection.excluded.filter(e => e.group === 'b')

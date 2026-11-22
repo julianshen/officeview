@@ -573,18 +573,22 @@ export function guardBoundaryProduct(c0: number, c1: number, value: number, tLo:
  *   interior cell was drawn so (the 14 of ed0fccb6 included);
  * - `guarded`: floor(f·|d| + 1e-11), production's `interpolateChannel` before the guard-boundary withhold (the control,
  *   contradicted by ed0fccb6 at those 14 cells).
- * Pre-registered by stage2-scale-raw-floor; nothing is registered.
+ * Pre-registered by stage2-scale-raw-floor; its capture (Excel 16.115, ce3f701d) matched `raw-floor` at all 67 evidence cells
+ * and every control, so `raw-floor` is registered (docs/validation/xlsx-cf.md §14.z.18).
  */
 export const CF_GUARD_BOUNDARY_READINGS = ['raw-floor', 'guarded'] as const
 export type CfGuardBoundaryReading = (typeof CF_GUARD_BOUNDARY_READINGS)[number]
 /** The capability a guard-boundary reading is registered under (stage2-scale-raw-floor). */
 export const CF_GUARD_BOUNDARY_CAP = 'scale:guard-boundary-raw-floor'
 /**
- * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
- * (with its evidence), every guard-boundary cell stays withheld (`cf-unmeasured-guard-boundary`), as on main. The audit's
- * CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ * The reading production implements per id: `raw-floor` for scale:guard-boundary-raw-floor, matched by the capture of
+ * stage2-scale-raw-floor (ce3f701d). With its evidence, production paints the guard-boundary shape at raw floor where the
+ * default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved; a formula-bounded segment, and a
+ * 3-colour lower segment bounded by two literal num cfvo (the num-segment withhold, first), stay withheld. Without the
+ * evidence the shape stays withheld (`cf-unmeasured-guard-boundary`). The audit's CF_STAGE2_PRODUCTION_READINGS spreads this
+ * table.
  */
-export const CF_GUARD_BOUNDARY_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> = Object.freeze({})
+export const CF_GUARD_BOUNDARY_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> = Object.freeze({ [CF_GUARD_BOUNDARY_CAP]: 'raw-floor' })
 let proposedGuardBoundaryReadings: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfGuardBoundaryReadings(readings: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> | null): void {

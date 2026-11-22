@@ -475,8 +475,9 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
 
   it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    // The num-segment follow-up registered nothing (its capture matched no reading).
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP])
+    // The num-segment follow-up registered nothing (its capture matched no reading); the raw-floor follow-up registered its
+    // question (ce3f701d).
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor'])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

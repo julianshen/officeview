@@ -6,7 +6,9 @@
  * whose step product lies within 1e-11 strictly below a whole number is withheld (`cf-unmeasured-guard-boundary`). A
  * registered reading lifts that withhold, and its justification (scripts/cf-refs/upper-whole-justify.ts), for segments with
  * no formula-resolved bound, under the default sRGB / truncate variants; the literal num-segment withhold and every
- * upper-segment rule are untouched. This checks production, not Excel.
+ * upper-segment rule are untouched. This checks production, not Excel. Since the capture of stage2-scale-raw-floor
+ * (ce3f701d) matched raw-floor, it is registered and published (docs/validation/xlsx-cf.md §14.z.18): the default is
+ * raw-floor with the id's evidence, and the pre-capture default (withheld) is pinned without that evidence.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -39,6 +41,8 @@ const all = (cap: string): boolean => cap.length > 0
 const without = (id: string) => (cap: string): boolean => cap !== id
 const colour = (o: ReturnType<typeof scaleColorAt>): string => (o.kind === 'ready' ? hex(o.value) : o.kind === 'unresolved' ? o.reason : o.kind)
 const GUARD = 'cf-unmeasured-guard-boundary'
+/** The published capabilities without the raw-floor registration's: the shape is withheld, as before ce3f701d. */
+const UNPUBLISHED = [...VERIFIED_CAPABILITIES].filter(id => id !== CF_GUARD_BOUNDARY_CAP)
 
 /**
  * The shapes, with Excel's fill in ed0fccb6 (raw floor) and production's guarded truncation: E7 (2-colour num, Q -> P), H8,
@@ -62,22 +66,24 @@ type Shape = keyof typeof SHAPES
 const run = (k: Shape, opts: Parameters<typeof scaleColorAt>[3] = { hasEvidence: all }): string => colour(scaleColorAt(SHAPES[k].v, SHAPES[k].points, SHAPES[k].t, opts))
 const register = (reading: CfGuardBoundaryReading): void => injectCfGuardBoundaryReadings({ [CF_GUARD_BOUNDARY_CAP]: reading })
 
-describe('the readings: implemented, selectable, registered nowhere', () => {
-  it('raw-floor and guarded, the only readings; production registers none, so the default is unregistered', () => {
+describe('the readings: implemented, selectable; raw-floor registered (ce3f701d)', () => {
+  it('raw-floor and guarded, the only readings; production registers raw-floor for the question and nothing else', () => {
     expect([...CF_GUARD_BOUNDARY_READINGS]).toEqual(['raw-floor', 'guarded'])
     expect(CF_GUARD_BOUNDARY_CAP).toBe('scale:guard-boundary-raw-floor')
-    expect(CF_GUARD_BOUNDARY_PRODUCTION_READINGS).toEqual({})
+    expect(CF_GUARD_BOUNDARY_PRODUCTION_READINGS).toEqual({ [CF_GUARD_BOUNDARY_CAP]: 'raw-floor' })
     expect(Object.isFrozen(CF_GUARD_BOUNDARY_PRODUCTION_READINGS)).toBe(true)
-    expect(cfGuardBoundaryReading()).toBeUndefined()
-    register('raw-floor')
     expect(cfGuardBoundaryReading()).toBe('raw-floor')
+    expect(cfGuardBoundaryReading('scale:guard-boundary-literal-lower')).toBeUndefined()
+    register('guarded')
+    expect(cfGuardBoundaryReading()).toBe('guarded')
     // The upper-window id is a different registration: selecting one never selects the other.
-    injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'guarded' })
-    expect(cfGuardBoundaryReading()).toBe('raw-floor')
+    injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'raw-floor' })
+    expect(cfGuardBoundaryReading()).toBe('guarded')
     injectCfGuardBoundaryReadings({ [CF_GUARD_BOUNDARY_CAP]: 'nonsense' as CfGuardBoundaryReading })
     expect(cfGuardBoundaryReading()).toBeUndefined()
-    injectCfGuardBoundaryReadings({ 'scale:other': 'raw-floor' })
-    expect(cfGuardBoundaryReading()).toBeUndefined()
+    // A proposal for another id leaves this id's production reading.
+    injectCfGuardBoundaryReadings({ 'scale:other': 'guarded' })
+    expect(cfGuardBoundaryReading()).toBe('raw-floor')
   })
 
   it('the reading colours, per ARGB channel from the start colour: guarded is production\'s interpolation, raw-floor one step smaller where a product is just below an integer; non-finite fails closed', () => {
@@ -98,10 +104,14 @@ describe('the readings: implemented, selectable, registered nowhere', () => {
 })
 
 describe('scaleColorAt: default unchanged; a registered reading paints only the guard-boundary shape', () => {
-  it('unregistered (main): every shape is withheld; neighbours paint as before', () => {
-    for (const k of Object.keys(SHAPES) as Shape[]) expect(run(k), k).toBe(GUARD)
+  it('without the id\'s evidence (the default before ce3f701d): every shape is withheld; neighbours paint as before', () => {
+    for (const k of Object.keys(SHAPES) as Shape[]) expect(run(k, { hasEvidence: without(CF_GUARD_BOUNDARY_CAP) }), k).toBe(GUARD)
     expect(colour(scaleColorAt(115, [num(0, P), num(210, Q)], [0, 210], { hasEvidence: all }))).toBe('FF877D9B') // H19, above
     expect(colour(scaleColorAt(70, [num(0, P), num(210, Q)], [0, 210], { hasEvidence: all }))).toBe('FF5AAA6E') // exact
+  })
+
+  it('as committed (raw-floor registered, with evidence): every shape paints Excel\'s fill of ed0fccb6', () => {
+    for (const k of Object.keys(SHAPES) as Shape[]) expect(run(k), k).toBe(SHAPES[k].excel)
   })
 
   for (const reading of CF_GUARD_BOUNDARY_READINGS) {
@@ -128,10 +138,15 @@ describe('scaleColorAt: default unchanged; a registered reading paints only the 
   }
 
   it('the registration is per id: only scale:guard-boundary-raw-floor selects it', () => {
-    injectCfGuardBoundaryReadings({ 'scale:upper-window-statistical': 'raw-floor' })
+    // With this id unregistered (an invalid proposal), a reading under any other id never paints the shape.
+    injectCfGuardBoundaryReadings({ [CF_GUARD_BOUNDARY_CAP]: 'nonsense' as CfGuardBoundaryReading })
     expect(run('E7')).toBe(GUARD)
-    injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'raw-floor' })
+    injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'guarded' })
     expect(run('E7')).toBe(GUARD)
+    // A proposal for another guard-boundary id leaves the production reading (raw-floor) in place.
+    injectCfUpperWindowReadings(null)
+    injectCfGuardBoundaryReadings({ 'scale:upper-window-statistical': 'guarded' })
+    expect(run('E7')).toBe(SHAPES.E7.excel)
   })
 })
 
@@ -144,11 +159,20 @@ describe('the justification (upper-whole-justify.ts) narrows with the registrati
   const caps = [...VERIFIED_CAPABILITIES, CF_GUARD_BOUNDARY_CAP]
   const formulaBound = (): number => 0
 
-  it('unregistered: H8 (57) is justified under literal, statistical and formula bounds; H19 (115) never is', () => {
-    for (const m of [literal, minmax]) {
-      expect(guardBoundaryShapeAt(m, 'A3', 57, values)).toBe(true)
-      expect(guardBoundaryShapeAt(m, 'A4', 115, values)).toBe(false)
-    }
+  it('without the evidence (the state before ce3f701d): H8 (57) is justified under literal, statistical and formula bounds; H19 (115) never is', () => {
+    withExactCfEvidence(UNPUBLISHED, () => {
+      for (const m of [literal, minmax]) {
+        expect(guardBoundaryShapeAt(m, 'A3', 57, values)).toBe(true)
+        expect(guardBoundaryShapeAt(m, 'A4', 115, values)).toBe(false)
+      }
+      expect(guardBoundaryShapeAt(formula, 'A3', 57, values, formulaBound)).toBe(true)
+    })
+  })
+
+  it('as committed (raw-floor registered and published): the shape is justified only under a formula bound', () => {
+    expect(VERIFIED_CAPABILITIES.has(CF_GUARD_BOUNDARY_CAP)).toBe(true)
+    expect(guardBoundaryShapeAt(literal, 'A3', 57, values)).toBe(false)
+    expect(guardBoundaryShapeAt(minmax, 'A3', 57, values)).toBe(false)
     expect(guardBoundaryShapeAt(formula, 'A3', 57, values, formulaBound)).toBe(true)
   })
 
@@ -160,7 +184,7 @@ describe('the justification (upper-whole-justify.ts) narrows with the registrati
         expect(guardBoundaryShapeAt(minmax, 'A3', 57, values)).toBe(false)
         expect(guardBoundaryShapeAt(formula, 'A3', 57, values, formulaBound)).toBe(true)
       })
-      withExactCfEvidence(VERIFIED_CAPABILITIES, () => expect(guardBoundaryShapeAt(literal, 'A3', 57, values)).toBe(true))
+      withExactCfEvidence(UNPUBLISHED, () => expect(guardBoundaryShapeAt(literal, 'A3', 57, values)).toBe(true))
     })
   }
 })

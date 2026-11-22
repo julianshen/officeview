@@ -391,9 +391,10 @@ export function truncationMisses(cells: readonly SegmentCell[]): string[] {
 export const UPPER_WHOLE_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WHOLE_ID]
 /**
  * Captures after this search's own follow-up, left out in every mode: the search is recorded as of 54fc3388 (recipe §9.5).
- * stage2-scale-upper-window (ed0fccb6) is searched by scripts/cf-refs/upper-window-candidates.ts, which includes it.
+ * stage2-scale-upper-window (ed0fccb6) is searched by scripts/cf-refs/upper-window-candidates.ts, which includes it;
+ * stage2-scale-raw-floor (ce3f701d) by scripts/cf-refs/raw-floor-census.ts.
  */
-export const UPPER_WHOLE_LATER_CASES: readonly string[] = ['stage2-scale-upper-window']
+export const UPPER_WHOLE_LATER_CASES: readonly string[] = ['stage2-scale-upper-window', 'stage2-scale-raw-floor']
 
 export async function upperWholeCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest

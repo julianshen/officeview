@@ -112,7 +112,8 @@ describe('scaleColorAt: default unchanged; a registered reading narrows only the
     expect(run('e4', 'literal')).toBe('cf-unmeasured-num-segment-fraction')
     expect(run('integer', 'stat')).toBe('cf-unmeasured-upper-segment-whole-product')
     expect(run('plain', 'stat')).toBe(hex(interpolateScaleColor(P210, P, (300 - 217) / 420)))
-    expect(run('lower', 'stat')).toBe('cf-unmeasured-guard-boundary')
+    expect(run('lower', 'stat', without('scale:guard-boundary-raw-floor'))).toBe('cf-unmeasured-guard-boundary')
+    expect(run('lower', 'stat')).toBe('FFA65EBA') // raw floor (146): the guard-boundary registration of ce3f701d, not this id's
     expect(run('lowerPlain', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.33 - 0.1) / (0.4 - 0.1))))
   })
 
@@ -124,7 +125,8 @@ describe('scaleColorAt: default unchanged; a registered reading narrows only the
       expect(run('e4', 'literal')).toBe('cf-unmeasured-num-segment-fraction')
       expect(run('integer', 'stat')).toBe('cf-unmeasured-upper-segment-whole-product')
       expect(run('plain', 'stat')).toBe(hex(interpolateScaleColor(P210, P, (300 - 217) / 420)))
-      expect(run('lower', 'stat')).toBe('cf-unmeasured-guard-boundary')
+      expect(run('lower', 'stat', without('scale:guard-boundary-raw-floor'))).toBe('cf-unmeasured-guard-boundary')
+      expect(run('lower', 'stat')).toBe('FFA65EBA') // raw floor (146): the guard-boundary registration of ce3f701d, not this id's
       expect(run('lowerPlain', 'stat')).toBe(hex(interpolateScaleColor(P, P210, (0.33 - 0.1) / (0.4 - 0.1))))
       // Without the id's evidence the reading is not honoured.
       expect(run('e4', 'stat', without(CF_UPPER_WINDOW_CAP))).toBe('cf-unmeasured-upper-segment-whole-product')

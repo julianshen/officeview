@@ -262,7 +262,7 @@ export type Stage2AuditReport = Stage1AuditReport
  * matched no pre-registered reading (formula-hypothesis-none), so nothing is registered and they stay recorded findings.
  * The upper-segment window id spreads colorScale.ts's table (`CF_UPPER_WINDOW_PRODUCTION_READINGS`: empty until
  * stage2-scale-upper-window's capture matches a reading and it is registered there), and so does the guard-boundary id
- * (`CF_GUARD_BOUNDARY_PRODUCTION_READINGS`: empty until stage2-scale-raw-floor's capture matches a reading).
+ * (`CF_GUARD_BOUNDARY_PRODUCTION_READINGS`: `raw-floor`, matched by stage2-scale-raw-floor's capture, ce3f701d).
  * A capability whose matched reading differs, or has no entry, stays withheld.
  */
 export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {

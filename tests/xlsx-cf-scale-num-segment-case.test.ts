@@ -267,7 +267,8 @@ describe('the capture (Excel 16.115): no reading matches; production withholds o
 
   it('the audit: Stage 2 ok and complete; the four ids stay recorded findings (unverified-nondiscriminating); the verified Stage 2 set is unchanged', async () => {
     const { auditStage2Manifest, CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union' })
+    // scale:scope-disjoint (union) and, since stage2-scale-raw-floor (ce3f701d), the guard-boundary question (raw-floor).
+    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor' })
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) expect(r.perCapability.find(p => p.capabilityId === id)!.disposition, id).toBe('unverified-nondiscriminating')

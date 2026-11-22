@@ -5324,11 +5324,9 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The literal-num twins of stage2-scale-upper-window (bit-identical thresholds, the same double f as each statistical window cell): recorded against the same readings to test "same double, same outcome"; withheld as the num-segment shape, never registrable.',
   'scale:upper-window-twin':
     'The 2-colour twin line of stage2-scale-upper-window (num 0 / 210, P to P+210, one cell per predicted P-line fill): comparison references, never a question themselves.',
-  // The raw-floor follow-up (stage2-scale-raw-floor): the question is registered until its capture (a matched reading is
-  // published only by removing this entry and registering it in CF_GUARD_BOUNDARY_PRODUCTION_READINGS); the literal-num lower
-  // segment and the twin line are comparisons, never questions.
-  'scale:guard-boundary-raw-floor':
-    'Pre-registered (stage2-scale-raw-floor, two readings: raw-floor, guarded), awaiting its capture: the guard-boundary shape of 2-colour scales and 3-colour lower segments stays withheld (cf-unmeasured-guard-boundary) until a matched reading is registered.',
+  // The raw-floor follow-up (stage2-scale-raw-floor): the question, scale:guard-boundary-raw-floor, matched raw-floor in its
+  // capture (Excel 16.115, ce3f701d) and is registered (CF_GUARD_BOUNDARY_PRODUCTION_READINGS), so its entry is removed; the
+  // literal-num lower segment and the twin line stay comparisons, never questions.
   'scale:guard-boundary-literal-lower':
     'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings; withheld as the num-segment shape whatever a reading says, never registrable.',
   'scale:guard-boundary-twin':
