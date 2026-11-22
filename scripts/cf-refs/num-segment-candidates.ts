@@ -97,9 +97,10 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
 /** Every captured colour-scale cell of every measured case, mapped to its segment through production's own pipeline. */
 /**
  * The captures the pre-registration search ran on: every measured case but stage2-scale-num-segment itself (its own
- * confirmation case, captured after the readings were fixed). Pass `{ include: 'all' }` to add it.
+ * confirmation case, captured after the readings were fixed) and the later stage2-scale-upper-whole (54fc3388). Pass
+ * `{ include: 'all' }` to add them.
  */
-export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment']
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole']
 
 export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }

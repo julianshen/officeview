@@ -3148,3 +3148,83 @@ Both stages recompute the justification independently of production (`scripts/cf
   - Probe more numerators per denominator in the upper segment.
 - **H3:** the upper segment's colour is computed from the maximum's end and rounded toward the midpoint colour, with a floating-point step not in the search.
   - Test it with the inputs for H1, plus palettes whose upper-segment channel spans differ.
+
+### 14.z.16 The upper-segment whole-product follow-up: captured, exploratory, nothing registered (2026-11-22)
+
+**Why.** §14.z.15 left three hypotheses for the 19 upper-segment whole products that capture 377564e0 drew one step smaller per channel. The extended search (recipe §9.1, 48,345 candidates) found no survivor. So `stage2-scale-upper-whole` was built as an **exploratory** case: only the `truncate` control was pre-registered, and nothing is registrable from it. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §9. Interpretation: `.superpowers/sdd/cf-upperwhole/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The search:** 581fea11.
+2. **The case:** 01295139, 72224243.
+3. **A verifier fix:** f2cfaaa6. Excel resaved `val="2.2"` as `2.2000000000000002`, the same double. The structural check had compared the text, so it rejected the first build, which is kept as `stage2-scale-upper-whole.rejected.xlsx`. Colour-scale literal cfvo values now compare by double, as bar bounds do.
+4. **Capture:** 54fc3388 (Excel 16.115). The rebuild opened repair-free.
+
+**The capture.**
+- **`verifyCfCase`:**
+  - `formula-hypothesis-none` for `scale:upper-segment-whole-product`;
+  - `truncate` matched for `scale:upper-segment-whole-product-control`;
+  - the twin line is a non-discriminating comparison.
+- **The audit verifies none of the three ids** (all `unverified-nondiscriminating`), and the verified Stage 2 set is unchanged.
+- **The capture is sound:**
+  - all 8 controls are white;
+  - all 28 positive controls show their dxf fill;
+  - all 32 twin-line cells equal P + k·(1, −1, 1);
+  - every pixel equals its DisplayFormat fill, and the minimum contrast is 123;
+  - the lower-segment mirrors and the 2-colour twins are at truncation;
+  - the E4/E5 replica D19/D20 equals `stage2-scale-thresholds` E4/E5, and F2/F3 equal T4/V3.
+- **Every designated cell is exactly truncation or "truncation minus one"** (one unit smaller on every exactly-whole channel). 79 moved and 48 did not.
+
+| Group | Cells | Moved | At truncation |
+|---|---|---|---|
+| `h2` | 41 | 24 | 17 |
+| `h1` | 35 | 28 | 7 |
+| `h3` | 26 | 19 | 7 |
+| `e4` | 14 | 8 | 6 |
+| `control` | 11 | 0 | 11 |
+
+**The hypotheses.**
+- **H1, origin: refuted in its full-span form.**
+  - With integer operands, 1/3, 1/5, 1/7 and 1/15 moved and 1/6 did not, in all 7 origin, span and midpoint blocks (zero minimum, midpoint near the max or the min, crossing zero, 10⁶ offsets, a 4.2·10⁶ span, negative values), and in both colour orders.
+  - The full-span position differs by orders of magnitude across those blocks, so a rule from the scale minimum cannot fit. The best `origin` candidate now fails 55 cells.
+  - Integer operands give the same segment doubles in every block, so this invariance does not separate p/q from the doubles.
+  - Decimal operands do: at the same p/q the outcome flips with the computed double. 2/3 stayed unmoved at F11 and F13 (f = fl(2/3) + 1 ulp). 1/6 moved at F16 (f below fl(1/6)).
+  - In every capture, cells with the same production double f had the same outcome: 40 distinct doubles, 0 inconsistent.
+- **H2, denominators: refuted as a rational rule.**
+  - Moved: 1/3, 2/3, 1/5, 2/5, 1/7, 2/7, 1/11, 1/12, 1/13, 2/13, 1/15, 2/15, 4/15, 1/23, 2/23, 1/31 and 2/31.
+  - Not moved: 3/5, 4/5, 3/7 … 6/7, 1/9, 2/9, 4/9, 2/11, 5/12, 7/15, 1/17 and 2/17, plus 1/6, 1/10 and the dyadics.
+  - This rules out denominator, odd-denominator, numerator-1 and threshold-on-f rules.
+  - It also rules out any rule on f's significand alone. 1/12 moved and 1/6 did not; 1/5 and 2/5 moved, 1/10 and 4/5 did not; 1/7 and 2/7 moved, 4/7 did not. Each set shares one significand.
+- **H3, per channel: per cell, and independent of d.**
+  - In each moved cell, every exactly-whole channel moved and no other channel did. Examples: E3 R and G, not B (42/5); E9 B only; F4 G only; F6 R only.
+  - At a given double f, no fraction's outcome changed with |d|, from 9 to 210, of either sign.
+  - "Per channel" is the per-cell move made visible only where the product is whole.
+
+**The search with this capture** (`npx tsx scripts/cf-refs/upper-whole-candidates.ts`; `--pre-capture` reproduces §9.1):
+- 1101 cells; production's truncation misses 100 of them (21 earlier and 79 new);
+- **0 survivors** at every scope;
+- best at the upper 3-colour scope: `origin` 55, `f32` 20, `precision` 13, `rational` 14;
+- **the float32-from-max near miss fails 20 cells**: E4, then 12 cells where it predicts a move Excel did not draw, and 7 where it predicts none and Excel moved. The family is refuted as a mechanism.
+
+**Production: consistent; nothing changes.**
+- Production paints 74 of the 195 cells, every one at Excel's exact ARGB. D19, the E4 replica and the known risk, is at truncation, as Excel drew it.
+- It withholds 121 cells: 120 as the num-segment shape and D20 as an upper-segment whole product. Every withhold is justified.
+- The conformance pass, now over 10 measured Stage 2 cases, reports 962 cells: 686 exact and 276 withheld (227 num-segment, 19 upper whole product), with 0 violations.
+- `cf-compare --case stage2-scale-upper-whole` passes in both modes. Stage 2 and Stage 5 audits are ok and complete, and `blockedCapabilities=0`.
+- Nothing was published, and no capability changed (no `src/` change).
+
+**A latent gap (owner decision, not implemented).** Five moved cells, F12, F15, F16, F18 and F19, have an exact whole product but no IEEE-integer double product (e.g. F16: 0.1666…63 · 210 = 34.999999999999993).
+- **Why they are safe today:** `upperSegmentWholeProduct` misses them, and they are withheld only because they are literal num / num.
+- **The gap:** under statistical bounds that resolve to the same thresholds, production would paint truncation where Excel moves.
+- **The narrowest fail-closed widening:** in `upperSegmentWholeProduct` and `upper-whole-justify.ts`, count a channel when |f·d − round(f·d)| ≤ 1e-11 (production's truncation guard) with 0 < round(f·d) < d.
+- **Its reach over every captured cell:** 10 new matches, covering all 100 moved cells.
+  - 8 of them are already withheld.
+  - It would newly withhold 2 painted, exact cells, `stage2-scale-thresholds` E4 and D19.
+
+**Refined hypotheses for a future pre-registered case** (none registrable from this capture):
+- **R1:** the decision is per cell and a function of the segment's operand doubles; d only makes it visible.
+  - Probe it at a fixed p/q, stepping f through fl(p/q) ± 2 ulp with decimal operands.
+  - Repeat with the same double f from integer and from decimal operands.
+  - Vary r = (hi − v)/(hi − lo) at a fixed f, to separate a from-the-start computation from a from-the-maximum one.
+- **R2:** the decision depends on the exponent, not only on the significand. Candidate operations should be magnitude-sensitive: 1 − r, sums with the midpoint or an offset, (v − lo)·d/(hi − lo), extended-precision intermediates. Probe more power-of-two multiples of one significand (1/24, 1/48, 8/15, 8/9, 16/31).
+- **R3:** confirm d-independence at d = 1..8 (for example d = 3, 5, 7 at 1/3, 1/5, 1/7).
+- **R4:** measure the latent gap directly: a statistical-bound 3-colour scale with decimal thresholds whose exact product is whole and whose double product is not (F12-like, thresholds 0.4 / 1). Do this before, or alongside, any widening.

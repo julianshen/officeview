@@ -532,11 +532,13 @@ The capture cannot be retried, and no prediction, class or separator is edited a
 
 > **Exploratory: nothing is registrable from this case.** The extended search (§9.1) found no candidate that reproduces every captured cell, so no reading but the `truncate` control is pre-registered. The capture measures; it cannot register anything, and production does not change on its account.
 
+> **Captured 54fc3388 (Excel 16.115). Nothing was registered and production did not change.** Result: §9.5.
+
 **Why.** Capture 377564e0 (`stage2-scale-num-segment`, §8.6) drew truncation everywhere except 19 cells. Each is in the UPPER segment of a 3-colour scale at a whole step product (f = 1/3, 2/3, 1/5, 1/7, 1/15), one unit smaller on every channel; T4 and V3 of e448d831 are the same shape. Unmoved upper-segment whole products: 1/6, 5/6, 1/10, 3/10, 7/10, 6/7, 1/2, 1/4. No lower-segment or 2-colour cell moved. Production withholds every 3-colour upper-segment whole product (`upperSegmentWholeProduct`, `cf-unmeasured-upper-segment-whole-product`). Hypotheses H1–H3: `docs/validation/xlsx-cf.md` §14.z.15.
 
 ### 9.1 Extended candidate search (Phase 1 task 1)
 
-`npx tsx scripts/cf-refs/upper-whole-candidates.ts` (about 40 s; pinned by `tests/xlsx-cf-scale-upper-whole-candidates.test.ts`).
+`npx tsx scripts/cf-refs/upper-whole-candidates.ts --pre-capture` (about 40 s; pinned by `tests/xlsx-cf-scale-upper-whole-candidates.test.ts`). The numbers in this section are the search as it ran before the capture. Without `--pre-capture`, the run includes the capture of §9.5.
 
 **Cells.** The harness of §8.1 (`collectSegmentCells`, production's own paint with the segment probe), now with `stage2-scale-num-segment` included: 942 captured colour-scale cells, 217 of them from that capture and 520 from Stage 5 refs. 112 cells are inapplicable (group a) and 32 are dropped by a production gate (group b, none under a 3-colour scale). 0 harness faults. **Baseline:** production's truncation misses exactly the 21 moved cells (T4, V3, and B17, B18, B21, B24, B28, C17, C18, C21, C24, C28, D7, D8, D12, D13, E17, E18, E21, E24, E28 of `stage2-scale-num-segment`).
 
@@ -689,3 +691,34 @@ The capture cannot be retried, and nothing here is edited after it. Whatever Exc
 - **Excel equals truncation at a cell:** recorded; that cell's withhold stays.
 - **Excel moves at a cell:** recorded, per channel, against the minus-one and near-miss columns of the predictions file.
 - **D19 moves:** production mispaints a published shape. That is a finding for the owner, not a registration.
+
+### 9.5 Run result (captured, 54fc3388, Excel 16.115; exploratory)
+
+- **Status:** captured (measured).
+  - The first build was rejected structurally: Excel resaved `val="2.2"` as `2.2000000000000002`, the same double. That build is kept as `tests/fixtures/xlsx-cf/stage2-scale-upper-whole.rejected.xlsx`.
+  - f2cfaaa6 compares colour-scale literal cfvo values by double. The rebuild opened repair-free, and the capture verified with a minimum contrast of 123.
+- **`verifyCfCase`:** `formula-hypothesis-none` for `scale:upper-segment-whole-product`, and `truncate` for the control id. The twin line is non-discriminating.
+  - The audit keeps all three ids `unverified-nondiscriminating`. **Nothing is registered.**
+- **The capture is sound.** All 8 controls are white, all 28 positive controls show their dxf fill, all 32 twins are on the model line, and every pixel equals its DisplayFormat fill.
+- **What Excel drew.** At every designated cell, Excel drew exactly the predictions file's truncation (48 cells) or its "minus one" (79 cells), never another colour.
+
+  | Group | Moved | At truncation |
+  |---|---|---|
+  | `h2` | 24 | 17 |
+  | `h1` | 28 | 7 |
+  | `h3` | 19 | 7 |
+  | `e4` | 8 | 6 |
+  | `control` | 0 | 11 |
+
+  - Every lower-segment mirror and 2-colour twin is at truncation.
+  - D19 (E4's replica) is at truncation, as production paints it.
+- **The search with this capture included:**
+  - 1101 cells, 100 truncation misses;
+  - 0 survivors at any scope;
+  - best at the upper scope: `origin` 55, `f32` 20, `precision` 13, `rational` 14;
+  - the float32-from-max near miss fails 20 cells.
+- **Production is consistent.**
+  - 74 cells are painted, each at Excel's exact ARGB.
+  - 121 are withheld and justified: 120 as num-segment and D20 as an upper whole product.
+  - `cf-compare` passes interactive and paged.
+- **Findings, the latent `upperSegmentWholeProduct` gap (F12, F15, F16, F18, F19), and the refined hypotheses R1–R4:** `docs/validation/xlsx-cf.md` §14.z.16.

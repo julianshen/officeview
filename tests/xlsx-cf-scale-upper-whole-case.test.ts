@@ -111,7 +111,8 @@ describe('stage2-scale-upper-whole: the case (exploratory)', () => {
     }
     expect([...S2_UPPER_WHOLE_READINGS]).toEqual(['truncate'])
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    // Captured 54fc3388 (Excel 16.115); the capture is pinned in its own block below.
+    expect(c.status).toBe('measured')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
     expect(c.scaleReadings!.map(x => [x.id, x.capabilityId, Object.keys(x.hypotheses)])).toEqual([
       ['h2', CAP, ['truncate']], ['h1', CAP, ['truncate']], ['h3', CAP, ['truncate']], ['e4', CAP, ['truncate']], ['control', CTRL, ['truncate']],
@@ -278,7 +279,7 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
   const before = [...VERIFIED_STAGE2_CAPABILITIES].sort()
   const withoutOurs = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => ![CAP, CTRL].includes(id)))
 
-  it('the real (recipe-pending) manifest: Stage 2 audits ok and complete, the three ids unverified-nondiscriminating, the verified set unchanged', async () => {
+  it('the real (measured) manifest: Stage 2 audits ok and complete, the three ids unverified-nondiscriminating, the verified set unchanged', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
@@ -334,4 +335,70 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
       for (const mode of ['interactive', 'paged'] as const) expect((await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })).outcome, `${world} ${mode}`).toBe('fail')
     }
   }, 900_000)
+})
+
+// ---- the capture itself (54fc3388, Excel 16.115): recorded, never registered ----
+const excelFills = (): Map<string, string> => {
+  const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, caseOf().captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string; bgRgb: number[] }> }
+  return new Map(sc.observedCells.map(o => [o.ref, o.fillRgb.toUpperCase()]))
+}
+// The designated cells Excel drew one step smaller on every exactly-whole channel (the "minus one" column); every other
+// designated cell is at truncation. Nothing is fitted or registered from this (docs/validation/xlsx-cf.md §14.z.16).
+const CAPTURED_MOVED = ('A2 A3 A4 A5 A8 A9 A14 A15 A16 B2 B3 B4 B5 B9 B11 B12 B14 B15 B16 B19 B20 B21 B23 B24 C2 C3 C4 C5 C7 C8 C9 C10 C12 C13 '
+  + 'C14 C15 C17 C18 C19 C20 C22 C23 C24 C25 D2 D3 D4 D5 D7 D8 D9 D10 E2 E3 E4 E5 E7 E8 E9 E10 E12 E13 E14 E15 E17 E18 E20 F2 F3 F4 '
+  + 'F6 F10 F12 F14 F15 F16 F17 F18 F19').split(' ')
+
+describe('the capture (Excel 16.115, 54fc3388): recorded, nothing registered, production consistent', () => {
+  it('verifyCfCase: formula-hypothesis-none for the finding; the controls at truncate; the twin line a comparison', () => {
+    const res = verifyCfCase(caseOf(), { rootDir: REPO_ROOT })
+    expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
+    if (res.kind !== 'verified') return
+    expect(res.minPositiveContrastDelta).toBe(123)
+    expect((res.refusedCapabilities ?? []).map(r => [r.capabilityId, r.code])).toEqual([[CAP, 'formula-hypothesis-none']])
+    expect(res.matchedHypotheses).toEqual({ [CTRL]: 'truncate' })
+    expect(res.nonDiscriminatingCapabilities).toEqual([TWIN])
+    // The verifier's per-case view; the audit keeps the control id a recorded finding (unverified-nondiscriminating, above).
+    expect(res.verifiedCapabilities).toEqual([CTRL])
+  })
+
+  it('the capture rendered as designed: controls white, positive controls their dxf fill, every twin its model, every pixel its DisplayFormat fill', () => {
+    const c = caseOf()
+    const excel = excelFills()
+    for (const e of c.expected.cells.filter(x => !x.matched)) expect(excel.get(e.ref), e.ref).toBe('FFFFFFFF')
+    for (const e of c.expected.cells.filter(x => x.matched && !x.scaleApplied)) expect(excel.get(e.ref), e.ref).toBe(e.fillRgb!.toUpperCase())
+    for (const [ref, k] of twinK) expect(excel.get(ref), ref).toBe(lineFill(k))
+    const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string; bgRgb: number[] }> }
+    for (const o of sc.observedCells) expect(`FF${o.bgRgb.map(x => x.toString(16).padStart(2, '0')).join('')}`.toUpperCase(), o.ref).toBe(o.fillRgb.toUpperCase())
+  })
+
+  it('every designated cell is exactly truncation or truncation minus one step; 79 moved, every control and D19 at truncation', () => {
+    const excel = excelFills()
+    const moved: string[] = []
+    for (const p of predictions.values()) {
+      const got = excel.get(p.ref)
+      expect([p.truncate, p.minusOne], p.ref).toContain(got)
+      if (got !== p.truncate) moved.push(p.ref)
+    }
+    expect(moved).toEqual(CAPTURED_MOVED)
+    for (const p of predictions.values()) if (p.configuration === 'control') expect(moved, p.ref).not.toContain(p.ref)
+    expect(excel.get('D19')).toBe(predictions.get('D19')!.truncate)
+    // D19 and D20 equal stage2-scale-thresholds E4 and E5, which they replicate.
+    const th = JSON.parse(readFileSync(resolve(REPO_ROOT, manifest.cases.find(x => x.id === 'stage2-scale-thresholds')!.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+    const thFill = (ref: string): string | undefined => th.observedCells.find(o => o.ref === ref)?.fillRgb.toUpperCase()
+    expect([excel.get('D19'), excel.get('D20')]).toEqual([thFill('E4'), thFill('E5')])
+  })
+
+  it('the shared conformance pass on the capture: no violation; 74 exact, 121 withheld and justified (120 num-segment, D20 upper whole product)', async () => {
+    const r = await stage2Conformance(manifest, REPO_ROOT, [ID])
+    expect(r.violations).toEqual([])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([195, 74, 121, 120, 1])
+  }, HEAVY)
+
+  it('the interactive and paged comparisons (scripts/cf-compare.ts) pass on the capture', async () => {
+    const { compareCfCase } = await import('../scripts/cf-compare')
+    for (const mode of ['interactive', 'paged'] as const) {
+      const res = await compareCfCase(caseOf(), mode, { rootDir: REPO_ROOT })
+      expect(res.outcome, `${mode}: ${res.reason}`).toBe('pass')
+    }
+  }, HEAVY)
 })

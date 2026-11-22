@@ -25,7 +25,8 @@
  *
  * Nothing here is registered or reachable from production (brief hard rule): survivors would be hypotheses for a NEW capture.
  *
- * Run: `npx tsx scripts/cf-refs/upper-whole-candidates.ts` (prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §9.1).
+ * Run: `npx tsx scripts/cf-refs/upper-whole-candidates.ts` (every capture, stage2-scale-upper-whole included: recipe §9.5);
+ * `--pre-capture` leaves that capture out and prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §9.1.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -383,11 +384,17 @@ export function truncationMisses(cells: readonly SegmentCell[]): string[] {
   return cells.filter(c => hex(truncationOf(c.segment)) !== c.excel).map(c => `${c.caseId}:${c.ref}`)
 }
 
-export async function upperWholeCells(rootDir: string = REPO_ROOT): Promise<SegmentCell[]> {
+/**
+ * The capture that followed this search (stage2-scale-upper-whole, 54fc3388, exploratory): `{ include: 'pre-capture' }`
+ * leaves it out, reproducing the numbers of recipe §9.1 as they were when the case was designed; the default includes it.
+ */
+export const UPPER_WHOLE_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WHOLE_ID]
+
+export async function upperWholeCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, faults } = await collectSegmentCells(manifest, rootDir, { include: 'all' })
   if (faults.length > 0) throw new Error(`upper-whole: harness faults ${faults.join('; ')}`)
-  return cells
+  return (opts.include ?? 'all') === 'all' ? cells : cells.filter(c => !UPPER_WHOLE_POST_CAPTURE_CASES.includes(c.caseId))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -478,7 +485,10 @@ function writePredictions(): void {
 async function main(): Promise<void> {
   if (process.argv.includes('--write-predictions')) { writePredictions(); return }
   const manifest = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
-  const { cells, excluded, faults } = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
+  const collected = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
+  // `--pre-capture`: the cells as they were before stage2-scale-upper-whole was captured (recipe §9.1).
+  const keep = (k: { caseId: string }): boolean => !process.argv.includes('--pre-capture') || !UPPER_WHOLE_POST_CAPTURE_CASES.includes(k.caseId)
+  const [cells, excluded, faults] = [collected.cells.filter(keep), collected.excluded.filter(keep), collected.faults]
   const short = (k: string): string => k.replace(/^stage\d-(scale-)?/, '')
   console.log(`## Cells\n\n${cells.length} captured colour-scale cells; ${excluded.filter(e => e.group === 'a').length} excluded as inapplicable (group a), ${excluded.filter(e => e.group === 'b').length} dropped by a production gate (group b, ${excluded.filter(e => e.group === 'b' && e.threeColour).length} under a 3-colour scale); ${faults.length} harness faults.`)
   const base = truncationMisses(cells)

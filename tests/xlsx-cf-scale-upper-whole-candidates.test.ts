@@ -4,16 +4,18 @@
  * (scripts/cf-refs/upper-whole-candidates.ts) over every captured colour-scale cell, stage2-scale-num-segment included.
  * Pins the calibration (production's truncation misses exactly the 21 moved cells), the result (no survivor at any scope,
  * so the follow-up case is exploratory), the near misses docs/validation/xlsx-cf-recipes-stage2.md §9.1 reports, and the
- * fail-closed evaluation. Nothing here registers anything.
+ * fail-closed evaluation. Nothing here registers anything. The same search with the exploratory capture of
+ * stage2-scale-upper-whole (54fc3388) included is pinned at the end (recipe §9.5): still no survivor.
  */
 import { describe, expect, it } from 'vitest'
-import { evaluateUpperWhole, roundBits, truncationMisses, upperWholeCandidates, upperWholeCells, type UpperWholeResult } from '../scripts/cf-refs/upper-whole-candidates'
+import { evaluateUpperWhole, NEAR_MISS_ID, roundBits, truncationMisses, upperWholeCandidates, upperWholeCells, type UpperWholeResult } from '../scripts/cf-refs/upper-whole-candidates'
 import type { SegmentCell } from '../scripts/cf-refs/num-segment-candidates'
 import type { CfScaleSegment } from '../src/xlsx/cf/colorScale'
 
 const HEAVY = 300_000
 let cells: SegmentCell[] | undefined
-const cellsOnce = async (): Promise<SegmentCell[]> => (cells ??= await upperWholeCells())
+// The search as run before stage2-scale-upper-whole was captured (recipe §9.1); the capture is pinned separately below.
+const cellsOnce = async (): Promise<SegmentCell[]> => (cells ??= await upperWholeCells(undefined, { include: 'pre-capture' }))
 let results: UpperWholeResult[] | undefined
 const resultsOnce = async (): Promise<UpperWholeResult[]> => (results ??= evaluateUpperWhole(await cellsOnce()))
 
@@ -97,4 +99,32 @@ describe('fail-closed evaluation', () => {
     expect(roundBits(1 / 3, 53, 'nearest')).toBe(1 / 3)
     expect(roundBits(0.75, 1, 'truncate')).toBe(0.5)
   })
+})
+
+describe('after the capture of stage2-scale-upper-whole (54fc3388, exploratory): the search on every capture', () => {
+  const ID = 'stage2-scale-upper-whole'
+  // The 79 designated cells Excel drew one step smaller on every exactly-whole channel (the rest are at truncation).
+  const NEW_MOVED = ('A2 A3 A4 A5 A8 A9 A14 A15 A16 B2 B3 B4 B5 B9 B11 B12 B14 B15 B16 B19 B20 B21 B23 B24 C2 C3 C4 C5 C7 C8 C9 C10 C12 C13 '
+    + 'C14 C15 C17 C18 C19 C20 C22 C23 C24 C25 D2 D3 D4 D5 D7 D8 D9 D10 E2 E3 E4 E5 E7 E8 E9 E10 E12 E13 E14 E15 E17 E18 E20 F2 F3 F4 '
+    + 'F6 F10 F12 F14 F15 F16 F17 F18 F19').split(' ').map(r => `${ID}:${r}`)
+  let all: SegmentCell[] | undefined
+  let allResults: UpperWholeResult[] | undefined
+  const allOnce = async (): Promise<SegmentCell[]> => (all ??= await upperWholeCells())
+  const allResultsOnce = async (): Promise<UpperWholeResult[]> => (allResults ??= evaluateUpperWhole(await allOnce()))
+
+  it('1101 cells (159 from the new capture); production\'s truncation misses the 21 earlier moved cells and the 79 new ones', async () => {
+    const cs = await allOnce()
+    expect(cs.length).toBe(1101)
+    expect(cs.filter(c => c.caseId === ID).length).toBe(159)
+    expect(new Set(truncationMisses(cs))).toEqual(new Set([...MOVED, ...NEW_MOVED]))
+  }, HEAVY)
+
+  it('no survivor at any scope; the float32 near miss fails 20 cells (E4 and 19 of the new capture)', async () => {
+    const rs = await allResultsOnce()
+    expect(rs.filter(r => r.mismatches.length === 0)).toEqual([])
+    const fewest = (family: string): number => Math.min(...rs.filter(r => r.family === family && r.scope === 'upper-3-colour').map(r => r.mismatches.length))
+    expect(['origin', 'f32', 'precision', 'rational'].map(fewest)).toEqual([55, 20, 13, 14])
+    const near = rs.find(r => r.id === NEAR_MISS_ID && r.scope === 'upper-3-colour')!
+    expect(near.mismatches).toEqual(['stage2-scale-thresholds:E4', ...'A10 A11 A17 B6 B7 B8 B17 B18 B22 B23 B24 D19 F5 F8 F10 F12 F14 F15 F16'.split(' ').map(r => `${ID}:${r}`)])
+  }, HEAVY)
 })

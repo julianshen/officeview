@@ -18,6 +18,10 @@ in git history.
   - **Reach:** this stops 5 mispainted cells of a min / percentile / max scale. It also withholds 17 cells, across 5 captured cases, that were already painted correctly.
   - **Unchanged:** the lower segment, 2-colour scales and every other cell paint as before. No capability changed (345 verified).
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.15.
+- **Follow-up measurement of those colour-scale cells (no viewer change).** A second Excel 16.115 capture (`stage2-scale-upper-whole`, exploratory) drew each of 127 test cells either at the viewer's interpolation or exactly one step closer to the midpoint colour.
+  - **What it showed:** which cells move depends on how the cell's position works out in floating point, not on the fraction itself, the colours or the scale's span. No candidate formula explains it.
+  - **What you see:** nothing changes. Every cell the viewer paints in that capture matches Excel exactly, and the cells it withholds stay withheld. Nothing new is verified.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.16.
 
 ### Added
 

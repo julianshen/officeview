@@ -145,6 +145,8 @@ describe('the reach: every newly withheld cell of every measured case is the sha
       'stage2-scale-scope-disjoint': ['U4'],
       'stage2-scale-num-segment': ['B26', 'C26', 'E17', 'E18', 'E19', 'E20', 'E21', 'E22', 'E23', 'E24', 'E25', 'E26', 'E28'].sort(),
       'stage5-cfvo-nonnumeric-v2': ['E4', 'E5', 'S4', 'S5'],
+      // The exploratory capture 54fc3388: E4's replica D20 (min / percentile 30 / max, f = 3/13, product 36).
+      'stage2-scale-upper-whole': ['D20'],
     })
     // The justifications, recomputed independently of production, name exactly these cells, case by case.
     for (const c of manifest.cases.filter(x => x.status === 'measured' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
