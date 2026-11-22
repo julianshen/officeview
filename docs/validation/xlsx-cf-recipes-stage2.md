@@ -970,7 +970,7 @@ The capture cannot be retried, and no prediction, value or reading is edited aft
 - **The search with this capture:** `npx tsx scripts/cf-refs/upper-window-candidates.ts` (`--pre-capture` reproduces §10.1). It has 1235 cells and 0 survivors at every scope.
 - **Findings, reach and hypotheses:** `docs/validation/xlsx-cf.md` §14.z.17.
 
-## 11. The raw-floor follow-up (`stage2-scale-raw-floor`)
+## 11. The raw-floor follow-up (`stage2-scale-raw-floor`; captured ce3f701d, `raw-floor` registered)
 
 The pre-registered confirmation case for W1 (`docs/validation/xlsx-cf.md` §14.z.17): 2-colour scales and 3-colour lower segments draw raw floor, floor(f·|d|), with no 1e-11 guard. Since the owner ruling after ed0fccb6, production withholds the guard-boundary shape of these segments (`cf-unmeasured-guard-boundary`), where guarded truncation and raw floor differ. This case asks Excel to draw that shape across bound kinds, colour orders, spans and doubles, so that one of two readings can be registered.
 
@@ -1251,3 +1251,27 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **`guarded` matches:** this would contradict ed0fccb6 at its 14 cells. That is a finding for the owner before any registration.
 - **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The shape stays withheld.
 - **The literal id and the W3 probes** are recorded whatever they show. The W3 probes are exploratory, and production's upper-segment rules do not change.
+
+### 11.7 Run result (captured, ce3f701d, Excel 16.115)
+
+- **Status:** captured (measured). The first build opened repair-free, and the capture verified with a minimum contrast of 126. A `--verify-only` run re-verified it.
+- **`verifyCfCase`:** `raw-floor` for `scale:guard-boundary-raw-floor` and for `scale:guard-boundary-literal-lower`. The twin line is non-discriminating.
+- **The capture is sound:**
+  - every pixel equals its DisplayFormat fill (201/201);
+  - the 13 controls are white;
+  - the two positive controls show FFF8696B and FF63BE7B;
+  - all 72 twins are on the P line at their step, with IEEE-integer products (recomputed).
+- **The evidence:** Excel drew raw floor at all 67 evidence cells, in every configuration: 2c-num 15, 2c-minmax 9, 2c-percent 8, 2c-percentile 4, 2c-inverted 7, 3c-pmp 8, 3c-percent 5, 3c-mixed 7 and 3c-resort 4. `guarded` matches none of them, and no cell drew neither reading. Every predicted colour of §11.4 was recomputed independently, in Python as well, and Excel equals the `raw-floor` column at every evidence cell.
+- **The negative controls:** all 34 are at guarded truncation, which both readings predict: 9 above an integer, 10 at an integer and 15 clear, 13 of those in the upper segment.
+- **The literal cells** (F6..F9, recorded) drew raw floor at all 4. They stay withheld as the num-segment shape, because lifting that withhold needs its own ruling.
+- **The W3 probes** (record only):
+  - raw floor at H10, H11, H13, I9, I10, I12 and I13, like their lower partners;
+  - guarded truncation at H12 and I11, both at f = 127/210 (0x3fe35a35a35a35a3), in opposite colour orders. Their lower partners H5 and I5 drew raw floor.
+  - So the upper-segment outcome follows the double (W2), not the colour direction. The upper-segment rules are unchanged.
+- **Registered:** `raw-floor`, as §11.6 says:
+  - the `CF_STAGE2_NONDISCRIMINATING` entry is removed;
+  - `CF_GUARD_BOUNDARY_PRODUCTION_READINGS['scale:guard-boundary-raw-floor'] = 'raw-floor'`;
+  - it is published through the audit (346 verified capabilities).
+
+  Production paints the 14 cells of ed0fccb6 and this capture's 67 at Excel's fill. Nothing else moves. Details and reach: `docs/validation/xlsx-cf.md` §14.z.18.
+- **The census with the capture:** `npx tsx scripts/cf-refs/raw-floor-census.ts` covers 856 interior cells and W1 misses 0. `--pre-capture` reproduces §11.1.

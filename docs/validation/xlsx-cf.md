@@ -3344,3 +3344,85 @@ Both stages recompute the justification independently of production (`scripts/cf
 - **W2:** the upper-segment decision is per cell and follows the f double (§14.z.16 R1). The unmoved doubles below an integer are E4's, D8's and D11's; the moved ones above an integer are F19/B14's and C15's.
 - **W3:** at the same double, lower and upper segments differ, and their colour directions are opposite. Probe the same f in both segments with both colour orders.
 - **Design note:** twin lines should use values whose double products are IEEE integers. A twin drawn off its line changes a reading's prediction through token resolution, and the verifier checks only that the twin renders.
+
+### 14.z.18 The raw-floor follow-up: captured, `raw-floor` matched and registered; the guard-boundary withhold lifted (2026-11-23)
+
+**Why.** §14.z.17's owner ruling withheld the guard-boundary shape: an interior cell of a 2-colour scale, or of a 3-colour lower segment after the midpoint-above-max re-sort, where some ARGB channel's p = f·|d| lies within 1e-11 strictly below a whole number. There, guarded truncation and raw floor differ. Hypothesis W1 said Excel draws raw floor there. `stage2-scale-raw-floor` pre-registered two readings for the shape, `raw-floor` (floor(f·|d|)) and `guarded` (floor(f·|d| + 1e-11)). Their production behaviour was committed before the capture (22428cd3) and left unregistered. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §11. Interpretation: `.superpowers/sdd/cf-rawfloor/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The census:** a8359976.
+2. **The readings:** 22428cd3.
+3. **The case:** b75b0c44, 53db39f0.
+4. **Capture:** ce3f701d (Excel 16.115). The first build opened repair-free.
+5. **Registration:** e1a66618.
+
+**The capture.**
+- **`verifyCfCase`:** `raw-floor` for `scale:guard-boundary-raw-floor` and for `scale:guard-boundary-literal-lower`; the twin line is non-discriminating. Minimum positive contrast 126; 22 rules matched.
+- **The capture is sound:**
+  - every pixel equals its DisplayFormat fill (201/201);
+  - the 13 unformatted controls are white;
+  - the 2 positive controls show FFF8696B and FF63BE7B;
+  - all 72 twins are on the P line at their step, and each twin's product is an IEEE integer (recomputed).
+
+| Configuration | Decisive cells | Excel drew |
+|---|---|---|
+| `2c-num` | 15 | raw floor at 15 |
+| `2c-minmax` | 9 | raw floor at 9 |
+| `2c-percent` | 8 | raw floor at 8 |
+| `2c-percentile` | 4 | raw floor at 4 |
+| `2c-inverted` | 7 | raw floor at 7 |
+| `3c-pmp` | 8 | raw floor at 8 |
+| `3c-percent` | 5 | raw floor at 5 |
+| `3c-mixed` | 7 | raw floor at 7 |
+| `3c-resort` | 4 | raw floor at 4 |
+| `controls` (negative control) | 0 of 34 | all 34 at guarded truncation, as both readings predict: 9 above an integer, 10 at an integer, 2 clear in the lower segment or a 2-colour scale, and 13 clear upper-segment cells |
+| `literal` (recorded, own id) | 4 | raw floor at 4 (F6..F9) |
+| `w3` (record only) | — | raw floor at 7; guarded at H12 and I11 |
+
+- **The readings.** `raw-floor` matches all 67 evidence cells. `guarded` matches none of them. No cell drew neither reading.
+- **The 14 doubles of ed0fccb6** are replicated in their own and other bound kinds, both colour orders and four spans (210, 150, 105, 30). Every replica drew raw floor.
+
+**The census with this capture.**
+- `npx tsx scripts/cf-refs/raw-floor-census.ts` covers 856 interior 2-colour and lower-segment cells, 164 of them from this capture. Raw floor is exact at all 856.
+- Guarded truncation misses exactly the 85 below-integer cells: ed0fccb6's 14, and this capture's 67 evidence and 4 literal cells.
+- Per channel, all 2559 interior channels with d ≠ 0 are at raw floor. The below-integer channels number 72 ascending and 87 descending in 2-colour scales, and 59 ascending and 37 descending in lower segments.
+- The pre-capture census of recipe §11.1 is pinned unchanged (`--pre-capture`).
+
+**Same double, same outcome.** All captured interior cells were keyed by (upper segment, or lower / 2-colour; the bits of f; |d|) on the channels where the readings differ. That gives 57 keys and 0 inconsistent. Every one of the 36 lower or 2-colour keys drew raw floor.
+
+**W3 (record only; never evidence).**
+- **Four doubles agree across segments.** At 57/210, 108/210, 27/210 and 54/210 the upper segment drew raw floor like its lower partner (H10, H11, H13, I9, I10, I12, I13).
+- **127/210 (f = 0x3fe35a35a35a35a3) does not.** The upper segment stayed at guarded truncation in **both** colour orders (H12, P / Q / P; I11, Q / P / Q), while its lower partners H5 and I5 drew raw floor.
+- **Colour direction is not the discriminator, and W3 as stated is not supported.** The upper-segment outcome follows the double, per W2. The upper doubles that stay at guarded truncation are now E4's, D8's, D11's and 127/210.
+- The upper-segment rules and the window withhold are unchanged.
+
+**Registration.**
+- **`raw-floor` is registered** for `scale:guard-boundary-raw-floor`:
+  - `CF_GUARD_BOUNDARY_PRODUCTION_READINGS` in `src/xlsx/cf/colorScale.ts` (spread into the audit's `CF_STAGE2_PRODUCTION_READINGS`);
+  - the id's `CF_STAGE2_NONDISCRIMINATING` entry is removed;
+  - it is published through `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5`. Two runs were byte-identical, sha-256 `43b3a392c6ae963cc924e33e2bae9faf00025703ca3bf3d8824aa865dfc01508`. Exactly one id was added: 346 verified, 36 Stage 2.
+- **What production does with the registration and its evidence.** It paints the guard-boundary shape at raw floor where the default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved.
+- **The justification narrows with it.** `guardBoundaryShapeAt` in `scripts/cf-refs/upper-whole-justify.ts` uses the registration table and the evidence, never production's arithmetic, so the shape is justified no longer except where a bound is a formula.
+- **Still withheld, each needing its own owner ruling:**
+  - **a 3-colour lower segment bounded by two literal num cfvo.** The num-segment withhold keeps its precedence. This capture's 4 literal cells drew raw floor, as did all 60 earlier ones, but in one span and one colour order;
+  - **a formula-resolved bound in the shape.** No captured cell is in that shape, this capture included.
+- **The literal id and the twin line** stay `unverified-nondiscriminating`.
+- **Without the id's evidence** the shape is withheld as before (`cf-unmeasured-guard-boundary`). The tests rehearse that state by withholding the evidence.
+
+**Reach:**
+
+| Case | Guard-boundary withheld before | After | Painted exactly now | Mispainted now |
+|---|---|---|---|---|
+| `stage2-scale-upper-window` | 14 | 0 | A3, A4, D2, D4, E7..E10, E12..E14, H8, H18, I5 | 0 |
+| `stage2-scale-raw-floor` | 67 | 0 | the 67 evidence cells | 0 |
+| every other measured case (Stage 2 and Stage 5) | 0 | 0 | — | 0 |
+
+**Effect on the passes.**
+- **Conformance.** The case joins `STAGE2_MEASURED_CASES`. The Stage 2 conformance pass reports 1310 cells: 963 exact and 347 withheld (258 num-segment, 59 upper whole product, 0 guard-boundary), with 0 violations. Before the registration (evidence withheld) the same pass is 882 exact and 428 withheld, 81 of them guard-boundary, also with 0 violations.
+- **cf-compare.** `cf-compare --stage 2` passes paged (24 pass, 2 unsupported). Interactive has 22 pass; its only failures are the two clock-dependent `stage1-timeperiod-today-clock` cases, which also fail on main.
+- **Audits.** Both are ok and complete: Stage 2 `unverifiedNonDiscriminating=20`; Stage 5 has 0 disagreeing records.
+- **Stage 5 records.** The 3194 records are identical with and without the id's evidence.
+- **The candidate harnesses.**
+  - `collectSegmentCells` treats a guard-boundary cell painted at raw floor the way it treated the withheld one, and records any other painted fill as a harness fault.
+  - The num-segment, upper-whole and upper-window searches stay recorded as of their own captures (`SEARCH_EXCLUDED_CASES`, `UPPER_WHOLE_LATER_CASES`, `UPPER_WINDOW_LATER_CASES`).
+  - The upper-window rehearsal is pinned as recorded at ed0fccb6, without this registration's evidence.
