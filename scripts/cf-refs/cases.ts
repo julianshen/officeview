@@ -3069,6 +3069,288 @@ function stage2NumSegmentCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The upper-segment whole-product follow-up (brief cf-upperwhole): capture 377564e0 (stage2-scale-num-segment) drew 19
+// upper-segment whole products of 3-colour scales (f = 1/3, 2/3, 1/5, 1/7, 1/15) one unit smaller per channel than
+// truncation, by a rule no pre-registered reading explained. The extended search (scripts/cf-refs/upper-whole-candidates.ts,
+// docs/validation/xlsx-cf-recipes-stage2.md §9.1) found NO candidate reproducing every captured cell, so this case is
+// EXPLORATORY: only `truncate` (production's arithmetic, the control the earlier capture already contradicts) is
+// pre-registered, so the verifier records the comparison, and nothing is registrable from it. Its cells discriminate H1
+// (origin, span, midpoint position), H2 (more numerators per denominator, denominators off the 12-bit binary period), H3
+// (asymmetric palettes, per channel) and the float32 near miss's E4 contradiction (non-representable thresholds), with
+// lower-segment mirrors and 2-colour twins as controls. Every prediction comes from `s2NumSegmentColour('truncate', …)`,
+// an independent model, never from the viewer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_UPPER_WHOLE_ID = 'stage2-scale-upper-whole'
+/** The finding: 3-colour upper-segment cells, whole products among them (production's withheld shape). */
+export const S2_UPPER_WHOLE_CAP = 'scale:upper-segment-whole-product'
+/** Lower-segment mirrors and 2-colour twins: expected at truncation (P1), decided by the same control reading. */
+export const S2_UPPER_WHOLE_CONTROL_CAP = 'scale:upper-segment-whole-product-control'
+/** The twin line (2-colour num 0 / 210, P to Q): one cell per predicted P-line fill, a comparison reference only. */
+export const S2_UPPER_WHOLE_TWIN = 'scale:upper-segment-whole-product-twin'
+/** Exploratory: the only reading is the control (no candidate survived the extended search). */
+export const S2_UPPER_WHOLE_READINGS = ['truncate'] as const
+
+/** A cell value: a fraction p/q of the rule's upper (`U`) or lower (`L`) segment over integer thresholds, or an exact decimal. */
+export type S2UpperWholeValue = { seg: 'U' | 'L'; p: number; q: number } | { lit: string }
+export type S2UpperWholeGroup = 'h1' | 'h2' | 'h3' | 'e4' | 'control'
+
+export interface S2UpperWholeBlock {
+  id: string
+  /** The configuration of the block's designated cells (a 3-colour block's lower-segment cells are `control`). */
+  group: S2UpperWholeGroup
+  col: string
+  firstRow: number
+  /** cfvo in authored order. */
+  cfvo: ReadonlyArray<{ type: string; val?: string }>
+  colors: readonly string[]
+  /** The thresholds the rule resolves to, ascending, as exact decimals (a statistical block's are checked bit for bit). */
+  thresholds: readonly string[]
+  values: readonly S2UpperWholeValue[]
+  /** Indices of `values` that are designated (default all); the rest are scope only (a statistical block's bounds). */
+  designated?: readonly number[]
+}
+
+/** The P line: P + k·(1, −1, 1) (P = (20, 240, 40)), k in 0..210, the fills the twin line shows. */
+export const s2UwLine = (k: number): string => `FF${[20 + k, 240 - k, 40 + k].map(c => c.toString(16).toUpperCase().padStart(2, '0')).join('')}`
+const S2UW_STOCK = ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] as const
+const s2uwNum = (...v: Array<string | number>): Array<{ type: string; val: string }> => v.map(x => ({ type: 'num', val: String(x) }))
+const s2uwU = (...fs: Array<[number, number]>): S2UpperWholeValue[] => fs.map(([p, q]) => ({ seg: 'U' as const, p, q }))
+const s2uwL = (...fs: Array<[number, number]>): S2UpperWholeValue[] => fs.map(([p, q]) => ({ seg: 'L' as const, p, q }))
+const s2uwLit = (...vs: string[]): S2UpperWholeValue[] => vs.map(lit => ({ lit }))
+/** A 3-colour num block over the P line: min and max at line step `ends`, the midpoint at `mid` (upper span |mid − ends|). */
+const s2uwLineBlock = (id: string, group: S2UpperWholeGroup, col: string, firstRow: number, t: readonly [number, number, number], ends: number, mid: number, values: S2UpperWholeValue[]): S2UpperWholeBlock =>
+  ({ id, group, col, firstRow, cfvo: s2uwNum(...t), colors: [s2UwLine(ends), s2UwLine(mid), s2UwLine(ends)], thresholds: t.map(String), values })
+/** A 3-colour num block with a literal palette: [max colour, midpoint colour, max colour] (the upper segment mid → max). */
+const s2uwPaletteBlock = (id: string, col: string, firstRow: number, t: readonly [number, number, number], mid: string, max: string, values: S2UpperWholeValue[]): S2UpperWholeBlock =>
+  ({ id, group: 'h3', col, firstRow, cfvo: s2uwNum(...t), colors: [max, mid, max], thresholds: t.map(String), values })
+const S2UW_H1_FRACTIONS: Array<[number, number]> = [[1, 3], [1, 5], [1, 7], [1, 15], [1, 6]]
+
+/**
+ * The blocks (columns A..F; the range is A1:J27, inside the text scope's admitted batch). A: the base scale of stage2-scale-num-segment (num 7 / 217 / 637, P / Q / P, d = 210) at 18 upper fractions
+ * (H2: every numerator of 5 and 7, four of 15; 1/6 and 1/10 unmoved before) and 6 lower mirrors. C: H2 under other
+ * denominators, each on a P-line palette whose span d is a multiple of them (Q / P / Q 7 / 217 / 637; d = 198 for 9 and
+ * 11; 156 for 12 and 13; 187, 207, 186 for 17, 23, 31, whose binary periods 8, 11, 5 do not divide 12). C and D: H1, the
+ * same five fractions at d = 210 over other origins, spans and midpoint positions; the 2-colour twins; the replica of
+ * stage2-scale-thresholds' E column (min / percentile 30 / max over 1, 2, 3, 4, 10, whose E4 contradicts the float32 near
+ * miss). E and F: H3, literal palettes whose channel spans differ (small and large d, both signs, a zero channel, the stock
+ * palette with one channel whole and others not), the T4/V3 replica, and decimal thresholds whose double products are not
+ * whole although the exact ones are (E4's shape: num 1 / 2.2 / 10, 0.1 / 0.4 / 1, 0.7 / 1.3 / 2.2).
+ */
+export function s2UpperWholeBlocks(): S2UpperWholeBlock[] {
+  return [
+    s2uwLineBlock('h2-base', 'h2', 'A', 2, [7, 217, 637], 0, 210, [
+      ...s2uwU([1, 3], [2, 3], [1, 5], [2, 5], [3, 5], [4, 5], [1, 7], [2, 7], [3, 7], [4, 7], [5, 7], [6, 7], [1, 15], [2, 15], [4, 15], [7, 15], [1, 6], [1, 10]),
+      ...s2uwL([1, 3], [2, 3], [1, 5], [2, 5], [1, 7], [1, 15]),
+    ]),
+    s2uwLineBlock('h2-qpq', 'h2', 'B', 2, [7, 217, 637], 210, 0, s2uwU([1, 3], [1, 5], [1, 7], [1, 15])),
+    s2uwLineBlock('h2-d198', 'h2', 'B', 6, [0, 396, 792], 0, 198, s2uwU([1, 9], [2, 9], [4, 9], [1, 11], [2, 11], [1, 3])),
+    s2uwLineBlock('h2-d156', 'h2', 'B', 12, [0, 312, 624], 0, 156, s2uwU([1, 12], [5, 12], [1, 13], [2, 13], [1, 3])),
+    s2uwLineBlock('h2-d187', 'h2', 'B', 17, [0, 374, 748], 0, 187, s2uwU([1, 17], [2, 17], [1, 11])),
+    s2uwLineBlock('h2-d207', 'h2', 'B', 20, [0, 414, 828], 0, 207, s2uwU([1, 23], [2, 23], [1, 9])),
+    s2uwLineBlock('h2-d186', 'h2', 'B', 23, [0, 372, 744], 0, 186, s2uwU([1, 31], [2, 31])),
+    s2uwLineBlock('h1-zero-min', 'h1', 'C', 2, [0, 210, 420], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-mid-high', 'h1', 'C', 7, [0, 2000, 2210], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-mid-low', 'h1', 'C', 12, [0, 10, 220], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-cross-zero', 'h1', 'C', 17, [-210, 0, 210], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-large', 'h1', 'C', 22, [1000000, 1000210, 1000420], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-wide', 'h1', 'D', 2, [0, 4200000, 8400000], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwLineBlock('h1-negative', 'h1', 'D', 7, [-1050, -630, -420], 0, 210, s2uwU(...S2UW_H1_FRACTIONS)),
+    // The 2-colour twins of A's upper segment (num 217 / 637, the midpoint colour to the max colour): expected unmoved.
+    { id: 'control-two-colour', group: 'control', col: 'D', firstRow: 12, cfvo: s2uwNum(217, 637), colors: [s2UwLine(210), s2UwLine(0)], thresholds: ['217', '637'], values: [[1, 3], [2, 3], [1, 5], [1, 7], [1, 15]].map(([p, q]) => ({ lit: String(217 + (420 * p!) / q!) })) },
+    { id: 'e4-replica', group: 'e4', col: 'D', firstRow: 17, cfvo: [{ type: 'min' }, { type: 'percentile', val: '30' }, { type: 'max' }], colors: [...S2UW_STOCK], thresholds: ['1', '2.2', '10'], values: s2uwLit('1', '2', '3', '4', '10'), designated: [2, 3] },
+    s2uwPaletteBlock('h3-mixed', 'E', 2, [7, 217, 637], 'FF14F028', 'FFE68752', s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwPaletteBlock('h3-small', 'E', 7, [7, 217, 637], 'FF646464', 'FF825579', s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwPaletteBlock('h3-signs', 'E', 12, [7, 217, 637], 'FFFA0A80', 'FF28DC17', s2uwU(...S2UW_H1_FRACTIONS)),
+    s2uwPaletteBlock('h3-zero-channel', 'E', 17, [7, 217, 637], 'FF3C3C3C', 'FFE13C0F', s2uwU(...S2UW_H1_FRACTIONS)),
+    { id: 'h3-replica', group: 'h3', col: 'F', firstRow: 2, cfvo: s2uwNum(0, 30, 60), colors: [...S2UW_STOCK], thresholds: ['0', '30', '60'], values: s2uwLit('40', '50') },
+    { id: 'h3-stock', group: 'h3', col: 'F', firstRow: 4, cfvo: s2uwNum(0, 180, 360), colors: [...S2UW_STOCK], thresholds: ['0', '180', '360'], values: s2uwU([1, 5], [1, 9], [1, 12], [1, 6]) },
+    { id: 'e4-literal', group: 'e4', col: 'F', firstRow: 8, cfvo: s2uwNum('1', '2.2', '10'), colors: [...S2UW_STOCK], thresholds: ['1', '2.2', '10'], values: s2uwLit('3', '4', '4.8', '7.4') },
+    { id: 'e4-tenths', group: 'e4', col: 'F', firstRow: 12, cfvo: s2uwNum('0.1', '0.4', '1'), colors: [s2UwLine(0), s2UwLine(210), s2UwLine(0)], thresholds: ['0.1', '0.4', '1'], values: s2uwLit('0.6', '0.8', '0.52', '0.44', '0.5') },
+    { id: 'e4-binade', group: 'e4', col: 'F', firstRow: 17, cfvo: s2uwNum('0.7', '1.3', '2.2'), colors: [s2UwLine(0), s2UwLine(210), s2UwLine(0)], thresholds: ['0.7', '1.3', '2.2'], values: s2uwLit('1.6', '1.48', '1.36') },
+  ]
+}
+
+/** The layout's fixed slots: twin columns, positive-control slots, the control row. */
+export const S2_UPPER_WHOLE = {
+  twinCols: ['G', 'H'] as const,
+  positiveControlCols: ['I', 'J'] as const,
+  firstRow: 2,
+  lastDataRow: 26,
+  /** Row 27: each data column's unformatted control (the column's first designated value), the twin and the positive controls'. */
+  controlRow: 27,
+  twinControl: 'G27',
+  positiveControlShared: 'I27',
+}
+
+/** A block's cell value as the exact decimal written to the workbook. */
+export function s2UpperWholeValueText(b: S2UpperWholeBlock, v: S2UpperWholeValue): string {
+  if ('lit' in v) return v.lit
+  const t = b.thresholds.map(Number)
+  const [lo, hi] = v.seg === 'U' ? [t[1]!, t[2]!] : [t[0]!, t[1]!]
+  const num = lo * v.q + (hi - lo) * v.p
+  if (!b.thresholds.every(x => Number.isInteger(Number(x))) || num % v.q !== 0) throw new Error(`${S2_UPPER_WHOLE_ID}: ${b.id} ${v.seg} ${v.p}/${v.q} is not a whole value`)
+  return String(num / v.q)
+}
+
+export interface S2UpperWholeCell {
+  ref: string
+  block: S2UpperWholeBlock
+  /** The exact decimal value. */
+  text: string
+  value: number
+  designated: boolean
+  /** 0: lower (or only) segment; 1: upper. */
+  segment: 0 | 1
+  /** The configuration (designated cells only). */
+  configuration?: S2UpperWholeGroup
+  /** The segment's endpoints and colours (ascending thresholds, positional colours). */
+  lo: number
+  hi: number
+  from: string
+  to: string
+}
+
+/** Every cell of every block, with its segment (the thresholds are ascending; no midpoint re-sort in this case). */
+export function s2UpperWholeCells(): S2UpperWholeCell[] {
+  return s2UpperWholeBlocks().flatMap(b => b.values.map((v, i): S2UpperWholeCell => {
+    const text = s2UpperWholeValueText(b, v), value = Number(text)
+    const t = b.thresholds.map(Number)
+    const segment: 0 | 1 = t.length === 2 || value <= t[1]! ? 0 : 1
+    const designated = b.designated === undefined || b.designated.includes(i)
+    const configuration = !designated ? undefined : b.colors.length === 2 || segment === 0 ? 'control' : b.group
+    return { ref: `${b.col}${b.firstRow + i}`, block: b, text, value, designated, segment, configuration, lo: t[segment]!, hi: t[segment + 1]!, from: b.colors[segment]!, to: b.colors[segment + 1]! }
+  }))
+}
+
+/** What `truncate` (production's arithmetic, floor(f·d + 1e-11) toward the segment's start colour) predicts at a cell. */
+export const s2UpperWholeTruncation = (c: S2UpperWholeCell): string => s2NumSegmentColour('truncate', c.from, c.to, c.value, c.lo, c.hi)
+
+/** The step k of a fill on the P line, or undefined off it. */
+const s2uwLineStep = (argb: string): number | undefined => s2nsLineStep(argb)
+
+const S2UW_CONFIGURATIONS: ReadonlyArray<{ id: S2UpperWholeGroup; capabilityId: string; note: string }> = [
+  { id: 'h2', capabilityId: S2_UPPER_WHOLE_CAP, note: 'H2: the fraction set (more numerators per denominator; denominators 9, 11, 12, 13, 17, 23, 31).' },
+  { id: 'h1', capabilityId: S2_UPPER_WHOLE_CAP, note: 'H1: the same fractions over other origins, spans and midpoint positions.' },
+  { id: 'h3', capabilityId: S2_UPPER_WHOLE_CAP, note: 'H3: asymmetric palettes (per channel), the T4/V3 replica and the stock palette.' },
+  { id: 'e4', capabilityId: S2_UPPER_WHOLE_CAP, note: 'E4: decimal thresholds whose exact products are whole and double products are not.' },
+  { id: 'control', capabilityId: S2_UPPER_WHOLE_CONTROL_CAP, note: 'Controls: lower-segment mirrors and 2-colour twins, expected at truncation.' },
+]
+
+/**
+ * The configurations (one per group), the twin line and the literal positive controls. Predictions on the P line are twin
+ * tokens (the twin line's cell of step k); every other fill is a literal token vouched by a literal cellIs positive control.
+ */
+export function s2UpperWholeLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: Array<{ ref: string; k: number }> } {
+  const fx = S2_UPPER_WHOLE
+  const cells = s2UpperWholeCells().filter(c => c.designated)
+  const fills = [...new Set(cells.map(s2UpperWholeTruncation))].sort()
+  const steps = [...new Set(fills.map(s2uwLineStep).filter((k): k is number => k !== undefined))].sort((a, b) => a - b)
+  const slots = (cols: readonly string[]): string[] => cols.flatMap(col => Array.from({ length: fx.lastDataRow - fx.firstRow + 1 }, (_, i) => `${col}${fx.firstRow + i}`))
+  const twinSlots = slots(fx.twinCols)
+  if (steps.length > twinSlots.length) throw new Error(`${S2_UPPER_WHOLE_ID}: ${steps.length} twins exceed ${twinSlots.length} slots`)
+  const twins = steps.map((k, i) => ({ ref: twinSlots[i]!, k }))
+  const twinOf = new Map(twins.map(t => [t.k, t.ref]))
+  const literals = fills.filter(f => s2uwLineStep(f) === undefined)
+  const pcSlots = slots(fx.positiveControlCols)
+  if (literals.length > pcSlots.length) throw new Error(`${S2_UPPER_WHOLE_ID}: ${literals.length} literal fills exceed ${pcSlots.length} positive-control slots`)
+  const positiveControls = literals.map((token, i) => ({ ref: pcSlots[i]!, token }))
+  const pcOf = new Map(positiveControls.map(p => [p.token, p.ref]))
+  const tokenOf = (fill: string): string => { const k = s2uwLineStep(fill); return k === undefined ? fill : `twin:${twinOf.get(k)!}` }
+  const configurations: S5Configuration[] = S2UW_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    const hypotheses = Object.fromEntries(S2_UPPER_WHOLE_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2UpperWholeTruncation(c))]))]))
+    const tokens = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)))]
+    const twinRefs = tokens.filter(t => t.startsWith('twin:')).map(t => t.slice('twin:'.length)).sort()
+    const lits = tokens.filter(t => !t.startsWith('twin:')).sort()
+    return {
+      id: cfg.id, capabilityId: cfg.capabilityId, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])),
+      ...(lits.length > 0 ? { positiveControls: Object.fromEntries(lits.map(t => [pcOf.get(t)!, t])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins }
+}
+
+/** The data columns (A..F) and the control of each: the column's first designated cell's value, unformatted, in row 27. */
+export function s2UpperWholeColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2UpperWholeCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_UPPER_WHOLE.controlRow}`, text: cells.find(c => c.designated && c.ref.startsWith(col) && /^\d+$/.test(c.ref.slice(col.length)))!.text }))
+}
+
+function s2UpperWholeMarker(capabilityId: string, sqref: string, cfvo: ReadonlyArray<{ type: string; val?: string }>, colors: readonly string[], priority: number): CfPartMarker {
+  return { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId, sqref, ruleType: 'colorScale', priority, formulas: [], scale: { cfvo, colors: [...colors] } }
+}
+
+/** The colour rules (one per block), then the twin line's (one per twin column), in priority order; positive controls follow, unmarked. */
+export function s2UpperWholeMarkers(): CfPartMarker[] {
+  const blocks = s2UpperWholeBlocks()
+  const { twins } = s2UpperWholeLayout()
+  const twinRules = S2_UPPER_WHOLE.twinCols.map(col => twins.filter(t => t.ref.startsWith(col)).map(t => Number(t.ref.slice(col.length)))).map((rows, i) => ({ col: S2_UPPER_WHOLE.twinCols[i]!, rows })).filter(x => x.rows.length > 0)
+  return [
+    ...blocks.map(b => ({ cap: b.colors.length === 2 ? S2_UPPER_WHOLE_CONTROL_CAP : S2_UPPER_WHOLE_CAP, sqref: `${b.col}${b.firstRow}:${b.col}${b.firstRow + b.values.length - 1}`, cfvo: b.cfvo, colors: b.colors })),
+    ...twinRules.map(x => ({ cap: S2_UPPER_WHOLE_TWIN, sqref: `${x.col}${x.rows[0]!}:${x.col}${x.rows.at(-1)!}`, cfvo: s2uwNum(0, 210), colors: [s2UwLine(0), s2UwLine(210)] })),
+  ].map((m, i) => s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1))
+}
+
+/** The capture range: through the last positive-control column and the control row. */
+export const s2UpperWholeRange = (): string => `A1:${S2_UPPER_WHOLE.positiveControlCols.at(-1)!}${S2_UPPER_WHOLE.controlRow}`
+
+function stage2UpperWholeCase(): CfOracleCase {
+  const fx = S2_UPPER_WHOLE
+  const { configurations, positiveControls, twins } = s2UpperWholeLayout()
+  const all = s2UpperWholeCells()
+  const colControl = new Map(s2UpperWholeColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const designated: CfCellExpectation[] = all.filter(c => c.designated).map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  // A twin's control is the shared unformatted G27 (value 0); a positive control's is I27 (value 1). The evaluator reads a
+  // designated cell's or a twin's own DisplayFormat fill, never its control (the control only gates pixel contrast).
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: fx.twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: fx.positiveControlShared, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: fx.twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: fx.positiveControlShared, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const groups = new Map<string, number>()
+  for (const c of all.filter(x => x.designated)) groups.set(c.configuration!, (groups.get(c.configuration!) ?? 0) + 1)
+  return {
+    id: S2_UPPER_WHOLE_ID,
+    stage: 2,
+    question:
+      `EXPLORATORY (nothing registrable): the upper-segment whole-product follow-up of capture 377564e0 (19 upper-segment whole products of 3-colour scales one unit smaller per channel than truncation, by no pre-registered rule). The extended search found no candidate, so only the control reading truncate is pre-registered and the capture is a measurement. ${groups.get('h2')} H2 cells (more numerators per denominator; denominators 9, 11, 12, 13, 17, 23, 31), ${groups.get('h1')} H1 cells (the same fractions over other origins, spans and midpoint positions), ${groups.get('h3')} H3 cells (asymmetric palettes, the T4/V3 replica), ${groups.get('e4')} E4 cells (decimal thresholds, exact products whole, double products not) and ${groups.get('control')} controls (lower-segment mirrors, 2-colour twins). A 2-colour twin line shows every predicted P-line fill; literal cellIs positive controls the others.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_UPPER_WHOLE_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_UPPER_WHOLE_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2UpperWholeRange(),
+    requiredAppearances: ['screen'],
+    markers: s2UpperWholeMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_UPPER_WHOLE_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_UPPER_WHOLE_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations (exploratory measurement)',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -4229,8 +4511,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   },
   // 9. stage2-scale-scope-disjoint (the scope-disjoint follow-up: earlier inputs stay byte-identical)
   stage2ScopeDisjointCase(),
-  // 10. stage2-scale-num-segment (the num-segment follow-up, appended last: earlier inputs stay byte-identical)
+  // 10. stage2-scale-num-segment (the num-segment follow-up: earlier inputs stay byte-identical)
   stage2NumSegmentCase(),
+  // 11. stage2-scale-upper-whole (the upper-segment whole-product follow-up, exploratory, appended last)
+  stage2UpperWholeCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -4367,6 +4651,15 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The 2-colour literal num twins of stage2-scale-num-segment: every reading is 3-colour only, so all predict truncation; Excel matched them (truncation) but they never bear evidence.',
   'scale:num-segment-fraction-twin':
     'The 2-colour twin line of stage2-scale-num-segment (num 0 / 210, P to Q, one cell per predicted P/Q fill): comparison references for the readings (every cell matched its model), never a question themselves.',
+  // The upper-segment whole-product follow-up (stage2-scale-upper-whole): an EXPLORATORY measurement. The extended search
+  // left no candidate, so only the control reading (truncate) is pre-registered; nothing is registrable from the capture,
+  // and every id stays unverified whatever it shows (production keeps withholding the shape).
+  'scale:upper-segment-whole-product':
+    'Exploratory measurement (stage2-scale-upper-whole): no candidate survived the extended search (docs/validation/xlsx-cf-recipes-stage2.md §9.1), so only the control reading truncate is pre-registered. The capture records Excel against truncation; nothing is registrable from it, and upper-segment whole products stay withheld (cf-unmeasured-upper-segment-whole-product).',
+  'scale:upper-segment-whole-product-control':
+    'The controls of stage2-scale-upper-whole (lower-segment mirrors in the base rule, 2-colour twins): expected at truncation; recorded by the control reading, never a question themselves.',
+  'scale:upper-segment-whole-product-twin':
+    'The 2-colour twin line of stage2-scale-upper-whole (num 0 / 210, P to Q, one cell per predicted P-line fill): comparison references, never a question themselves.',
 }
 
 /**

@@ -570,3 +570,122 @@ A survivor reproduces Excel's DisplayFormat fill at every one of the 942 cells. 
 **Aliasing.** The `precision` pair `complement-raw-step/bin28/bin30` misses only H25 and I25 (f = 7/10). It recurs at bin40/bin42 (and bin24/bin36, bin19/bin31/bin43, bin27/bin39 elsewhere in the table). The binary periods of 1/3, 1/5, 1/7 and 1/15 (2, 4, 3, 4) divide 12, so the captured fractions cannot tell p-bit from (p+12)-bit rounding. It identifies no precision, and the case breaks the period (denominators 11, 17, 23 and 31, whose periods 10, 8, 11 and 5 do not divide 12).
 
 **What follows.** There is no survivor, so task 2 is skipped: nothing is implemented, selectable or registered. The case of §9.2 is exploratory. Its cells are chosen to discriminate H1–H3 and the near miss's mechanism (E4 replication, the product's binade, denominators off the 12-bit period). The near miss's predictions are listed for interpretation only. It is never a reading.
+
+### 9.2 The case (Phase 1 task 3; exploratory)
+
+> **Exploratory measurement. No reading but the `truncate` control is pre-registered, and nothing is registrable from this capture.** `truncate` is the control the 377564e0 capture already contradicts, and it is there so the verifier records the comparison. All three ids are registered in `CF_STAGE2_NONDISCRIMINATING` and have no entry in `CF_STAGE2_PRODUCTION_READINGS`, so none can verify, whatever Excel shows. Production keeps both withholds (`cf-unmeasured-num-segment-fraction` and `cf-unmeasured-upper-segment-whole-product`).
+
+It is appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical. It owns three ids:
+- `scale:upper-segment-whole-product`, the finding, with configurations `h1`, `h2`, `h3` and `e4`;
+- `scale:upper-segment-whole-product-control`, with configuration `control`: the lower-segment mirrors (in the base rule) and the 2-colour twins, expected at truncation;
+- `scale:upper-segment-whole-product-twin`: the twin line, comparison references only.
+
+**Colours.** The P line, P + k·(1, −1, 1) with P = `FF14F028` (20, 240, 40), carries every P-line palette. A 3-colour block runs from the max colour at step `ends` to the midpoint colour at step `mid`, so its upper segment has the same span d = |mid − ends| on every channel. Every P-line fill is a `twin:` token: the twin line (2-colour num 0 / 210, P → P+210, value k) shows step k. The 28 other fills (the H3 palettes and the stock palette) are literal tokens, each vouched by a literal cellIs positive control.
+
+**Blocks** (priority order; each a 3-colour num rule unless stated; fractions are of the upper segment):
+
+| Priority | sqref | Rule | Cells | Group |
+|---|---|---|---|---|
+| 1 | `A2:A25` | num 7 / 217 / 637, P / P+210 / P (the base of `stage2-scale-num-segment`, d = 210) | upper 1/3, 2/3, 1/5, 2/5, 3/5, 4/5, 1/7 … 6/7, 1/15, 2/15, 4/15, 7/15, 1/6, 1/10 (18); lower 1/3, 2/3, 1/5, 2/5, 1/7, 1/15 (6) | `h2`; lower: `control` |
+| 2 | `B2:B5` | num 7 / 217 / 637, Q / P / Q (d = 210) | 1/3, 1/5, 1/7, 1/15 | `h2` (colour-order replication) |
+| 3 | `B6:B11` | num 0 / 396 / 792, P / P+198 / P (d = 198) | 1/9, 2/9, 4/9, 1/11, 2/11, 1/3 | `h2` |
+| 4 | `B12:B16` | num 0 / 312 / 624, d = 156 | 1/12, 5/12, 1/13, 2/13, 1/3 | `h2` |
+| 5 | `B17:B19` | num 0 / 374 / 748, d = 187 | 1/17, 2/17, 1/11 | `h2` |
+| 6 | `B20:B22` | num 0 / 414 / 828, d = 207 | 1/23, 2/23, 1/9 | `h2` |
+| 7 | `B23:B24` | num 0 / 372 / 744, d = 186 | 1/31, 2/31 | `h2` |
+| 8..12 | `C2:C6`, `C7:C11`, `C12:C16`, `C17:C21`, `C22:C26` | num 0 / 210 / 420 (zero minimum); 0 / 2000 / 2210 (midpoint near the max); 0 / 10 / 220 (near the min); −210 / 0 / 210 (crossing zero); 1000000 / 1000210 / 1000420 (large values); d = 210 | 1/3, 1/5, 1/7, 1/15, 1/6 each | `h1` |
+| 13, 14 | `D2:D6`, `D7:D11` | num 0 / 4200000 / 8400000 (wide span); −1050 / −630 / −420 (negative); d = 210 | 1/3, 1/5, 1/7, 1/15, 1/6 each | `h1` |
+| 15 | `D12:D16` | 2-colour num 217 / 637, P+210 → P (the base's upper segment as a 2-colour scale) | 357, 497, 301, 277, 245 (f = 1/3, 2/3, 1/5, 1/7, 1/15) | `control` |
+| 16 | `D17:D21` | min / percentile 30 / max over 1, 2, 3, 4, 10, stock palette: the replica of `stage2-scale-thresholds` E2:E6 (thresholds 1 / 2.2 / 10, the same double) | D19 (3, f = 4/39: the near miss's counterexample E4), D20 (4, f = 3/13: E5) | `e4` |
+| 17..20 | `E2:E6`, `E7:E11`, `E12:E16`, `E17:E21` | num 7 / 217 / 637, literal palettes midpoint → max: `FF14F028` → `FFE68752` (d = +210, −105, +42), `FF646464` → `FF825579` (+30, −15, +21), `FFFA0A80` → `FF28DC17` (−210, +210, −105), `FF3C3C3C` → `FFE13C0F` (+165, 0, −45) | 1/3, 1/5, 1/7, 1/15, 1/6 each: products whole on all, some or no channels | `h3` |
+| 21 | `F2:F3` | num 0 / 30 / 60, stock palette (T4/V3 of e448d831) | 40, 50 | `h3` |
+| 22 | `F4:F7` | num 0 / 180 / 360, stock palette (d = −156, −45, −9) | 1/5, 1/9, 1/12, 1/6: one channel whole, the others not | `h3` |
+| 23 | `F8:F11` | num 1 / 2.2 / 10, stock palette (E4's thresholds as literals) | 3, 4, 4.8 (1/3), 7.4 (2/3) | `e4` |
+| 24 | `F12:F16` | num 0.1 / 0.4 / 1, P / P+210 / P | 0.6, 0.8, 0.52, 0.44, 0.5 (1/3, 2/3, 1/5, 1/15, 1/6) | `e4` |
+| 25 | `F17:F19` | num 0.7 / 1.3 / 2.2, P / P+210 / P (another binade) | 1.6, 1.48, 1.36 (1/3, 1/5, 1/15) | `e4` |
+| 26, 27 | `G2:G26`, `H2:H8` | 2-colour num 0 / 210, P → P+210, value k: the twin line (32 steps) | | twin |
+| 28..55 | `I2:I26`, `J2:J4` | cellIs `= 1`, one dxf fill per off-line predicted fill (28) | | literal positive controls |
+
+**What each group asks.**
+- **H1:** the same five fractions under seven origins, spans and midpoint positions (d = 210 throughout). A fraction-only rule predicts the same answer in all of them; an origin rule (the full-span remap, for example) does not.
+- **H2:**
+  - every numerator of 5 and 7, four of 15, the moved fractions again, and the unmoved 1/6 and 1/10;
+  - denominators 9, 11, 12 and 13, plus 17, 23 and 31, whose binary periods (8, 11 and 5) break the mod-12 aliasing of §9.1;
+  - the same p/q (1/3, 1/9, 1/11) at different d, so f·d lands in different binades.
+- **H3:**
+  - palettes with small and large d, d of both signs and a zero channel, recorded per channel;
+  - at 1/5 and 1/15 of `FF14F028 → FFE68752` and the stock 1/9, one channel's product is not whole while the others are;
+  - the stock palette at 1/12 and 1/6, with only R whole.
+- **E4:** non-representable thresholds whose exact products are whole and whose double products are not:
+  - the exact replica of the near miss's counterexample;
+  - E4's thresholds as literals, with 1/3 and 2/3 added;
+  - 0.1 / 0.4 / 1 and 0.7 / 1.3 / 2.2.
+- **Controls:** the base rule's lower segment at six fractions (including the four moved ones), and the base's upper segment as a 2-colour scale. Both are expected at truncation (P1).
+
+**Size.** 195 cells: 127 designated (41 `h2`, 35 `h1`, 26 `h3`, 14 `e4`, 11 `control`), 32 twins, 28 positive controls and 8 controls. The capture range is `A1:J27` (270 cells). The text scope's admitted-batch estimate for the whole range is 7,854,448 bytes against the 8,388,608-byte cap (`estimateCfPrepareBytes`), so the 55 rules fit. A first layout at `A1:L27` did not fit.
+
+**Controls.** Row 27 holds each data column's unformatted control, A27..F27, each holding the value of its column's first designated cell. `G27` (value 0) is shared by the twins, and `I27` (value 1) by the positive controls. One control serves a whole column, not each cell, which keeps the case under 200 cells. A control only gates pixel contrast; the evaluator reads each designated cell's own DisplayFormat fill, as for the twins of §8.3.
+
+**Predictions.** Every designated cell's truncate token, its "truncation minus one step" colour and the near miss's colour (`f32/from-max[01111]/step[11]`) are in [xlsx-cf-upper-whole-predictions.md](xlsx-cf-upper-whole-predictions.md). That file is generated by `--write-predictions` from the catalogue, and it also lists today's production per cell. Only truncate is a reading. "Minus one" lowers the step by one unit on every channel whose exact product is whole: the 377564e0 departure, applied per channel.
+
+| Group | Cells | Minus one differs from truncation | Near miss differs from truncation | Near miss differs from minus one | Painted by production today |
+|---|---|---|---|---|---|
+| `h2` | 41 | 41 | 31 | 10 | 0 |
+| `h1` | 35 | 35 | 28 | 7 | 0 |
+| `h3` | 26 | 24 | 20 | 4 | 0 |
+| `e4` | 14 | 14 | 5 | 9 | 1 (D19) |
+| `control` | 11 | 11 | 0 | 11 | 5 (the 2-colour twins) |
+
+Production withholds every designated cell except D19 and the five 2-colour twins:
+- the literal-num cells as the num-segment shape;
+- D20 as an upper-segment whole product.
+
+D19 replicates E4 of `stage2-scale-thresholds`, which Excel drew at truncation. A move there would be a new mispaint of a published shape.
+
+### 9.3 Rehearsal (Phase 1 task 4; exploratory)
+
+An exploratory case has no reading to plant except the control. So the rehearsal shows that the pipeline records every plausible world and registers nothing, and that production stays as it is (`tests/xlsx-cf-scale-upper-whole-case.test.ts`).
+
+**The model is production.** On the generated input, production paints exactly the truncate prediction at every cell it paints: D12:D16 (the 2-colour twins), D19 (E4's replica), the twin line and the positive controls. It withholds exactly the other 121 designated cells: the literal-num cells as the num-segment shape, and D20 as an upper-segment whole product. Controls show nothing.
+
+**The evaluator** (synthetic observations):
+- **A truncation world:** `truncate` matched for the finding and for the controls.
+- **The 377564e0 departure** (minus one on every exactly-whole upper-segment channel), **or the float32 near miss:** `formula-hypothesis-none` for the finding, which is recorded and never fitted. The controls still match `truncate`.
+- **It fails closed on:**
+  - a formatted control;
+  - a missing or wrong positive control;
+  - a twin that renders nothing;
+  - a moved lower-segment mirror, which gives `formula-hypothesis-none` for the control id.
+
+**On a synthetic measured capture** (the real `verifyCfCase`, `auditStage2Manifest`, the shared conformance pass and `compareCfCase`):
+- **The verifier records each world.** For the truncate, minus-one-except-D19 and near-miss worlds, it returns `verified` with the matches above.
+- **The audit verifies none of the three ids**, and the Stage 2 verified set is unchanged:
+  - with the registry entries kept, all three stay `unverified-nondiscriminating`;
+  - with the two questions' entries removed, both are `supported-structural`, because no production reading exists for them.
+- **Production is unchanged.** For the truncation world and for the departure away from D19:
+  - the conformance pass has no violation (195 cells, 121 withheld, every withhold justified);
+  - the interactive and paged comparisons pass.
+- **A move at D19 is caught.** The minus-one world and the near miss both lower D19. The conformance pass then reports exactly `D19: production FFEFE784 is not Excel's FFF0E784`, and both comparisons fail. A move there would be a real mispaint of a published shape, which needs a production decision after the capture.
+
+**Gates on the committed manifest** (recipe-pending):
+- `bun scripts/cf-compare.ts --stage 2 --mode interactive` and `--mode paged`: `stage2-scale-upper-whole` is recipe-pending with all 195 cell expectations verified; every other Stage 2 case passes.
+  - The two interactive failures, `stage1-timeperiod-today-clock` and `-2`, fail identically on `main` (304c2816). They depend on the clock.
+- `npx tsx scripts/cf-refs/audit.ts --stage 2` reports `ok=true`, `stageComplete=true`, `unverifiedNonDiscriminating=15` (12 + the three new ids) and `blockedCapabilities=0`.
+- `npx tsx scripts/cf-refs/audit.ts --stage 5` reports `ok=true`, `stageComplete=true` and `blockedCapabilities=0`.
+
+### 9.4 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-upper-whole.xlsx   # see the manifest's inputSha256
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-upper-whole
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-upper-whole
+npx vitest run tests/xlsx-cf-scale-upper-whole-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-upper-whole`.
+
+The capture cannot be retried, and nothing here is edited after it. Whatever Excel shows, **nothing is registered**. The capture is a measurement for forming the next hypotheses, which a later case must pre-register with committed production behaviour.
+- **Excel equals truncation at a cell:** recorded; that cell's withhold stays.
+- **Excel moves at a cell:** recorded, per channel, against the minus-one and near-miss columns of the predictions file.
+- **D19 moves:** production mispaints a published shape. That is a finding for the owner, not a registration.

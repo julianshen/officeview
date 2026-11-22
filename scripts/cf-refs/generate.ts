@@ -23,6 +23,13 @@ import {
   DEFAULT_CLOCK_ANCHOR_DATE,
   S2_NUM_SEGMENT,
   S2_NUM_SEGMENT_ID,
+  S2_UPPER_WHOLE,
+  S2_UPPER_WHOLE_ID,
+  s2UpperWholeCells,
+  s2UpperWholeColumnControls,
+  s2UpperWholeLayout,
+  s2UpperWholeMarkers,
+  s2UpperWholeRange,
   S2_SCOPE_DISJOINT,
   S2_SCOPE_DISJOINT_ID,
   isoDateToExcelSerial,
@@ -1204,6 +1211,32 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
       return {
         dimension: `A1:N${s2NumSegmentLastRow()}`,
+        cells,
+        legacyCfXml: [...scaleXml, ...pcXml].join(''),
+        dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,
+      }
+    }
+
+    case S2_UPPER_WHOLE_ID: {
+      // The upper-segment whole-product follow-up (exploratory): one colour rule per block and the twin line (catalogue
+      // markers, priority order), then one literal cellIs rule per off-line predicted fill (value 1 = 1, its own dxf),
+      // sharing the unformatted control I27. Row 1 labels each column; row 27 holds the controls.
+      const fx = S2_UPPER_WHOLE
+      const { positiveControls, twins } = s2UpperWholeLayout()
+      const header: Record<string, string> = { A: 'H2 7/217/637', B: 'H2 denominators', C: 'H1 origins', D: 'H1; 2-col; E4', E: 'H3 palettes', F: 'H3 stock; E4', G: 'Twin k', H: 'Twin k', I: 'PosCtl', J: 'PosCtl' }
+      const cells: CellSpec[] = Object.entries(header).map(([col, v]) => ({ ref: `${col}1`, v }))
+      for (const c of s2UpperWholeCells()) cells.push({ ref: c.ref, v: c.value })
+      for (const c of s2UpperWholeColumnControls()) cells.push({ ref: c.ref, v: Number(c.text) })
+      for (const t of twins) cells.push({ ref: t.ref, v: t.k })
+      cells.push({ ref: fx.twinControl, v: 0 })
+      cells.push({ ref: fx.positiveControlShared, v: 1 })
+      for (const p of positiveControls) cells.push({ ref: p.ref, v: 1 })
+      const cfvoXml = (v: { type: string; val?: string }): string => `<cfvo type="${v.type}"${v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      const markers = s2UpperWholeMarkers()
+      const scaleXml = markers.map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+      const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
+      return {
+        dimension: s2UpperWholeRange(),
         cells,
         legacyCfXml: [...scaleXml, ...pcXml].join(''),
         dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,

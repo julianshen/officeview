@@ -27,11 +27,12 @@
  *
  * Run: `npx tsx scripts/cf-refs/upper-whole-candidates.ts` (prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §9.1).
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { interpolateScaleColor, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
-import type { CfManifest } from './cases'
+import { interpolateScaleColor, numSegmentUnmeasured, upperSegmentWholeProduct, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
+import type { CfScalePoint } from '../../src/xlsx/cf/model'
+import { s2UpperWholeCells, s2UpperWholeLayout, s2UpperWholeTruncation, S2_UPPER_WHOLE_ID, type CfManifest, type S2UpperWholeCell } from './cases'
 import { collectSegmentCells, type SegmentCell } from './num-segment-candidates'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -389,7 +390,93 @@ export async function upperWholeCells(rootDir: string = REPO_ROOT): Promise<Segm
   return cells
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The exploratory case's predictions (docs/validation/xlsx-cf-upper-whole-predictions.md, `--write-predictions`).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The float32 near miss of §9.1 (never a reading): float32 from the maximum, float32 product, upper 3-colour scope only. */
+export const NEAR_MISS_ID = 'f32/from-max[01111]/step[11]'
+
+/** An exact decimal as a rational (BigInt numerator, power-of-ten denominator). */
+function decimalQ(text: string): Q {
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(text)
+  if (!m) throw new Error(`upper-whole: ${text} is not a plain decimal`)
+  const frac = m[3] ?? ''
+  const n = BigInt(`${m[2]}${frac}`) * (m[1] ? -1n : 1n)
+  return { n, d: 10n ** BigInt(frac.length) }
+}
+const gcd = (a: bigint, b: bigint): bigint => { a = a < 0n ? -a : a; while (b) [a, b] = [b, a % b]; return a }
+
+export interface UpperWholePrediction {
+  ref: string
+  configuration: string
+  block: string
+  value: string
+  /** The exact fraction p/q of the segment (from the decimals). */
+  fraction: string
+  /** The segment: L (lower or only) or U (upper). */
+  segment: 'L' | 'U'
+  /** Per RGB channel: d = c1 − c0, and whether f·|d| is whole in exact arithmetic. */
+  channels: Array<{ d: number; whole: boolean }>
+  truncate: string
+  /** Truncation with every exactly-whole channel's step one unit smaller (the 377564e0 departure, per channel). */
+  minusOne: string
+  nearMiss: string
+  /** Production today: `painted` or the withhold reason. */
+  production: string
+  /** The truncate token (twin or literal). */
+  token: string
+}
+
+/** Every designated cell's predictions: truncate (the reading), truncation minus one step and the near miss (neither a reading). */
+export function upperWholePredictions(): UpperWholePrediction[] {
+  const near = upperWholeCandidates().find(c => c.id === NEAR_MISS_ID)!
+  const { configurations } = s2UpperWholeLayout()
+  const tokenOf = new Map(configurations.flatMap(cfg => Object.entries(cfg.hypotheses.truncate!)))
+  return s2UpperWholeCells().filter(c => c.designated).map((c: S2UpperWholeCell): UpperWholePrediction => {
+    const tIdx = c.segment
+    const [v, lo, hi] = [decimalQ(c.text), decimalQ(c.block.thresholds[tIdx]!), decimalQ(c.block.thresholds[tIdx + 1]!)]
+    const f = qDiv(qSub(v, lo), qSub(hi, lo))
+    const g = gcd(f.n, f.d)
+    const a = channelsOf(Number.parseInt(c.from, 16) >>> 0), b = channelsOf(Number.parseInt(c.to, 16) >>> 0)
+    const interiorCell = f.n > 0n && f.n < f.d
+    const channels = [0, 1, 2].map(i => { const d = b[i]! - a[i]!; return { d, whole: d !== 0 && interiorCell && (f.n * BigInt(Math.abs(d))) % f.d === 0n } })
+    const truncate = s2UpperWholeTruncation(c)
+    const tr = channelsOf(Number.parseInt(truncate, 16) >>> 0)
+    const minusOne = hex(pack(tr.map((x, i) => (channels[i]!.whole ? x - sgn(channels[i]!.d) : x)))!)
+    const t = c.block.thresholds.map(Number)
+    const seg: CfScaleSegment = { value: c.value, lo: c.lo, hi: c.hi, fraction: clamp01((c.value - c.lo) / (c.hi - c.lo)), c0: Number.parseInt(c.from, 16) >>> 0, c1: Number.parseInt(c.to, 16) >>> 0, colours: c.block.colors.length as 2 | 3, segment: c.segment, loKind: 'num', hiKind: 'num', thresholds: t }
+    const nearArgb = seg.colours === 3 && seg.segment === 1 && interior(seg) ? near.evaluate(seg) : truncationOf(seg)
+    const kinds = c.block.cfvo.map(x => x.type)
+    const point = (k: number): CfScalePoint => (kinds[k] === 'num' ? { bound: { type: 'num', value: t[k]! }, argb: 0 } : { bound: { type: kinds[k] as 'min' }, argb: 0 })
+    const production = seg.colours === 3 && numSegmentUnmeasured(point(tIdx), point(tIdx + 1), seg.value, seg.lo, seg.hi, seg.fraction) ? 'withheld (num-segment)'
+      : seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) ? 'withheld (upper whole product)' : 'painted'
+    return { ref: c.ref, configuration: c.configuration!, block: c.block.id, value: c.text, fraction: `${f.n / g}/${f.d / g}`, segment: c.segment === 1 ? 'U' : 'L', channels, truncate, minusOne, nearMiss: nearArgb === undefined ? 'undefined' : hex(nearArgb), production, token: tokenOf.get(c.ref)! }
+  })
+}
+
+function writePredictions(): void {
+  const rows = upperWholePredictions()
+  const ch = (r: UpperWholePrediction): string => r.channels.map(x => `${x.d >= 0 ? '+' : ''}${x.d}${x.whole ? '*' : ''}`).join(' ')
+  const lines = [
+    `# ${S2_UPPER_WHOLE_ID}: predictions at every designated cell (exploratory)`,
+    '',
+    'Generated by `npx tsx scripts/cf-refs/upper-whole-candidates.ts --write-predictions` from the catalogue. **Only `truncate` is a reading** (the control); the other two columns are for interpreting the capture and can never be registered from it:',
+    '- **minus one**: truncation with the step one unit smaller on every channel whose exact product f·|d| is whole (the 377564e0 departure, applied per channel);',
+    `- **near miss**: \`${NEAR_MISS_ID}\` (float32 from the maximum), contradicted by E4 of stage2-scale-thresholds (§9.1), upper 3-colour segments only.`,
+    '',
+    'Channels list d = c1 − c0 per R, G, B; `*` marks an exactly-whole product. Production is today\'s default (`painted` at truncation, or the withhold).',
+    '',
+    '| Cell | Config | Block | Value | Seg | f | d (R G B) | truncate (token) | minus one | near miss | Production |',
+    '|---|---|---|---|---|---|---|---|---|---|---|',
+    ...rows.map(r => `| ${r.ref} | ${r.configuration} | ${r.block} | ${r.value} | ${r.segment} | ${r.fraction} | ${ch(r)} | ${r.truncate}${r.token.startsWith('twin:') ? ` (${r.token})` : ''} | ${r.minusOne === r.truncate ? '=' : r.minusOne} | ${r.nearMiss === r.truncate ? '=' : r.nearMiss} | ${r.production} |`),
+    '',
+  ]
+  writeFileSync(resolve(REPO_ROOT, 'docs/validation/xlsx-cf-upper-whole-predictions.md'), lines.join('\n'))
+}
+
 async function main(): Promise<void> {
+  if (process.argv.includes('--write-predictions')) { writePredictions(); return }
   const manifest = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, excluded, faults } = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
   const short = (k: string): string => k.replace(/^stage\d-(scale-)?/, '')

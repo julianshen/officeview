@@ -601,8 +601,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     expect(checkedCount).toBeGreaterThan(0)
     // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831)
-    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115).
-    expect(checkedCount).toBe(491)
+    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115)
+    // + the 159 scale cells (127 designated, 32 twin line) of stage2-scale-upper-whole (recipe-pending; its saved file is the input).
+    expect(checkedCount).toBe(650)
   })
 
   it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 9 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
