@@ -1,0 +1,274 @@
+/**
+ * Stage 4a sheet fixtures (Task 1; every later 4a task adds to this file).
+ *
+ * `buildXlsx` (src/testdata/ooxml-builders.ts) writes cells, columns and merges only. Everything else a tile
+ * test needs (drawings, conditional formatting, row heights, freeze panes, autoFilter, extra styles) is
+ * patched into its output with the JSZip helpers below, which are exported for later fixtures.
+ *
+ * Every fixture's bytes are deterministic: `finishXlsx` rewrites every entry with one fixed date, so the
+ * same call returns the same bytes in every run (JSZip otherwise stamps the wall clock).
+ */
+import JSZip from 'jszip'
+import { buildXlsx, type XlsxCellSpec, type XlsxSheetSpec } from '../../src/testdata/ooxml-builders'
+
+/** The fixed entry date of every fixture zip (JSZip stores DOS time; any constant works). */
+export const FIXTURE_ZIP_DATE = new Date(Date.UTC(2026, 0, 1, 0, 0, 0))
+/** EMU per CSS px (914400 EMU per inch, 96 px per inch). */
+export const EMU_PER_PX = 9525
+
+export const SPREADSHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+export const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const XDR_NS = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+const DRAWING_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing'
+const DRAWING_CT = 'application/vnd.openxmlformats-officedocument.drawing+xml'
+
+/** CT_Worksheet child order (ECMA-376 Part 1 §18.3.1.99); `insertSheetElement` keeps it. */
+export const WORKSHEET_ORDER: readonly string[] = Object.freeze([
+  'sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData', 'sheetCalcPr', 'sheetProtection',
+  'protectedRanges', 'scenarios', 'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells',
+  'phoneticPr', 'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions', 'pageMargins', 'pageSetup',
+  'headerFooter', 'rowBreaks', 'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing',
+  'legacyDrawing', 'legacyDrawingHF', 'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts',
+  'extLst',
+])
+
+const sheetPath = (sheetIndex: number) => `xl/worksheets/sheet${sheetIndex + 1}.xml`
+
+async function textOf(zip: JSZip, path: string): Promise<string> {
+  const f = zip.file(path)
+  if (!f) throw new Error(`sheet-fixtures: no part ${path}`)
+  return f.async('string')
+}
+
+/** Patch an xlsx package: `edit` mutates the loaded zip; the result is re-generated deterministically. */
+export async function patchXlsx(bytes: Uint8Array, edit: (zip: JSZip) => void | Promise<void>): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  await edit(zip)
+  return finishXlsx(zip)
+}
+
+/** Re-generate a zip with every entry at FIXTURE_ZIP_DATE (deterministic bytes, sorted entry order). */
+export async function finishXlsx(zip: JSZip): Promise<Uint8Array> {
+  const out = new JSZip()
+  const names = Object.keys(zip.files).filter((n) => !zip.files[n]!.dir).sort()
+  for (const name of names) out.file(name, await zip.files[name]!.async('uint8array'), { date: FIXTURE_ZIP_DATE, createFolders: false })
+  return out.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
+}
+
+/** Rewrite one worksheet's XML. */
+export async function patchSheetXml(zip: JSZip, sheetIndex: number, edit: (xml: string) => string): Promise<void> {
+  const path = sheetPath(sheetIndex)
+  zip.file(path, edit(await textOf(zip, path)))
+}
+
+/** Rewrite xl/styles.xml. */
+export async function patchStylesXml(zip: JSZip, edit: (xml: string) => string): Promise<void> {
+  zip.file('xl/styles.xml', edit(await textOf(zip, 'xl/styles.xml')))
+}
+
+/** Insert `xml` (one `<name …>` element) into a worksheet at its CT_Worksheet position. */
+export function insertSheetElement(sheetXml: string, name: string, xml: string): string {
+  const at = WORKSHEET_ORDER.indexOf(name)
+  if (at < 0) throw new Error(`sheet-fixtures: unknown worksheet element ${name}`)
+  for (const later of WORKSHEET_ORDER.slice(at + 1)) {
+    const m = new RegExp(`<${later}[\\s/>]`).exec(sheetXml)
+    if (m) return sheetXml.slice(0, m.index) + xml + sheetXml.slice(m.index)
+  }
+  const end = sheetXml.lastIndexOf('</worksheet>')
+  if (end < 0) throw new Error('sheet-fixtures: no </worksheet>')
+  return sheetXml.slice(0, end) + xml + sheetXml.slice(end)
+}
+
+/** Add attributes to `<row r="N">` for each listed 1-based row (e.g. `{ ht: '40', customHeight: '1' }`). */
+export function setRowAttrs(sheetXml: string, rows: Iterable<number>, attrs: Record<string, string>): string {
+  const extra = Object.entries(attrs).map(([k, v]) => ` ${k}="${v}"`).join('')
+  for (const r of rows) {
+    const tag = `<row r="${r}">`
+    if (!sheetXml.includes(tag)) throw new Error(`sheet-fixtures: row ${r} is not a bare <row r="${r}">`)
+    sheetXml = sheetXml.replace(tag, `<row r="${r}"${extra}>`)
+  }
+  return sheetXml
+}
+
+/** Freeze `cols` columns and `rows` rows (a `sheetViews` pane). */
+export function freezeXml(cols: number, rows: number): string {
+  const topLeft = `${colName(cols)}${rows + 1}`
+  const pane = rows > 0 && cols > 0 ? 'bottomRight' : rows > 0 ? 'bottomLeft' : 'topRight'
+  return `<sheetViews><sheetView workbookViewId="0"><pane${cols ? ` xSplit="${cols}"` : ''}${rows ? ` ySplit="${rows}"` : ''} topLeftCell="${topLeft}" activePane="${pane}" state="frozen"/></sheetView></sheetViews>`
+}
+
+/** 0-based column index → letters (0 → A, 99 → CV). */
+export function colName(c: number): string {
+  let s = ''
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s
+  return s
+}
+
+/**
+ * Add a drawing part to worksheet `sheetIndex`: writes `xl/drawings/drawing<n>.xml` (the `<xdr:wsDr>` root
+ * wraps `anchorsXml`), the sheet's relationship, the content type and the `<drawing r:id>` element.
+ * Returns the drawing part path.
+ */
+export async function addDrawing(zip: JSZip, sheetIndex: number, anchorsXml: string): Promise<string> {
+  let n = 1
+  while (zip.file(`xl/drawings/drawing${n}.xml`)) n++
+  const part = `xl/drawings/drawing${n}.xml`
+  zip.file(part, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}" xmlns:r="${REL_NS}">${anchorsXml}</xdr:wsDr>`)
+  const relsPath = `xl/worksheets/_rels/sheet${sheetIndex + 1}.xml.rels`
+  const existing = zip.file(relsPath) ? await textOf(zip, relsPath) : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
+  let id = 1
+  while (existing.includes(`Id="rIdD${id}"`)) id++
+  const rel = `<Relationship Id="rIdD${id}" Type="${DRAWING_REL}" Target="../drawings/drawing${n}.xml"/>`
+  zip.file(relsPath, existing.replace('</Relationships>', `${rel}</Relationships>`))
+  const ct = await textOf(zip, '[Content_Types].xml')
+  zip.file('[Content_Types].xml', ct.replace('</Types>', `<Override PartName="/${part}" ContentType="${DRAWING_CT}"/></Types>`))
+  await patchSheetXml(zip, sheetIndex, (xml) => {
+    const withNs = xml.includes('xmlns:r=') ? xml : xml.replace(`<worksheet xmlns="${SPREADSHEET_NS}"`, `<worksheet xmlns="${SPREADSHEET_NS}" xmlns:r="${REL_NS}"`)
+    if (withNs === xml && !xml.includes('xmlns:r=')) throw new Error('sheet-fixtures: worksheet root not recognised')
+    return insertSheetElement(withNs, 'drawing', `<drawing r:id="rIdD${id}"/>`)
+  })
+  return part
+}
+
+/** A rectangle shape (`<xdr:sp>`) for an anchor body. `fill: null` is `<a:noFill/>`; `rotDeg` sets `xfrm rot`. */
+export function rectShapeXml(opts: { id: number; name: string; offPx: [number, number]; extPx: [number, number]; fill: string | null; line?: string | null; rotDeg?: number }): string {
+  const [x, y] = opts.offPx.map((v) => Math.round(v * EMU_PER_PX)) as [number, number]
+  const [cx, cy] = opts.extPx.map((v) => Math.round(v * EMU_PER_PX)) as [number, number]
+  const rot = opts.rotDeg ? ` rot="${Math.round(opts.rotDeg * 60000)}"` : ''
+  const fill = opts.fill === null ? '<a:noFill/>' : `<a:solidFill><a:srgbClr val="${opts.fill}"/></a:solidFill>`
+  const line = opts.line === undefined ? '' : opts.line === null ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="12700"><a:solidFill><a:srgbClr val="${opts.line}"/></a:solidFill></a:ln>`
+  return `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${opts.id}" name="${opts.name}"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm${rot}><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${line}</xdr:spPr></xdr:sp>`
+}
+
+/** A two-cell anchor over 0-based cells (from) .. (to), zero offsets. */
+export function twoCellAnchorXml(from: { col: number; row: number }, to: { col: number; row: number }, body: string): string {
+  const m = (p: { col: number; row: number }) => `<xdr:col>${p.col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${p.row}</xdr:row><xdr:rowOff>0</xdr:rowOff>`
+  return `<xdr:twoCellAnchor><xdr:from>${m(from)}</xdr:from><xdr:to>${m(to)}</xdr:to>${body}<xdr:clientData/></xdr:twoCellAnchor>`
+}
+
+/** An absolute anchor at CSS px (x, y), size (w, h). */
+export function absoluteAnchorXml(posPx: [number, number], extPx: [number, number], body: string): string {
+  const [x, y] = posPx.map((v) => Math.round(v * EMU_PER_PX))
+  const [cx, cy] = extPx.map((v) => Math.round(v * EMU_PER_PX))
+  return `<xdr:absoluteAnchor><xdr:pos x="${x}" y="${y}"/><xdr:ext cx="${cx}" cy="${cy}"/>${body}<xdr:clientData/></xdr:absoluteAnchor>`
+}
+
+/** Build a one-sheet workbook (sheet `S`), with text cells through shared strings, then patch it. */
+async function sheetWorkbook(rows: XlsxSheetSpec['rows'], strings: string[], edit?: (zip: JSZip) => void | Promise<void>, extra: Partial<XlsxSheetSpec> = {}): Promise<Uint8Array> {
+  return patchXlsx(await buildXlsx([{ name: 'S', rows, ...extra }], strings), async (zip) => { await edit?.(zip) })
+}
+
+/** Shared-string table builder: `s(text)` returns a `t: 's'` cell value index. */
+function stringTable() {
+  const list: string[] = [], index = new Map<string, number>()
+  const s = (text: string) => { let i = index.get(text); if (i === undefined) { i = list.length; list.push(text); index.set(text, i) } return i }
+  return { list, s }
+}
+const textCell = (st: ReturnType<typeof stringTable>, ref: string, text: string): XlsxCellSpec => ({ ref, t: 's', v: st.s(text) })
+
+/**
+ * 500 rows × 100 columns (A1:CV500) on sheet `S`. Mixed: a cell whose 1-based column is ≡ 1 (mod 3) holds the
+ * text `R{r}C{c}` (1-based row and column); every other cell holds the number `r * 1000 + c`. Default sizes
+ * (64 × 20 CSS px), so at zoom 1 the used range is 6400 × 10000 CSS px: 13 × 20 tiles at dpr 1, 25 × 40 at dpr 2.
+ */
+export async function grid500x100(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = Array.from({ length: 500 }, (_, i) => {
+    const r = i + 1
+    return { r, cells: Array.from({ length: 100 }, (_, j): XlsxCellSpec => {
+      const c = j + 1, ref = `${colName(j)}${r}`
+      return c % 3 === 1 ? textCell(st, ref, `R${r}C${c}`) : { ref, v: r * 1000 + c }
+    }) }
+  })
+  return sheetWorkbook(rows, st.list)
+}
+
+/** Rows whose height is authored (customHeight) in `millionRows`. */
+export const MILLION_ROWS_BAND = Object.freeze({ first: 10, last: 20, heightPt: 30 })
+/**
+ * A1:D2000 populated (A: text `M{r}`, B–D: numbers), plus A1048576 = `LAST-ROW`, on sheet `S`. Rows 10–20
+ * (1-based) have an authored height of 30 pt (40 CSS px), so the last row's y is not 20 × 1,048,575.
+ */
+export async function millionRows(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: 2000 }, (_, i) => {
+    const r = i + 1
+    return { r, cells: [textCell(st, `A${r}`, `M${r}`), { ref: `B${r}`, v: r }, { ref: `C${r}`, v: r * 2.5 }, { ref: `D${r}`, v: r % 97 }] }
+  })
+  rows.push({ r: 1_048_576, cells: [textCell(st, 'A1048576', 'LAST-ROW')] })
+  const band = Array.from({ length: MILLION_ROWS_BAND.last - MILLION_ROWS_BAND.first + 1 }, (_, i) => MILLION_ROWS_BAND.first + i)
+  return sheetWorkbook(rows, st.list, (zip) => patchSheetXml(zip, 0, (xml) => setRowAttrs(xml, band, { ht: String(MILLION_ROWS_BAND.heightPt), customHeight: '1' })))
+}
+
+/** Sheet `S` with no cells. */
+export async function blankSheet(): Promise<Uint8Array> {
+  return sheetWorkbook([], [])
+}
+
+/** The date serials in `cfToday` A1:A10: 2026-11-19 .. 2026-11-28 (46345 .. 46354); A5 is 2026-11-23 (46349). */
+export const CF_TODAY_SERIALS = Object.freeze(Array.from({ length: 10 }, (_, i) => 46345 + i))
+/**
+ * A1:A10 hold the dates CF_TODAY_SERIALS (style 3: numFmtId 14, m/d/yyyy), under one
+ * `timePeriod today` rule (dxf 0: solid red fill). Which cell fills depends only on the injected clock.
+ */
+export async function cfToday(): Promise<Uint8Array> {
+  const rows = CF_TODAY_SERIALS.map((v, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v, style: 3 }] }))
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchStylesXml(zip, (xml) => xml
+      .replace('<cellXfs count="3">', '<cellXfs count="4">')
+      .replace('</cellXfs>', '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs>'))
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="A1:A10"><cfRule type="timePeriod" dxfId="0" priority="1" timePeriod="today"><formula>FLOOR(A1,1)=TODAY()</formula></cfRule></conditionalFormatting>'))
+  })
+}
+
+/**
+ * B2 holds `COVERED-B2` (A1:D4 hold `CELL-r-c` around it) under an unfilled rectangle (`<a:noFill/>`, a
+ * 1 pt outline) anchored two-cell over A1..C3 (0-based from (0,0) to (3,3)). Coverage ignores fill (S4 §6.2
+ * step 4): B2 is covered.
+ */
+export async function unfilledShapeOverText(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [1, 2, 3, 4].map((r) => ({ r, cells: [0, 1, 2, 3].map((j) => textCell(st, `${colName(j)}${r}`, r === 2 && j === 1 ? 'COVERED-B2' : `CELL-${r}-${j + 1}`)) }))
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, twoCellAnchorXml({ col: 0, row: 0 }, { col: 3, row: 3 }, rectShapeXml({ id: 2, name: 'Unfilled', offPx: [0, 0], extPx: [192, 60], fill: null, line: '404040' })))
+  })
+}
+
+/**
+ * S4 §6.2 step 4's rotated-box adversary: an absolute anchor at (0, 0) of 100 × 20 CSS px holding a filled
+ * rectangle rotated 90° (`xfrm rot="5400000"`). Rotated about its centre (50, 10), the painted box spans
+ * **x 40..60, y −40..60** (F19; the spec's "y 30..50" is a subset; y < 0 is off-sheet). A1:C6 hold
+ * `ROT-r-c` (1-based, default 64 × 20 CSS px cells): A1, A2 and A3 (x 0..64, y 0..60) meet it; column B
+ * (x ≥ 64) and rows 4+ (y ≥ 60) are clear by grid rect (their spill rects are the caller's to add).
+ */
+export async function rotatedBox(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = Array.from({ length: 6 }, (_, i) => ({ r: i + 1, cells: [0, 1, 2].map((j) => textCell(st, `${colName(j)}${i + 1}`, `ROT-${i + 1}-${j + 1}`)) }))
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, absoluteAnchorXml([0, 0], [100, 20], rectShapeXml({ id: 2, name: 'Rotated', offPx: [0, 0], extPx: [100, 20], fill: '4472C4', rotDeg: 90 })))
+  })
+}
+
+/**
+ * A two-cell anchor with no `<xdr:to>`: its placement cannot be read, so the parse counts
+ * `drawingAnchors.unresolved = 1` (fail-closed: every cell counts as blank for text answers). A1:B2 hold text.
+ */
+export async function unresolvedAnchor(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [1, 2].map((r) => ({ r, cells: [0, 1].map((j) => textCell(st, `${colName(j)}${r}`, `UNRES-${r}-${j + 1}`)) }))
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, `<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>${rectShapeXml({ id: 2, name: 'NoTo', offPx: [0, 0], extPx: [100, 40], fill: 'FF8800' })}<xdr:clientData/></xdr:twoCellAnchor>`)
+  })
+}
+
+/** A1 = `=1+1` with saved value 7: saved values paint 7, a recompute paints 2. */
+export async function savedFormula(): Promise<Uint8Array> {
+  return sheetWorkbook([{ r: 1, cells: [{ ref: 'A1', formula: '1+1', v: 7 }] }], [])
+}
+
+/** A1 = the value 7 (the saved-values twin of `savedFormula`). */
+export async function plainSeven(): Promise<Uint8Array> {
+  return sheetWorkbook([{ r: 1, cells: [{ ref: 'A1', v: 7 }] }], [])
+}

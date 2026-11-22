@@ -1,0 +1,632 @@
+{
+  "task": "stream-s4a Task 1 feasibility gate",
+  "started": "2026-11-22T17:09:50.774Z",
+  "quick": false,
+  "bun": "1.4.5",
+  "platform": "darwin-arm64",
+  "loadavgStart": [
+    4.98,
+    9.45,
+    9.49
+  ],
+  "loadavgEnd": [
+    5.11,
+    7.73,
+    8.77
+  ],
+  "parsePath": "projectPackage(original, 'xlsx', 'visible-only') → detectAndParse(projected.pkg, pkg => parseXlsx(pkg, { valuePolicy: 'cached' })) → buildSheetGeometry(sheet) → prepareSheetAssets(doc, { sheetIndex: 0 })",
+  "basisLabel": "sheet:<id>@<zoom>x<dpr>:<c>,<r> (inlined; Task 7 exports tileBasisLabel)",
+  "fixtures": {
+    "sanity": {
+      "grid500x100": {
+        "ok": true,
+        "detail": {
+          "rows": 500,
+          "a1": "R1C1",
+          "cu500": 500099,
+          "cv500": "R500C100"
+        }
+      },
+      "millionRows": {
+        "ok": true,
+        "detail": {
+          "rows": 2001,
+          "last": "LAST-ROW",
+          "bandRowCss": 40,
+          "plainRowCss": 20
+        }
+      },
+      "blankSheet": {
+        "ok": true,
+        "detail": {
+          "rows": 0
+        }
+      },
+      "cfToday": {
+        "ok": true,
+        "detail": {
+          "hasRule": true,
+          "a5": 46349,
+          "a5Style": 3
+        }
+      },
+      "unfilledShapeOverText": {
+        "ok": true,
+        "detail": {
+          "drawings": 1,
+          "anchors": 1,
+          "unresolved": 0,
+          "cell": "COVERED-B2",
+          "rot90": false,
+          "unfilled": true,
+          "transformInvalid": false
+        }
+      },
+      "rotatedBox": {
+        "ok": true,
+        "detail": {
+          "drawings": 1,
+          "anchors": 1,
+          "unresolved": 0,
+          "cell": "ROT-1-1",
+          "rot90": true,
+          "unfilled": false,
+          "transformInvalid": false
+        }
+      },
+      "unresolvedAnchor": {
+        "ok": true,
+        "detail": {
+          "unresolved": 1,
+          "records": 0
+        }
+      },
+      "savedFormula": {
+        "ok": true,
+        "detail": {
+          "values": {
+            "savedFormula.cached": 7,
+            "savedFormula.engine": 7,
+            "plainSeven.cached": 7
+          },
+          "cachedTileEqualsPlainSeven": true,
+          "engineTileEqualsPlainSeven": true
+        }
+      }
+    },
+    "grid500x100": "8c1c8ddbc92f231b185cda57bd073300aa49948acdb2c343975612baad29f27c",
+    "blankSheet": "e62e0e3475c0cd52ce04db0822b8023a8fc1ab65eb104b967b6e1112c104f3e9"
+  },
+  "a": {
+    "viewportPaintKind": "detail",
+    "records": 1040,
+    "png": {
+      "w": 512,
+      "h": 512,
+      "bytes": 67301,
+      "sha256": "0fcbd29425c6da4431a9b55c9ae93fc912c3edcc72e07e5f54978f5e9ccf990d"
+    },
+    "blankTileSha256": "1da64cc4dde7f649df9b0a9f7eabbda0f7cf51adc89c710c000f99190203e927",
+    "differsFromBlank": true,
+    "twoRunsByteEqual": true,
+    "valuePolicy": "cached",
+    "verdict": "GREEN"
+  },
+  "b": {
+    "zoom1-dpr1": {
+      "tileGrid": {
+        "cols": 13,
+        "rows": 20,
+        "tiles": 260,
+        "measured": 260,
+        "usedCss": {
+          "width": 6400,
+          "height": 10000
+        }
+      },
+      "stagesMs": {
+        "render": {
+          "n": 260,
+          "p50": 36.45,
+          "p95": 53.33,
+          "max": 76.19
+        },
+        "mark": {
+          "n": 260,
+          "p50": 0.15,
+          "p95": 0.21,
+          "max": 4.14
+        },
+        "encode": {
+          "n": 260,
+          "p50": 9.02,
+          "p95": 9.5,
+          "max": 10.84
+        },
+        "layer1": {
+          "n": 260,
+          "p50": 22.98,
+          "p95": 25.91,
+          "max": 30.92
+        },
+        "frame": {
+          "n": 260,
+          "p50": 1.45,
+          "p95": 1.57,
+          "max": 4.19
+        },
+        "total": {
+          "n": 260,
+          "p50": 70.85,
+          "p95": 86.79,
+          "max": 117.88
+        }
+      },
+      "kinds": {
+        "detail": 260
+      },
+      "unmarked": {},
+      "minCarriers": 445,
+      "meanPngBytes": 122592,
+      "meanFramedBytes": 93835,
+      "loadavg1": {
+        "start": 4.98,
+        "end": 4.48
+      },
+      "verdict": "GREEN"
+    },
+    "zoom1-dpr2": {
+      "tileGrid": {
+        "cols": 25,
+        "rows": 40,
+        "tiles": 1000,
+        "measured": 1000,
+        "usedCss": {
+          "width": 6400,
+          "height": 10000
+        }
+      },
+      "stagesMs": {
+        "render": {
+          "n": 1000,
+          "p50": 17.79,
+          "p95": 23.81,
+          "max": 30.08
+        },
+        "mark": {
+          "n": 1000,
+          "p50": 0.13,
+          "p95": 0.18,
+          "max": 0.3
+        },
+        "encode": {
+          "n": 1000,
+          "p50": 8.72,
+          "p95": 9.16,
+          "max": 15.11
+        },
+        "layer1": {
+          "n": 1000,
+          "p50": 22.81,
+          "p95": 25.03,
+          "max": 31.44
+        },
+        "frame": {
+          "n": 1000,
+          "p50": 1.31,
+          "p95": 1.43,
+          "max": 4.65
+        },
+        "total": {
+          "n": 1000,
+          "p50": 50.94,
+          "p95": 57.39,
+          "max": 64.47
+        }
+      },
+      "kinds": {
+        "detail": 1000
+      },
+      "unmarked": {},
+      "minCarriers": 362,
+      "meanPngBytes": 106751,
+      "meanFramedBytes": 85339,
+      "loadavg1": {
+        "start": 4.48,
+        "end": 4.64
+      },
+      "verdict": "GREEN"
+    }
+  },
+  "c": {
+    "tau": {
+      "abs": 7.93,
+      "margin": 3.45,
+      "m": 65536
+    },
+    "candidates": 64,
+    "capture": {
+      "x": 40,
+      "y": 40,
+      "w": 900,
+      "h": 900
+    },
+    "captures": 30,
+    "windows": [
+      {
+        "c0": 0,
+        "r0": 0,
+        "session": 3
+      },
+      {
+        "c0": 5,
+        "r0": 7,
+        "session": 40
+      },
+      {
+        "c0": 10,
+        "r0": 14,
+        "session": 13
+      },
+      {
+        "c0": 3,
+        "r0": 2,
+        "session": 50
+      },
+      {
+        "c0": 8,
+        "r0": 9,
+        "session": 23
+      },
+      {
+        "c0": 1,
+        "r0": 16,
+        "session": 60
+      },
+      {
+        "c0": 6,
+        "r0": 4,
+        "session": 33
+      },
+      {
+        "c0": 11,
+        "r0": 11,
+        "session": 6
+      },
+      {
+        "c0": 4,
+        "r0": 18,
+        "session": 43
+      },
+      {
+        "c0": 9,
+        "r0": 6,
+        "session": 16
+      },
+      {
+        "c0": 2,
+        "r0": 13,
+        "session": 53
+      },
+      {
+        "c0": 7,
+        "r0": 1,
+        "session": 26
+      },
+      {
+        "c0": 0,
+        "r0": 8,
+        "session": 63
+      },
+      {
+        "c0": 5,
+        "r0": 15,
+        "session": 36
+      },
+      {
+        "c0": 10,
+        "r0": 3,
+        "session": 9
+      },
+      {
+        "c0": 3,
+        "r0": 10,
+        "session": 46
+      },
+      {
+        "c0": 8,
+        "r0": 17,
+        "session": 19
+      },
+      {
+        "c0": 1,
+        "r0": 5,
+        "session": 56
+      },
+      {
+        "c0": 6,
+        "r0": 12,
+        "session": 29
+      },
+      {
+        "c0": 11,
+        "r0": 0,
+        "session": 2
+      },
+      {
+        "c0": 4,
+        "r0": 7,
+        "session": 39
+      },
+      {
+        "c0": 9,
+        "r0": 14,
+        "session": 12
+      },
+      {
+        "c0": 2,
+        "r0": 2,
+        "session": 49
+      },
+      {
+        "c0": 7,
+        "r0": 9,
+        "session": 22
+      },
+      {
+        "c0": 0,
+        "r0": 16,
+        "session": 59
+      },
+      {
+        "c0": 5,
+        "r0": 4,
+        "session": 32
+      },
+      {
+        "c0": 10,
+        "r0": 11,
+        "session": 5
+      },
+      {
+        "c0": 3,
+        "r0": 18,
+        "session": 42
+      },
+      {
+        "c0": 8,
+        "r0": 6,
+        "session": 15
+      },
+      {
+        "c0": 1,
+        "r0": 13,
+        "session": 52
+      }
+    ],
+    "perTile": {
+      "lossless": {
+        "n": 30,
+        "attributed": 30,
+        "rate": 100,
+        "wrong": 0,
+        "none": 0,
+        "collusion": 0,
+        "abstainFlat": 0,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 30,
+          "p50": 38.42,
+          "p95": 39.18,
+          "max": 39.23
+        },
+        "decisionsSha256": "3c25f06e781dc80ba9ff90f0747ae3f57f7f51991bffefbe5d4205236f48cb59"
+      },
+      "jpeg-q70": {
+        "n": 30,
+        "attributed": 30,
+        "rate": 100,
+        "wrong": 0,
+        "none": 0,
+        "collusion": 0,
+        "abstainFlat": 0,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 30,
+          "p50": 27.21,
+          "p95": 28.32,
+          "max": 28.75
+        },
+        "decisionsSha256": "3c25f06e781dc80ba9ff90f0747ae3f57f7f51991bffefbe5d4205236f48cb59"
+      },
+      "downscale-50": {
+        "n": 30,
+        "attributed": 30,
+        "rate": 100,
+        "wrong": 0,
+        "none": 0,
+        "collusion": 0,
+        "abstainFlat": 0,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 30,
+          "p50": 38.42,
+          "p95": 39.18,
+          "max": 39.23
+        },
+        "decisionsSha256": "3c25f06e781dc80ba9ff90f0747ae3f57f7f51991bffefbe5d4205236f48cb59"
+      }
+    },
+    "cropAlternative": {
+      "lossless": {
+        "n": 30,
+        "attributed": 0,
+        "rate": 0,
+        "wrong": 0,
+        "none": 25,
+        "collusion": 0,
+        "abstainFlat": 5,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 25,
+          "p50": 2.31,
+          "p95": 2.98,
+          "max": 3.3
+        },
+        "decisionsSha256": "e2398f22cd4bf761b780026e071e280c0fdb7b55f010d282cb6cc5ed22aeff44"
+      },
+      "jpeg-q70": {
+        "n": 30,
+        "attributed": 0,
+        "rate": 0,
+        "wrong": 0,
+        "none": 27,
+        "collusion": 0,
+        "abstainFlat": 3,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 27,
+          "p50": 1.74,
+          "p95": 2.34,
+          "max": 2.42
+        },
+        "decisionsSha256": "197554b5360e8e7a89db668555bcc3352c8b899a5840b2cb726d53c60cb229fb"
+      },
+      "downscale-50": {
+        "n": 30,
+        "attributed": 0,
+        "rate": 0,
+        "wrong": 0,
+        "none": 25,
+        "collusion": 0,
+        "abstainFlat": 5,
+        "abstainGeometry": 0,
+        "zTrue": {
+          "n": 25,
+          "p50": 2.31,
+          "p95": 2.98,
+          "max": 3.3
+        },
+        "decisionsSha256": "e2398f22cd4bf761b780026e071e280c0fdb7b55f010d282cb6cc5ed22aeff44"
+      },
+      "sheetBasis": {
+        "w": 6656,
+        "h": 10240,
+        "chips": 512,
+        "fullDomain": "Insufficient carrier capacity"
+      },
+      "chipsInWindow": {
+        "n": 30,
+        "p50": 8,
+        "p95": 11,
+        "max": 13
+      },
+      "carriersPerTile": {
+        "n": 120,
+        "p50": 1,
+        "p95": 4,
+        "max": 6
+      }
+    },
+    "blankPane": {
+      "n": 30,
+      "attributed": 30,
+      "rate": 100,
+      "wrong": 0,
+      "none": 0,
+      "collusion": 0,
+      "abstainFlat": 0,
+      "abstainGeometry": 0,
+      "zTrue": {
+        "n": 30,
+        "p50": 39.72,
+        "p95": 40.2,
+        "max": 40.47
+      },
+      "decisionsSha256": "3c25f06e781dc80ba9ff90f0747ae3f57f7f51991bffefbe5d4205236f48cb59"
+    },
+    "verdicts": {
+      "lossless": true,
+      "q70": true,
+      "downscale": true,
+      "zeroWrong": true,
+      "blankAbstainsFlat": false
+    },
+    "verdict": "RED",
+    "basisChoice": "per-tile"
+  },
+  "d": {
+    "fixture": {
+      "bytes": 51782,
+      "sha256": "a58d396354a7c3ff21285e74288da3bc1c5b8c7862e2d728bb72bca7c201c015"
+    },
+    "cached": {
+      "policy": "cached",
+      "wallMs": 160.72,
+      "stagesMs": {
+        "project": 109.97,
+        "parse": 47.07,
+        "geometry": 3.13,
+        "assets": 0.38,
+        "total": 160.55
+      },
+      "heapGrowthMiB": 6.7,
+      "rssGrowthMiB": 70.92,
+      "lastRowTile": {
+        "rowY": 20971720,
+        "tileRow": 40960,
+        "renderMs": 4.07,
+        "kind": "detail",
+        "records": 1,
+        "lastRowRecordPainted": true
+      }
+    },
+    "engine": {
+      "policy": "engine",
+      "wallMs": 123.31,
+      "stagesMs": {
+        "project": 79.23,
+        "parse": 42.41,
+        "geometry": 1.62,
+        "assets": 0.03,
+        "total": 123.3
+      },
+      "heapGrowthMiB": 3.19,
+      "rssGrowthMiB": 7.64
+    },
+    "gate": {
+      "openMaxMs": 10000,
+      "heapMaxMiB": 256,
+      "verdict": "GREEN"
+    }
+  },
+  "reproducibility": {
+    "against": "/private/tmp/claude-501/-Users-julianshen-prj-officeview/dc98f3a9-cd56-475c-b13a-365a9ed0478e/scratchpad/run2.json",
+    "a": true,
+    "c": true,
+    "bP95": {
+      "zoom1-dpr1": {
+        "previous": 87.34,
+        "now": 86.79,
+        "deltaPct": -0.6,
+        "within10pct": true
+      },
+      "zoom1-dpr2": {
+        "previous": 57.22,
+        "now": 57.39,
+        "deltaPct": 0.3,
+        "within10pct": true
+      }
+    }
+  },
+  "verdicts": {
+    "a": "GREEN",
+    "b": {
+      "zoom1-dpr1": "GREEN",
+      "zoom1-dpr2": "GREEN"
+    },
+    "c": "RED",
+    "d": "GREEN",
+    "fixtures": "OK"
+  }
+}
