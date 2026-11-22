@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { AUDIT_RETENTION_SEC, AuditTable, msgHex } from '../src/audit'
-import { AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, type StoredRow } from '../src/audit-store'
+import { AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, type SheetViewRecord, type StoredRow, type TileDeliveryRecord } from '../src/audit-store'
 import { messageFor } from '../src/mark/message'
 import { Client, corpus, disposePool, start } from './harness'
 
@@ -358,6 +358,110 @@ describe('print audit (Stage 3b Task 2)', () => {
     const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
     const r = AuditStore.openReadOnlyForTrace(path)
     expect(() => r.putPrint({ ...printRec('s1', 1), at: 1 })).toThrow(/read-only/)
+    r.close()
+  })
+  // Stage 4a Task 8: tile deliveries and the sheet view they were drawn under.
+  const tileRec = (sid: string, o: Partial<TileDeliveryRecord> = {}): TileDeliveryRecord => ({ sid, sheetId: '0', viewGen: 0, zoomStep: 7, dpr: 1, palette: 'light', col: 0, row: 0, status: 'l1', refSha256: 'r0', at: 5, ...o })
+  const viewRec = (sid: string, o: Partial<SheetViewRecord> = {}): SheetViewRecord => ({ sid, sheetId: '0', viewGen: 0, spec: { sort: null, filters: [], sizes: [] }, clock: { day: '2026-11-23', timeZone: 'Europe/London' }, at: 5, ...o })
+
+  it('a tile delivery recorded twice with equal fields is one row; a different refSha256, status or palette adds one', () => {
+    const s = AuditStore.open(':memory:'); s.putRow('a', row())
+    s.putTileDelivery(tileRec('a')); s.putTileDelivery(tileRec('a', { at: 9 }))
+    expect(s.tileDeliveries('a')).toEqual([tileRec('a')])
+    s.putTileDelivery(tileRec('a', { refSha256: 'r1' }))
+    expect(s.tileDeliveries('a').map((d) => d.refSha256)).toEqual(['r0', 'r1'])
+    s.putTileDelivery(tileRec('a', { status: 'unmarked', reason: 'capacity' }))
+    s.putTileDelivery(tileRec('a', { palette: 'dark' }))
+    expect(s.tileDeliveries('a')).toHaveLength(4)
+    expect(s.tileDeliveries('a')[2]).toEqual(tileRec('a', { status: 'unmarked', reason: 'capacity' }))
+    expect(s.tileDeliveries('a')[3]!.palette).toBe('dark')
+    s.close()
+  })
+
+  it('tileCandidates returns only rows inside the window, for this docRef, sheet, zoom step, dpr and palette', () => {
+    const s = AuditStore.open(':memory:')
+    s.putRow('a', row()); s.putRow('b', row({ visibleMark: { kind: 'off' } })); s.putRow('c', row({ docRef: 'doc-b' }))
+    const w = { c0: 1, c1: 2, r0: 3, r1: 4 }
+    for (const x of [
+      tileRec('a', { col: 1, row: 3 }), tileRec('a', { col: 2, row: 4 }), // the window's corners, inclusive
+      tileRec('b', { col: 1, row: 4, status: 'unmarked', reason: 'capacity' }),
+      tileRec('a', { col: 0, row: 3 }), tileRec('a', { col: 3, row: 3 }), tileRec('a', { col: 1, row: 2 }), tileRec('a', { col: 1, row: 5 }), // outside
+      tileRec('c', { col: 1, row: 3 }), // another docRef
+      tileRec('a', { col: 1, row: 3, sheetId: '1', refSha256: 'x1' }), tileRec('a', { col: 1, row: 3, zoomStep: 6, refSha256: 'x2' }), tileRec('a', { col: 1, row: 3, dpr: 2, refSha256: 'x3' }),
+      tileRec('a', { col: 1, row: 3, palette: 'dark', refSha256: 'x4' }),
+    ]) s.putTileDelivery(x)
+    const c = s.tileCandidates('doc-a', '0', 7, 1, w)
+    expect(c.map((x) => [x.sid, x.delivery.col, x.delivery.row, x.delivery.status])).toEqual([['a', 1, 3, 'l1'], ['a', 2, 4, 'l1'], ['b', 1, 4, 'unmarked']])
+    expect(c[2]!.row.visibleMark).toEqual({ kind: 'off' })
+    // The palette defaults to light and is part of the key: the dark tile is its own candidate set.
+    expect(s.tileCandidates('doc-a', '0', 7, 1, w, 'light')).toEqual(c)
+    expect(s.tileCandidates('doc-a', '0', 7, 1, w, 'dark').map((x) => x.delivery.refSha256)).toEqual(['x4'])
+    expect(s.tileCandidates('doc-a', '1', 7, 1, w).map((x) => x.delivery.refSha256)).toEqual(['x1'])
+    expect(s.tileCandidates('doc-a', '0', 6, 1, w).map((x) => x.delivery.refSha256)).toEqual(['x2'])
+    expect(s.tileCandidates('doc-a', '0', 7, 2, w).map((x) => x.delivery.refSha256)).toEqual(['x3'])
+    s.close()
+  })
+
+  it('a second sheet view for the same (sid, sheetId, viewGen) is ignored; sheetView round-trips the clock', () => {
+    const s = AuditStore.open(':memory:'); s.putRow('a', row())
+    s.putSheetView(viewRec('a'))
+    s.putSheetView(viewRec('a', { clock: { day: '2026-12-01', timeZone: 'UTC' }, at: 9 }))
+    expect(s.sheetView('a', '0', 0)).toEqual(viewRec('a'))
+    expect(s.sheetView('a', '0', 0)!.clock).toEqual({ day: '2026-11-23', timeZone: 'Europe/London' })
+    expect(s.sheetView('a', '0', 1)).toBeUndefined(); expect(s.sheetView('a', '1', 0)).toBeUndefined(); expect(s.sheetView('b', '0', 0)).toBeUndefined()
+    s.putSheetView(viewRec('a', { viewGen: 1 })); s.putSheetView(viewRec('a', { sheetId: '1' }))
+    expect(s.sheetView('a', '0', 1)).toBeDefined(); expect(s.sheetView('a', '1', 0)).toBeDefined()
+    s.close()
+  })
+
+  it('expire() removes tile deliveries and sheet views with their row', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    s.putRow('old', row({ startedAt: 0 })); s.putRow('new', row({ startedAt: 100 }))
+    for (const sid of ['old', 'new']) { s.putTileDelivery(tileRec(sid)); s.putSheetView(viewRec(sid)) }
+    expect(t.expire(AUDIT_RETENTION_SEC)).toBe(1)
+    expect(s.tileDeliveries('old')).toEqual([]); expect(s.sheetView('old', '0', 0)).toBeUndefined()
+    expect(s.tileDeliveries('new')).toHaveLength(1); expect(s.sheetView('new', '0', 0)).toBeDefined()
+    expect(s.tileCandidates('doc-a', '0', 7, 1, { c0: 0, c1: 0, r0: 0, r1: 0 }).map((x) => x.sid)).toEqual(['new'])
+    s.close()
+  })
+
+  it('AuditTable records tile deliveries and sheet views, and throws for an unknown or expired sid', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('a', row())
+    const { at: _a, ...tile } = tileRec('a'), { at: _b, ...view } = viewRec('a')
+    t.recordSheetView(view); t.recordTileDelivery(tile)
+    expect(s.tileDeliveries('a')).toEqual([{ ...tile, at: expect.any(Number) }])
+    expect(s.sheetView('a', '0', 0)).toEqual({ ...view, at: expect.any(Number) })
+    expect(() => t.recordTileDelivery({ ...tile, sid: 'nope' })).toThrow(/no audit row/)
+    expect(() => t.recordSheetView({ ...view, sid: 'nope' })).toThrow(/no audit row/)
+    t.record('old', row({ startedAt: 0 })); t.expire(AUDIT_RETENTION_SEC)
+    expect(() => t.recordTileDelivery({ ...tile, sid: 'old' })).toThrow(/no audit row/)
+    expect(() => t.recordSheetView({ ...view, sid: 'old' })).toThrow(/no audit row/)
+    expect(s.tileDeliveries('nope')).toEqual([])
+    s.close()
+  })
+
+  it('a store created before Stage 4a gains the tile tables on open, keeps its rows, and reopening is idempotent', () => {
+    const path = dbPath()
+    const s0 = AuditStore.open(path); s0.putRow('s1', row()); s0.putDelivery({ sid: 's1', unitIndex: 0, scale: 1, status: 'l1', refSha256: 'aa', at: 1 }); s0.close()
+    const raw = new Database(path, { strict: true }); raw.exec('DROP TABLE tile_deliveries; DROP TABLE sheet_views'); raw.close()
+    const s = AuditStore.open(path)
+    expect(s.columnsOf('tile_deliveries')).toEqual(['sid', 'sheet_id', 'view_gen', 'zoom_step', 'dpr', 'palette', 'col', 'row', 'status', 'reason', 'ref_sha256', 'at'])
+    expect(s.columnsOf('sheet_views')).toEqual(['sid', 'sheet_id', 'view_gen', 'spec', 'clock', 'at'])
+    s.putTileDelivery(tileRec('s1')); s.putSheetView(viewRec('s1'))
+    expect(s.deliveries('s1')).toHaveLength(1); expect(s.tileDeliveries('s1')).toHaveLength(1)
+    s.close()
+    const s2 = AuditStore.open(path)
+    expect(s2.tileDeliveries('s1')).toEqual([tileRec('s1')]); expect(s2.sheetView('s1', '0', 0)).toEqual(viewRec('s1'))
+    s2.close()
+  })
+
+  it('trace store refuses tile and sheet view writes', () => {
+    const path = dbPath()
+    const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
+    const r = AuditStore.openReadOnlyForTrace(path)
+    expect(() => r.putTileDelivery(tileRec('s1'))).toThrow(/read-only/)
+    expect(() => r.putSheetView(viewRec('s1'))).toThrow(/read-only/)
     r.close()
   })
 })
