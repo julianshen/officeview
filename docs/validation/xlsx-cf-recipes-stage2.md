@@ -949,3 +949,22 @@ The capture cannot be retried, and no prediction, value or reading is edited aft
   - `raw-floor`: this would mean the E4 replica moved against two earlier captures. That is a finding for the owner before any registration, since registering raw floor would mispaint E4 and D19.
 - **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The window class stays withheld.
 - **The literal twins** are recorded whatever they show: they test "same double, same outcome" and register nothing.
+
+### 10.6 Run result (captured, ed0fccb6, Excel 16.115)
+
+- **Status:** captured (measured).
+  - The first build was rejected structurally: Excel resaved the degenerate sqref `G14:G14` as `G14`. That build is kept as `tests/fixtures/xlsx-cf/stage2-scale-upper-window.rejected.xlsx`.
+  - 5877c3eb matches a degenerate single-cell sqref to its collapsed form. The rebuild opened repair-free, and the capture verified with a minimum contrast of 123.
+- **`verifyCfCase`:** `formula-hypothesis-none` for `scale:upper-window-statistical` and for `scale:upper-window-literal`. The twin line is non-discriminating.
+  - The audit keeps all three ids `unverified-nondiscriminating`. **Nothing is registered**, and the window class stays withheld.
+- **The capture is sound.** Every pixel equals its DisplayFormat fill (147/147), all 9 controls are white, and all 4 positive controls show their dxf fill.
+- **The twin line is not.** 38 of the 41 twins are on the line. H8, H18 and I5 (2-colour num 0 / 210 at k = 57, 108 and 127; f·210 = 56.99999999999999, 107.99999999999999 and 126.99999999999999) were drawn one step smaller.
+- **What Excel drew at the 27 statistical window cells:**
+  - **The decisive cells:** raw floor at 15 of the 18 (A11..A14, B10..B13, C5..C8, D9, D10 and D18), and guarded truncation at 3 (E4, D8 and D11).
+  - **Above an integer:** B14 and C15 were drawn one step smaller than both readings; the other 7 are at k.
+  - So neither reading matches.
+- **The 27 literal twins** each drew exactly what their statistical cell drew.
+- **The negative controls moved.** All 11 lower-segment and 2-colour controls just below an integer (A3, A4, D2, D4, E7..E10, E12..E14) were drawn one step smaller (raw floor). With H8, H18 and I5, production paints **14 cells of published shapes one step off Excel**. The other 26 controls are at guarded truncation.
+- **The E4 replica** (E4 and its twin G14) is at FFEFE784, as in both earlier captures. Of the integer cells, A17 moved and E5 did not.
+- **Owner decision needed:** a proposed fail-closed withhold for 2-colour and lower-segment cells within 1e-11 below an integer (14 cells, none of them painted exactly today). Production is unchanged until the ruling.
+- **Findings, reach and hypotheses:** `docs/validation/xlsx-cf.md` §14.z.17.
