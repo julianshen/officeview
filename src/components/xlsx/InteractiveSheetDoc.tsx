@@ -1520,7 +1520,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { rendererRef.current?.dispose(); rendererRef.current = null }, [])
   // Stage 4a (S4 §6.5): the active stream sheet's tile source, created lazily like the renderer (an unmount, or
   // StrictMode's dev re-mount, disposes it and the next frame starts a fresh one). Arrivals coalesce into one repaint.
-  const tilePalette = tilePaletteFor(props.theme)
+  // Local mode reads no media query and keeps a constant here (it is in the base effect's dependencies).
+  const tilePalette: TilePalette = stream ? tilePaletteFor(props.theme) : 'light'
   const tilePaletteRef = useRef(tilePalette)
   tilePaletteRef.current = tilePalette
   const [streamTick, setStreamTick] = useState(0)

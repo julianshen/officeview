@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import InteractiveSheetDoc, { type SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { StreamWorkbook, streamShellDoc } from '../src/components/xlsx/streamWorkbook'
 import type { RemoteSheets } from '../src/stream/remote/remote-doc'
-import type { TilesRequest, TilesResult } from '../src/stream/remote/sheet-channel'
+import type { DecodedTile, TilesRequest, TilesResult } from '../src/stream/remote/sheet-channel'
 import { decodeSheetLayout, encodeSheetLayout, type StreamSheetLayout } from '../src/stream/sheet-wire'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -56,21 +56,31 @@ async function serverSheet() {
   return { server: geometry as SheetGeometry, wire }
 }
 
-function mount(wire: StreamSheetLayout, onTiles: (req: TilesRequest) => void = () => {}) {
+function mount(wire: StreamSheetLayout, o: { serve?: boolean } = {}) {
   const calls: TilesRequest[] = []
   const sheets: RemoteSheets = {
     list: [{ sheetId: '0', name: 'S' }],
     layout: vi.fn(async () => wire),
-    // Held open until cancelled (the channel resolves an aborted batch `cancelled`).
-    tiles: vi.fn((req: TilesRequest, _onTile: unknown, signal?: AbortSignal): Promise<TilesResult> => {
-      calls.push(req); onTiles(req)
+    // `serve`: every tile is delivered and the batch settles; else held open until cancelled (the channel resolves an
+    // aborted batch `cancelled`).
+    tiles: vi.fn((req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult> => {
+      calls.push(req)
+      if (o.serve) {
+        return new Promise(resolve => setTimeout(() => {
+          for (const t of req.tiles) onTile({ sheetIndex: 0, viewGen: req.viewGen, zoomStep: req.zoomStep, dpr: req.dpr, col: t.col, row: t.row, png: new Uint8Array([1]) })
+          resolve({ refused: [] })
+        }, 5))
+      }
       return new Promise(resolve => signal?.addEventListener('abort', () => resolve({ refused: [], cancelled: true }), { once: true }))
     }),
   }
   const workbook = new StreamWorkbook(sheets, 'doc-ref')
   const frames: SheetFrameStats[] = []
-  const view = render(<InteractiveSheetDoc doc={streamShellDoc(sheets.list)} source={workbook} onFrame={f => frames.push(f)} />)
-  return { view, calls, frames, workbook }
+  // One document object: a new one is a new document (the viewer remounts, §10.1).
+  const doc = streamShellDoc(sheets.list)
+  const element = () => <InteractiveSheetDoc doc={doc} source={workbook} onFrame={f => frames.push(f)} />
+  const view = render(element())
+  return { view, calls, frames, workbook, rerender: () => view.rerender(element()) }
 }
 const asked = (calls: TilesRequest[]) => calls.flatMap(c => c.tiles.map(t => `${t.col},${t.row}`))
 
@@ -122,6 +132,28 @@ describe('stream viewer (S4 §6.5)', () => {
     expect(extentOf(wire)).toEqual(extent)
     expect(asked(calls).sort()).toEqual(expect.arrayContaining(expectedTiles(tileRangeFor({ origin: { x: 0, y: 0 }, viewport, zoom: 1, dpr: 1, extent })).sort()))
     expect(frames.at(-1)!.basePaints).toBe(0)
+  })
+
+  it('arrived tiles are drawn from the cache; nothing is requested twice', async () => {
+    setDpr(1)
+    // jsdom has no createImageBitmap: a canvas stands in for the decoded bitmap.
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => Object.assign(document.createElement('canvas'), { width: 512, height: 512, close: () => {} })))
+    try {
+      const { wire } = await serverSheet()
+      const { calls, frames, rerender } = mount(wire, { serve: true })
+      await waitFor(() => expect(frames.some(f => f.tileHits > 0 && f.pendingTiles === 0)).toBe(true), { timeout: 4000 })
+      // Let the prefetch ring arrive and the local asset lease land, then force a render: still one request per tile.
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+      rerender()
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+      const last = frames.at(-1)!
+      expect(last.pendingTiles).toBe(0)
+      expect(last.tileHits).toBeGreaterThan(0)
+      expect(frames.every(f => f.basePaints === 0)).toBe(true)
+      const counts = new Map<string, number>()
+      for (const k of asked(calls)) counts.set(k, (counts.get(k) ?? 0) + 1)
+      expect([...counts].filter(([, n]) => n > 1)).toEqual([])
+    } finally { vi.unstubAllGlobals() }
   })
 
   it('wheel zoom on a stream settles to a zoom step; nothing is requested off-step', async () => {

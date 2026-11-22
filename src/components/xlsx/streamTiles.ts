@@ -198,14 +198,20 @@ export function createStreamTileSource(o: StreamTileSourceOptions): StreamTileSo
     for (const x of r.refused ?? []) {
       const e = entries.get(cell(batch.tuple, x.col, x.row))
       if (!e || e.batch !== batch || e.state !== 'flight') continue
-      if (x.code === 'rate-limited') { e.state = 'retry'; retry.push(e) } else drop(e, true)
+      // A batch of an older tuple (its cancel was paced out) is not retried: nothing would take its tiles.
+      if (x.code === 'rate-limited' && batch.tuple === tuple) { e.state = 'retry'; retry.push(e) } else drop(e, x.code !== 'rate-limited')
     }
     // Neither delivered nor refused (cancelled, or the request failed): not pending any more; asked again when wanted.
     for (const id of batch.ids) { const e = entries.get(id); if (e && e.batch === batch && e.state === 'flight') drop(e) }
     if (retry.length) {
       setTimer(() => {
         if (closed) return
-        for (const e of retry) if (entries.get(e.id) === e && e.state === 'retry') { e.state = 'queued'; e.batch = undefined }
+        for (const e of retry) {
+          if (entries.get(e.id) !== e || e.state !== 'retry') continue
+          if (e.tuple !== tuple) { drop(e); continue }
+          e.state = 'queued'
+          e.batch = undefined
+        }
         flush()
       }, r.retryAfterMs ?? STREAM_RETRY_FALLBACK_MS)
     }

@@ -40,12 +40,12 @@ const range = (c0: number, c1: number, r0: number, r1: number): TileIndexRange =
 
 interface Call { req: TilesRequest; onTile: (t: DecodedTile) => void; signal?: AbortSignal; resolve: (r: TilesResult) => void; reject: (e: unknown) => void }
 /** A server stand-in: every `tiles` batch is held until the test delivers or settles it. */
-function fakeServer() {
+function fakeServer(o: { ignoreAbort?: boolean } = {}) {
   const calls: Call[] = []
   const tiles = vi.fn((req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal) => new Promise<TilesResult>((resolve, reject) => {
     const call: Call = { req, onTile, signal, resolve, reject }
     calls.push(call)
-    signal?.addEventListener('abort', () => resolve({ refused: [], cancelled: true }), { once: true })
+    if (!o.ignoreAbort) signal?.addEventListener('abort', () => resolve({ refused: [], cancelled: true }), { once: true })
   }))
   const deliver = (call: Call, coords = call.req.tiles) => {
     for (const t of coords) call.onTile({ sheetIndex: Number(call.req.sheetId), viewGen: call.req.viewGen, zoomStep: call.req.zoomStep, dpr: call.req.dpr, col: t.col, row: t.row, png: new Uint8Array([call.req.palette === 'dark' ? 2 : 1]) })
@@ -66,8 +66,8 @@ async function tick(ms = 0) {
   await vi.advanceTimersByTimeAsync(ms)
   for (let i = 0; i < 5; i++) await Promise.resolve()
 }
-function source(o: { palette?: () => TilePalette; viewGen?: () => number } = {}) {
-  const server = fakeServer()
+function source(o: { palette?: () => TilePalette; viewGen?: () => number; ignoreAbort?: boolean } = {}) {
+  const server = fakeServer({ ignoreAbort: o.ignoreAbort })
   const src = createStreamTileSource({
     sheetId: '0', viewGen: o.viewGen ?? (() => 3), palette: o.palette ?? (() => 'light'), tiles: server.tiles, decode,
     now: () => Date.now(), setTimer: setTimeout,
@@ -237,6 +237,28 @@ describe('stream tiles (S4 §6.5)', () => {
     server.calls[1]!.resolve({ refused: [] })
     await tick()
     for (let col = 0; col < 8; col++) expect(src.take(key(col, 0))).toBeDefined()
+    expect(src.stats.outstanding).toBe(0)
+    src.dispose()
+  })
+
+  it('a rate-limited tile of a superseded tuple is dropped, not parked', async () => {
+    vi.useFakeTimers()
+    let palette: TilePalette = 'light'
+    // The old batch is never settled by its cancel (as when the pacer had no room for it): it ends rate-limited.
+    const { server, src } = source({ palette: () => palette, ignoreAbort: true })
+    src.request(key(0, 0), true)
+    src.request(key(1, 0), true)
+    await tick()
+    const old = server.calls[0]!
+    palette = 'dark'
+    src.request(key(0, 0, { palette: 'dark' }), true)
+    await tick(1000)
+    old.resolve({ refused: old.req.tiles.map(t => ({ ...t, code: 'rate-limited' })), retryAfterMs: 500 })
+    await tick(1000)
+    expect(server.calls.filter(c => c.req.palette === 'light')).toHaveLength(1)
+    const dark = server.calls.find(c => c.req.palette === 'dark')!
+    server.deliver(dark); dark.resolve({ refused: [] })
+    await tick()
     expect(src.stats.outstanding).toBe(0)
     src.dispose()
   })
