@@ -8,6 +8,7 @@ import type { ShowPlanJob } from '../show/build'
 import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
 import type { SheetClock } from '../sheet/clock'
+import type { TileJob } from '../sheet/tile'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -44,6 +45,8 @@ export type WorkerRequest =
   | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
   /** Stage 4a (F23): one sheet's `sheet-layout` (from its servable snapshot under the session clock). */
   | { type: 'layout'; id: number; docKey: string; sheetIndex: number; clock: SheetClock }
+  /** Stage 4a (S4 §6.5): one 512² sheet tile (canonical, pre-forensic) from its servable snapshot. */
+  | { type: 'tile'; id: number; docKey: string; job: TileJob; hangMs?: number; crash?: boolean }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -113,6 +116,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         : m.type === 'show-plan' ? await host.showPlan(m.docKey, m.job, m.grant)
         : m.type === 'show-track' ? await host.showTrack(m.docKey, m.job, m.grant)
         : m.type === 'show-morph' ? await host.showMorph(m.docKey, m.job, m.grant)
+        : m.type === 'tile' ? await host.renderTile(m.docKey, m.job)
         : await unitsPath(m.docKey, () => host.render(m.docKey, m))
     }
     const transfer: ArrayBuffer[] = []

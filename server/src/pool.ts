@@ -24,6 +24,7 @@ import { createWorkerProbes, type ProbeKillRequest, type ProbeRunRequest, type W
 import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import type { SheetClock } from './sheet/clock'
+import type { RenderedTile, TileJob } from './sheet/tile'
 import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
@@ -60,6 +61,9 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** Stage 4a (F23): a `sheet-layout` job on the docRef's worker: sheet `sheetIndex` under the session clock. */
 export interface PoolLayoutJob { docRef: string; contentPolicy: 'visible-only' | 'full'; sheetIndex: number; clock: SheetClock }
+/** Stage 4a (S4 §6.5): a tile job on the docRef's worker. `hangMs`/`crash`: the `RenderJob` test hooks (F25). */
+export type PoolTileJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & TileJob
+export { TILE_BYTES_ESTIMATE } from './sheet/tile'
 /** Admission charge of one layout job (the snapshot it may build, and the layout it copies out). */
 export const LAYOUT_JOB_BYTES = 16 * 1024 * 1024
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
@@ -381,6 +385,28 @@ export class Pool {
         const r = await this.runJob(slot, admitted, { type: 'layout', id: this.nextId++, docKey, sheetIndex: job.sheetIndex, clock: { day: job.clock.day, timeZone: job.clock.timeZone } })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as StreamSheetLayout
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** Stage 4a (S4 §6.5): one canonical sheet tile, with the same affinity, admission, deadline and recycle paths as
+   * `render` (`bytesEstimate`: `TILE_BYTES_ESTIMATE`). The result carries the job's palette (F24). */
+  async tile(sessionId: string, job: PoolTileJob, bytesEstimate: number, signal?: AbortSignal): Promise<RenderedTile> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const { docRef, contentPolicy, hangMs, crash, ...rest } = job
+    const tile: TileJob = { sheetIndex: rest.sheetIndex, viewGen: rest.viewGen, zoomStep: rest.zoomStep, dpr: rest.dpr, palette: rest.palette, col: rest.col, row: rest.row, mark: rest.mark, clock: rest.clock && { day: rest.clock.day, timeZone: rest.clock.timeZone } }
+    const slot = this.pick(docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+        // Again after the (re)open: a socket that closed while the document was parsed gets no tile.
+        if (signal?.aborted) throw new ShowCancelled()
+        const r = await this.runJob(slot, admitted, { type: 'tile', id: this.nextId++, docKey, job: tile, ...this.hooks(hangMs, crash) })
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r as RenderedTile
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)

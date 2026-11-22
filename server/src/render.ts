@@ -12,7 +12,7 @@ import { resolve } from 'node:path'
 import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-backend'
 import { OfficePackage } from '../../src/core/zip'
 import type { WatermarkOptions } from '../../src/core/watermark'
-import { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec } from './mark/visible'
+import { FIXED_MARK_TEXT, markOptions, paintMark, paintMarkRegion, type MarkSpec } from './mark/visible'
 import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { prepareSheetAssets } from '../../src/components/xlsx/sheetAssets'
@@ -20,6 +20,13 @@ import { clockEpochMs, type SheetClock } from './sheet/clock'
 import { buildStreamLayout, LayoutUnavailable } from './sheet/layout'
 import { LayoutTooLarge, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { buildSheetSnapshot, servableSheet, type ServableSheet, type SheetSnapshot } from './sheet/snapshot'
+import { TILE_PALETTE_COLORS, tileJobProblem, tileLimit, type RenderedTile, type TileJob } from './sheet/tile'
+import { TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
+import { renderSheetViewport } from '../../src/xlsx/view/renderViewport'
+import { tileLogicalBox } from '../../src/xlsx/view/tileCache'
+import { LayoutCache } from '../../src/xlsx/view/textLayout'
+import { frameBudgetFor, planViewport } from '../../src/xlsx/view/viewport'
+import type { LogicalViewport } from '../../src/xlsx/view/contracts'
 import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
 import type { XlsxDocument } from '../../src/xlsx/types'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
@@ -106,7 +113,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -373,6 +380,48 @@ export class DocumentHost {
     }
   }
 
+  /**
+   * Stage 4a (S4 §6.5): one 512² device-px tile of sheet `job.sheetIndex`, painted from its servable snapshot under
+   * `job.clock` only (covered cells blank, saved values, F16/F19), then the visible mark in global sheet device space
+   * (`paintMarkRegion`), encoded metadata-free. Text layouts are cached per snapshot (`OpenDoc.tileLayouts`). The logical box is `(col, row)·512/s` with `s = zoom·dpr`; the plan is
+   * profile `'D'` against a fresh per-tile `frameBudgetFor('D')`. An edge tile is a full 512² surface, blank past the
+   * sheet's extent (R15). A blank tile is marked too (owner ruling). Refused `bad-job`: a malformed job, a sheet out of
+   * range, `zoomStep` outside 0..10, `dpr` outside {1, 2}, an unknown palette, `viewGen !== 0` (4a), a negative index
+   * or one past `tileLimit` (F8), or a sheet whose geometry is a diagnostic (it has no layout either). Reads no clock.
+   */
+  async renderTile(docKey: string, job: TileJob): Promise<RenderedTile> {
+    const problem = tileJobProblem(job)
+    if (problem) throw new RenderRefusal('bad-job', `tile: ${problem}`)
+    const snap = await this.sheetSnapshot(docKey, job.sheetIndex, job.clock)
+    const geometry = snap.geometry
+    if (geometry.kind !== 'ready') throw new RenderRefusal('bad-job', 'tile: sheet geometry unavailable')
+    const zoom = TILE_ZOOM_STEPS[job.zoomStep]!, dpr = job.dpr, s = zoom * dpr
+    const m = geometry.metrics
+    if (job.col >= tileLimit(m.cols.totalCss(), zoom, dpr) || job.row >= tileLimit(m.rows.totalCss(), zoom, dpr)) throw new RenderRefusal('bad-job', 'tile: index past the grid')
+    const canvas = this.backend.createCanvas(TILE_PX, TILE_PX)
+    const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+    const viewport: LogicalViewport = { box: tileLogicalBox(job.col, job.row, zoom, dpr), zoom, deviceScale: dpr }
+    const doc = this.docs.get(docKey)
+    // Dropped while the snapshot was awaited.
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    const layouts = doc.tileLayouts ??= new Map()
+    const layoutKey = `${job.sheetIndex}|${job.clock.day}|${job.clock.timeZone}`
+    let cache = layouts.get(layoutKey)
+    if (!cache) layouts.set(layoutKey, cache = new LayoutCache())
+    const frameBudget = frameBudgetFor('D')
+    const plan = planViewport(geometry, viewport, 'D', { frameBudget })
+    ctx.setTransform(s, 0, 0, s, 0, 0)
+    renderSheetViewport(snap.sheet, ctx, geometry, viewport, snap.assets, { colors: TILE_PALETTE_COLORS[job.palette], preparedPlan: plan, profile: 'D', cache, frameBudget })
+    const mark = markOptions(job.mark)
+    if (mark) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      paintMarkRegion(ctx, mark, { x: job.col * TILE_PX, y: job.row * TILE_PX, w: TILE_PX, h: TILE_PX, scale: s })
+    }
+    this.pages++
+    const png = criticalChunksOnly(new Uint8Array((canvas as unknown as { toBuffer(m: 'image/png'): Buffer }).toBuffer('image/png')))
+    return { png, w: TILE_PX, h: TILE_PX, palette: job.palette }
+  }
+
   /** The static paintables every units path paints from (synchronous: `ensurePaintables` builds them). */
   private paintablesOf(doc: OpenDoc): PaintableArray {
     if (!doc.paintables) throw new PaintablesUnbuilt()
@@ -386,6 +435,7 @@ export class DocumentHost {
       this.droppedProbes += d.media.probes; d.paintables?.dispose(); d.show?.store.close(); this.docs.delete(docKey)
       for (const built of d.snapshots?.values() ?? []) built.then((snap) => snap.release(), () => undefined)
       d.snapshots?.clear()
+      d.tileLayouts?.clear()
     }
     this.served.drop(docKey)
   }
