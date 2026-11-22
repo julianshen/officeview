@@ -11,6 +11,17 @@
  * array-capacity transitions (just past a power of two and the review's 98,304).
  * Prints one JSON line: [{ name, count, observed, model, extra }]. Bun/JSC only;
  * it is not a Chrome heap measurement.
+ *
+ * It runs with JSC's concurrent JIT off (it re-executes itself under
+ * BUN_JSC_useConcurrentJIT=0). With it on, an optimizing compile running on a
+ * compiler thread could keep the previous case's working set alive through
+ * the next case's baseline and release it inside the measured window, so a
+ * case read low by however much of its predecessor happened to be held: on
+ * darwin 'leftover-sweep-grouped' x4096 read 261 KB after 'leftover-sweep'
+ * against 536 KB alone, every run, and a Linux CI run read 'leftover-sweep'
+ * x4096 at 978 KB against its usual ~1.13 MB. With it off (or with the DFG
+ * off) every case reads the same alone, after any predecessor and after any
+ * warm-up size. Object sizes do not depend on which thread compiles.
  */
 import { heapStats } from 'bun:jsc'
 import {
@@ -20,7 +31,11 @@ import {
 import { MemoryPool } from '../src/xlsx/view/tileCache'
 import { PAGE_SUMMARY_BYTES, PENDING_STRING_BYTES } from '../src/xlsx/storage/constructionMemory'
 
-declare const Bun: { gc(force: boolean): void }
+declare const Bun: { gc(force: boolean): void; spawnSync(cmd: string[], options: { env: Record<string, string | undefined>; stdio: ['inherit', 'inherit', 'inherit'] }): { exitCode: number | null } }
+if (process.env.BUN_JSC_useConcurrentJIT !== '0') {
+  const child = Bun.spawnSync([process.execPath, ...process.argv.slice(1)], { env: { ...process.env, BUN_JSC_useConcurrentJIT: '0' }, stdio: ['inherit', 'inherit', 'inherit'] })
+  process.exit(child.exitCode ?? 1)
+}
 type Heap = { heapSize: number; extraMemorySize: number }
 /** After a full GC; heapSize is the live heap, extraMemorySize a part of it. */
 const live = (): Heap => {
