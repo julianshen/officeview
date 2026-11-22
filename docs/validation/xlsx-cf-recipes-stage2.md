@@ -969,3 +969,64 @@ The capture cannot be retried, and no prediction, value or reading is edited aft
 - **Owner ruling: the guard-boundary withhold.** 2-colour and 3-colour lower-segment interior cells whose step product lies within 1e-11 strictly below a whole number are withheld (`cf-unmeasured-guard-boundary`). That is the 14 cells here, and none elsewhere. The case is in the conformance pass, and `cf-compare` passes in both modes.
 - **The search with this capture:** `npx tsx scripts/cf-refs/upper-window-candidates.ts` (`--pre-capture` reproduces §10.1). It has 1235 cells and 0 survivors at every scope.
 - **Findings, reach and hypotheses:** `docs/validation/xlsx-cf.md` §14.z.17.
+
+## 11. The raw-floor follow-up (`stage2-scale-raw-floor`)
+
+The pre-registered confirmation case for W1 (`docs/validation/xlsx-cf.md` §14.z.17): 2-colour scales and 3-colour lower segments draw raw floor, floor(f·|d|), with no 1e-11 guard. Since the owner ruling after ed0fccb6, production withholds the guard-boundary shape of these segments (`cf-unmeasured-guard-boundary`), where guarded truncation and raw floor differ. This case asks Excel to draw that shape across bound kinds, colour orders, spans and doubles, so that one of two readings can be registered.
+
+### 11.1 Census (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/raw-floor-census.ts` (pinned by `tests/xlsx-cf-scale-raw-floor-census.test.ts`).
+
+**Cells.** The harness of §8.1 (`collectSegmentCells`, every measured case including Stage 5, `{ include: 'all' }`) maps 1235 captured colour-scale cells to the segment production evaluated. 960 are 2-colour or 3-colour lower-segment cells:
+- 692 are interior (lo < v < hi);
+- 268 are endpoints or clamped. Raw floor is exact at all 268.
+
+The other 275 are upper-segment cells and are out of scope. There are 0 harness faults.
+
+**W1 is exact on all 692 interior cells.** Raw floor equals Excel's DisplayFormat fill at every one. Guarded truncation misses exactly the 14 below-integer cells of stage2-scale-upper-window (A3, A4, D2, D4, E7..E10, E12..E14, H8, H18, I5).
+
+| Scale | Bounds | Colour order | Class | Cells | Raw floor exact | Guarded exact |
+|---|---|---|---|---|---|---|
+| 2-colour | formula-resolved | both | clear | 51 | 51 | 51 |
+| 2-colour | formula-resolved | both | integer | 35 | 35 | 35 |
+| 2-colour | literal num | asc | clear | 5 | 5 | 5 |
+| 2-colour | literal num | both | above | 5 | 5 | 5 |
+| 2-colour | literal num | both | **below** | 7 | 7 | **0** |
+| 2-colour | literal num | both | clear | 141 | 141 | 141 |
+| 2-colour | literal num | both | integer | 206 | 206 | 206 |
+| 2-colour | mixed | both | clear | 17 | 17 | 17 |
+| 2-colour | mixed | both | integer | 15 | 15 | 15 |
+| 2-colour | statistical | both | **below** | 3 | 3 | **0** |
+| 2-colour | statistical | both | clear | 39 | 39 | 39 |
+| 2-colour | statistical | both | integer | 53 | 53 | 53 |
+| 3-colour lower | formula-resolved | asc | clear | 1 | 1 | 1 |
+| 3-colour lower | literal num | asc | clear | 8 | 8 | 8 |
+| 3-colour lower | literal num | both | clear | 26 | 26 | 26 |
+| 3-colour lower | literal num | both | integer | 32 | 32 | 32 |
+| 3-colour lower | mixed | asc | clear | 4 | 4 | 4 |
+| 3-colour lower | mixed | both | **below** | 2 | 2 | **0** |
+| 3-colour lower | mixed | both | clear | 3 | 3 | 3 |
+| 3-colour lower | mixed | both | integer | 1 | 1 | 1 |
+| 3-colour lower | statistical | asc | clear | 8 | 8 | 8 |
+| 3-colour lower | statistical | asc | integer | 1 | 1 | 1 |
+| 3-colour lower | statistical | both | above | 1 | 1 | 1 |
+| 3-colour lower | statistical | both | **below** | 2 | 2 | **0** |
+| 3-colour lower | statistical | both | clear | 13 | 13 | 13 |
+| 3-colour lower | statistical | both | integer | 13 | 13 | 13 |
+
+How the columns are defined:
+- **Class** is the worst channel product p = f·|d|. *Below* means within 1e-11 strictly below a whole number, *above* within 1e-11 above one, *integer* an IEEE integer, and *clear* none of these.
+- **Colour order** lists the directions of the channels with d ≠ 0. No captured cell has only descending channels.
+
+**Per channel.** Both truncation directions hold below-integer channels, and Excel drew every one at the raw-floor step:
+- 2-colour: 13 ascending, 17 descending;
+- lower segment: 8 ascending, 4 descending.
+
+There are 2067 interior channels with d ≠ 0 in all, and raw floor is exact on every one.
+
+**Not covered.** 32 numeric cells that Excel fills are withheld by another production gate before any interpolation: overlap, hidden row, merge, and composition, in stage2-scale-scope, stage2-scale-composition and stage5-composition. They are all 2-colour, and no reading reaches them.
+
+**Withheld here, exact all the same.** Production withholds 74 of the 692: the 14 guard-boundary cells and 60 literal-num lower-segment cells (the num-segment shape). Raw floor is Excel's fill at all of them.
+
+**Before this case**, only the 14 below-integer cells separate the readings. All 14 come from one capture and one span (d = 210 on every channel). The case below replicates them and widens them.
