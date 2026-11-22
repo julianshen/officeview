@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   check:
-    name: typecheck, media, build, corpus
+    name: typecheck, build, corpus
     runs-on: ubuntu-latest
     # The vitest suite runs in the sharded `test` job and the stream server suite in `server` (both below);
     # this job keeps the typechecks, the build and the corpus report.
