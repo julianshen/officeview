@@ -47,7 +47,7 @@ import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilit
 import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollIntoView, scrollPhysicalTo, setScrollOffset, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
-import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
+import { SHEET_ZOOM_STEPS, dprBucket, keyboardSheetZoom, nearestZoomStep, pinchSheetZoom, wheelSheetZoom, zoomSheetAt } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
@@ -91,7 +91,9 @@ import type { WorkbookSource } from '../../worker/viewerSession'
 import { coarseSelectionRecords, overlayRecords, paintFindOverlay, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
-import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
+import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, createCanvasTile, paneSurfaceBytes, type CanvasTile, type SheetFrame } from './sheetTiles'
+import { createStreamTileSource, type StreamTileSource } from './streamTiles'
+import type { TilePalette } from '../../stream/sheet-wire'
 import { SearchBar, ZoomControls } from '../viewerControls'
 import { MotionRoot, Tick } from '../motion/presets'
 import { themeRootProps, type ThemeMode } from '../theme'
@@ -369,6 +371,22 @@ interface SheetEntry {
 const FALLBACK_PANE = { width: 640, height: 400 }
 /** Prefetch slice: leaves most of a 16.7 ms frame to input and presentation. */
 const PREFETCH_SLICE_MS = 6
+/** Stage 4a (S4 §6.5): a stream's wheel zoom settles to the nearest step once no wheel event came for this long. */
+const STREAM_ZOOM_SETTLE_MS = 150
+/** A server tile's PNG as a tile surface (a 512² canvas; the bitmap is closed once drawn). */
+async function decodeStreamTile(png: Uint8Array): Promise<CanvasTile> {
+  const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }))
+  try {
+    const tile = createCanvasTile()
+    tile.canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+    return tile
+  } finally { bitmap.close() }
+}
+/** The server palette a stream's tiles are painted in (R12): the theme mode, `system` resolved by the media query. */
+function tilePaletteFor(mode: ThemeMode | undefined): TilePalette {
+  if (mode === 'dark' || mode === 'light') return mode
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
 // Ledger owners must stay unique across remounts with the same remote workbook.
 let copySerial = 0
 
@@ -1037,19 +1055,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const viewportOf = (g: number): ViewportSize => ({ width: Math.max(1, pane.width - g), height: viewportHeight, ...(scrollInset ? { inset: scrollInset } : {}) })
   const viewport: ViewportSize = useMemo(() => viewportOf(gutter), [pane, headerHeight, gutter, scrollInset]) // eslint-disable-line react-hooks/exhaustive-deps
   // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
-  const nativeDpr = Math.min(useDevicePixelRatio(), 3)
+  const liveDpr = Math.min(useDevicePixelRatio(), 3)
+  // Stage 4a (S4 §6.5): a stream's tiles exist at the dpr buckets {1, 2} only, so its pane surface is laid out at the
+  // bucket and the canvas's CSS size scales the whole pane once (no single tile is ever resampled).
+  const nativeDpr = stream ? dprBucket(liveDpr) : liveDpr
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
   // Live print stores (while a print is prepared/open) are reserved beside the panes.
   const [printReserved, setPrintReserved] = useState(0)
-  const admittedDpr = admitDeviceScale(viewport, nativeDpr, profile, printReserved)
+  const fittedDpr = admitDeviceScale(viewport, nativeDpr, profile, printReserved)
+  // A stream keeps to the buckets: 2 if it fits, else 1, else the resource outcome.
+  const admittedDpr = stream && fittedDpr !== null ? (fittedDpr >= 2 ? 2 : fittedDpr >= 1 ? 1 : null) : fittedDpr
   const dpr = admittedDpr ?? nativeDpr
   const resourceNotice = admittedDpr === null ? 'This view is too large for the display memory budget. Make the viewer smaller.'
     : admittedDpr < nativeDpr ? 'Display resolution reduced to fit the memory budget.' : ''
 
   // ---- scroll window per sheet; zoom is retained per sheet in the session ----
   const windowFor = (sheetId: string, sheetEntry: SheetEntry): ScrollWindow => {
-    const zoom = session.get(sheetId).zoom
+    // A stream's zoom is always one of the steps the server paints at.
+    const zoom = stream ? nearestZoomStep(session.get(sheetId).zoom) : session.get(sheetId).zoom
     const frozen = sheetEntry.frozen ? { frozen: { rows: sheetEntry.frozen.rows, cols: sheetEntry.frozen.cols } } : {}
     let current = windows.get(sheetId)
     if (!current) {
@@ -1068,6 +1092,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   if (entry && windowKey.current !== nextWindowKey) { windowKey.current = nextWindowKey; windowFor(activeSheetId, entry) }
   const scroll = entry ? windows.get(activeSheetId) ?? windowFor(activeSheetId, entry) : null
   const setWindow = (sheetId: string, next: ScrollWindow) => {
+    // A stream's window never leaves the steps (every gesture settles; this is the backstop for any other entry).
+    const sheetEntry = stream && !SHEET_ZOOM_STEPS.includes(next.zoom) ? entries.get(sheetId) : undefined
+    if (sheetEntry) next = setScrollZoom(next, sheetEntry.metrics, viewport, nearestZoomStep(next.zoom), { x: viewport.width / 2, y: viewport.height / 2 })
     windows.set(sheetId, next)
     session.setZoom(sheetId, next.zoom)
     rerender()
@@ -1491,6 +1518,26 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return rendererRef.current = new SheetTileRenderer(profile, surfaceBytes)
   }
   useEffect(() => () => { rendererRef.current?.dispose(); rendererRef.current = null }, [])
+  // Stage 4a (S4 §6.5): the active stream sheet's tile source, created lazily like the renderer (an unmount, or
+  // StrictMode's dev re-mount, disposes it and the next frame starts a fresh one). Arrivals coalesce into one repaint.
+  const tilePalette = tilePaletteFor(props.theme)
+  const tilePaletteRef = useRef(tilePalette)
+  tilePaletteRef.current = tilePalette
+  const [streamTick, setStreamTick] = useState(0)
+  const streamTilesRef = useRef<{ stream: NonNullable<typeof stream>; sheetId: string; source: StreamTileSource; stop(): void } | null>(null)
+  const streamTilesFor = (): StreamTileSource | null => {
+    if (!stream || !activeSheetId) return null
+    const current = streamTilesRef.current
+    if (current && current.stream === stream && current.sheetId === activeSheetId) return current.source
+    current?.stop()
+    const sheetId = activeSheetId
+    const source = createStreamTileSource({ sheetId, viewGen: () => stream.identity(sheetId).viewGen, palette: () => tilePaletteRef.current, tiles: stream.tiles(), decode: decodeStreamTile })
+    let raf = 0
+    const off = source.onArrive(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; setStreamTick(tick => tick + 1) }) })
+    streamTilesRef.current = { stream, sheetId, source, stop: () => { off(); if (raf) cancelAnimationFrame(raf); source.dispose() } }
+    return source
+  }
+  useEffect(() => () => { streamTilesRef.current?.stop(); streamTilesRef.current = null }, [])
   const markKey = watermark ? JSON.stringify(watermark) : ''
   const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const biasRef = useRef({ x: 0, y: 0 })
@@ -1537,6 +1584,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // live, open owner instead of a closed one.
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
+    const streamTiles = streamTilesFor()
+    if (stream && streamTiles) {
+      // A stream frame (S4 §6.5): the server's tiles under the server's identity (valueGen and fontGen fixed at 0), the
+      // wire palette as the palette key, and nothing that paints a cell locally (no plan, assets, CF or watermark).
+      return {
+        sheet: entry.sheet, geometry: entry.geometry, identity: stream.identity(activeSheetId), colors: palette.colors, paletteKey: tilePalette,
+        origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
+        layoutCache: entry.layoutCache, merges: entry.merges, structureGen: entry.structureGen, ...(scroll.frozen ? { frozen: scroll.frozen } : {}), stream: streamTiles,
+      }
+    }
     let sparklineViews: Map<string, import('../../xlsx/view/renderViewport').SparklineViewState> | undefined
     if (hasResolvedSparklines) {
       sparklineViews = new Map()
@@ -1630,7 +1687,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // has joined that generation's asset lease. Keep host invalidations queued
     // until then; otherwise an unavailable-painter tile would be cached blank.
     const sparklineAssetsReady = !hasActiveWorkerSparklines || assets?.sparklineGen === (activeSparklines?.gen ?? 0)
-    if (!assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady) {
+    // A stream frame needs no local assets, only the sheet's layout (no tile is requested before it is complete).
+    const waiting = stream ? stream.loadState(activeSheetId).completeness !== 'complete' : !assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady
+    if (waiting) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
       // current surfaces (releasing tiles that no longer fit) before any sizing.
@@ -1687,13 +1746,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (paintedGen !== undefined && paintedGen !== drawingGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
-    if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    // A stream's tiles never read the local asset lease (the shell document's), so a new lease leaves them valid.
+    if (!stream && assets && leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     // A CF generation change that keeps the asset lease (clock rollover, text generation) keeps the tile identity too,
     // and CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted display rows), so the
     // whole sheet's tiles repaint. Lease-replacing paths already invalidate the sheet above.
     if (paintedCf.current !== cfLiveKey) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     paintedCf.current = cfLiveKey
-    presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
+    if (assets) presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
@@ -1717,7 +1777,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen, streamTick, tilePalette])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -2738,6 +2798,31 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoomTo = (next: ScrollWindow | null) => { if (next && scroll && next !== scroll) setWindow(activeSheetId, next) }
   const scrollRef = useRef({ scroll, entry, viewport, activeSheetId })
   scrollRef.current = { scroll, entry, viewport, activeSheetId }
+  // Stage 4a (S4 §6.5): wheel and pinch zoom on a stream. During the gesture the last presented pane is CSS-scaled
+  // (the window keeps its step zoom, so nothing is requested at an off-step zoom); at its end the live zoom settles to
+  // the nearest step, about the gesture's last anchor.
+  const [gestureTransform, setGestureTransform] = useState<string | null>(null)
+  const streamGesture = useRef<{ base: ScrollWindow; live: ScrollWindow; anchor: { x: number; y: number }; timer?: ReturnType<typeof setTimeout> } | null>(null)
+  const showGesture = (base: ScrollWindow, live: ScrollWindow) => {
+    const s = live.zoom / base.zoom
+    const tx = (base.logicalOrigin.x - live.logicalOrigin.x) * live.zoom, ty = (base.logicalOrigin.y - live.logicalOrigin.y) * live.zoom
+    setGestureTransform(`matrix(${s}, 0, 0, ${s}, ${tx}, ${ty})`)
+  }
+  const settleGesture = () => {
+    const gesture = streamGesture.current
+    if (!gesture) return
+    streamGesture.current = null
+    clearTimeout(gesture.timer)
+    setGestureTransform(null)
+    const { entry: sheetEntry, viewport: size, activeSheetId: sheetId } = scrollRef.current
+    if (!sheetEntry) return
+    setWindow(sheetId, zoomSheetAt(gesture.live, sheetEntry.metrics, size, nearestZoomStep(gesture.live.zoom), gesture.anchor))
+  }
+  const settleGestureRef = useRef(settleGesture)
+  settleGestureRef.current = settleGesture
+  useEffect(() => () => clearTimeout(streamGesture.current?.timer), [])
+  const streamRef = useRef(stream)
+  streamRef.current = stream
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -2748,7 +2833,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (!current || !sheetEntry) return
       const bounds = el.getBoundingClientRect()
       const deltaY = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * size.height : event.deltaY
-      const next = wheelSheetZoom(current, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, { x: event.clientX - bounds.left, y: event.clientY - bounds.top })
+      const anchor = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+      if (streamRef.current) {
+        const gesture = streamGesture.current ?? { base: current, live: current, anchor }
+        const live = wheelSheetZoom(gesture.live, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, anchor)
+        gesture.live = live
+        gesture.anchor = anchor
+        streamGesture.current = gesture
+        showGesture(gesture.base, live)
+        clearTimeout(gesture.timer)
+        gesture.timer = setTimeout(() => settleGestureRef.current(), STREAM_ZOOM_SETTLE_MS)
+        return
+      }
+      const next = wheelSheetZoom(current, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, anchor)
       if (next !== current) setWindow(sheetId, next)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -2777,11 +2874,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (pointers.current.size !== 2 || !gesture || !entry) return
     event.preventDefault()
     const now = pinchState()
-    zoomTo(pinchSheetZoom(gesture.start, entry.metrics, viewport, gesture.distance, now.distance, gesture.anchor, now.anchor))
+    const live = pinchSheetZoom(gesture.start, entry.metrics, viewport, gesture.distance, now.distance, gesture.anchor, now.anchor)
+    if (stream) {
+      streamGesture.current = { base: gesture.start, live, anchor: now.anchor }
+      showGesture(gesture.start, live)
+      return
+    }
+    zoomTo(live)
   }
   const onPointerEnd = (event: React.PointerEvent) => {
     pointers.current.delete(event.pointerId)
-    if (pointers.current.size < 2) pinch.current = null
+    if (pointers.current.size < 2) {
+      if (pinch.current && stream) settleGesture()
+      pinch.current = null
+    }
   }
   const zoomBy = (direction: 1 | -1) => { if (entry && scroll) zoomTo(keyboardSheetZoom(scroll, entry.metrics, viewport, direction)) }
   const resetZoom = () => { if (entry && scroll) zoomTo(setScrollZoom(scroll, entry.metrics, viewport, 1, { x: viewport.width / 2, y: viewport.height / 2 })) }
@@ -3143,7 +3249,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // toolbar; floating, they covered visible cells on a phone.
   const dockZoom = touchControls || pane.width < NARROW_PANE_PX
   const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
-  const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
+  // The canvases' CSS size is the one CSS scale of the pane (a stream at a fractional dpr: the bucket surface onto CSS
+  // px); a stream zoom gesture in progress adds its transform to that same one layer.
+  const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none', ...(gestureTransform ? { transform: gestureTransform, transformOrigin: '0 0' } : {}) }
   // Coarse pointer: 44px targets (spec §9.3) shown icon-only; the label stays in
   // the accessible name through an sr-only span, so names are unchanged.
   const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:justify-center ov:gap-1 ov:coarse:min-h-11 ov:coarse:min-w-11 ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'

@@ -41,6 +41,21 @@ export function snapSheetZoom(zoom: number, direction: 1 | -1): SheetZoom {
   return SHEET_MIN_ZOOM
 }
 
+/** Stage 4a (S4 §6.5): the `SHEET_ZOOM_STEPS` value nearest `z` (a tie goes to the smaller step); a stream's zoom
+ * settles here, since the server paints tiles only at the 11 steps. */
+export function nearestZoomStep(z: number): SheetZoom {
+  if (!Number.isFinite(z)) throw new RangeError(`sheet zoom must be finite, got ${z}`)
+  let best = SHEET_ZOOM_STEPS[0]
+  for (const step of SHEET_ZOOM_STEPS) if (Math.abs(step - z) < Math.abs(best - z) - 1e-9) best = step
+  return best
+}
+
+/** Stage 4a (S4 §6.5): a stream's device-pixel-ratio bucket, keyed with the zoom step as a pair (dpr ≤ 1 → 1, else 2).
+ * A dpr between buckets is laid out at the bucket and the browser scales the whole pane once. */
+export function dprBucket(dpr: number): 1 | 2 {
+  return dpr > 1 ? 2 : 1
+}
+
 export function createSheetZoomState(docId: string, activeSheetId: string): SheetZoomState {
   return { docId, activeSheetId, zoomBySheet: new Map() }
 }

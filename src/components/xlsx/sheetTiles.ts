@@ -16,6 +16,7 @@ import type { RenderSheetAssets } from '../../xlsx/render'
 import type { SparklineViewState } from '../../xlsx/view/renderViewport'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
+import type { StreamTileSource } from './streamTiles'
 import { LayoutAdmissionError, type CellLayoutHost, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
 import { emptyWork, frameBudgetFor, planViewport, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
@@ -68,6 +69,10 @@ export interface SheetFrame {
   structureGen?: number
   /** Pinned frozen strips (ScrollWindow.frozen): drawn from the same tiles with a zero origin on their axis. */
   frozen?: FrozenExtent
+  /** Stage 4a (S4 §6.5): a streamed sheet. Its tiles come from the server: a missing tile is requested and painted
+   * with the pending fill (never cached), an arrived one is cached under the same key, `renderSheetViewport` is never
+   * called and the watermark is never stamped (the server composites the visible mark into each tile). */
+  stream?: StreamTileSource
 }
 export interface SheetTileStats {
   /** renderSheetViewport calls: the only base-cell painting. */
@@ -209,6 +214,13 @@ export class SheetTileRenderer {
           : this.ranges(frame).visible,
       }))
       const order: Array<{ col: number; row: number }> = [], seen = new Set<string>()
+      if (frame.stream) {
+        // Everything another frame asked for and this one no longer shows (or rings) is dropped or cancelled first.
+        // Frozen strips: the hull of every region's tiles (a predicate, never enumerated).
+        const ring = this.ranges(frame).ring
+        const hull = plan.reduce((h, { visible: v }) => ({ c0: Math.min(h.c0, v.c0), c1: Math.max(h.c1, v.c1), r0: Math.min(h.r0, v.r0), r1: Math.max(h.r1, v.r1) }), plan[0]!.visible)
+        frame.stream.retain(hull, { c0: Math.min(hull.c0, ring.c0), c1: Math.max(hull.c1, ring.c1), r0: Math.min(hull.r0, ring.r0), r1: Math.max(hull.r1, ring.r1) })
+      }
       for (const { visible } of plan) for (let row = visible.r0; row <= visible.r1; row++) for (let col = visible.c0; col <= visible.c1; col++) {
         const id = `${col},${row}`
         if (!seen.has(id)) { seen.add(id); order.push({ col, row }) }
@@ -227,14 +239,16 @@ export class SheetTileRenderer {
           else {
             target.fillStyle = frame.colors?.pending ?? PENDING_FILL
             target.fillRect(col * TILE_DEVICE_PX - rx, row * TILE_DEVICE_PX - ry, TILE_DEVICE_PX, TILE_DEVICE_PX)
-            resourceNotice ??= TILE_REFUSED
+            // A stream tile on its way is pending, not refused: no resource notice.
+            if (!tile.pending) resourceNotice ??= TILE_REFUSED
           }
           if (clip) target.restore()
         }
         if (!tile.retained) surface?.close()
       }
       if (pinned) paintFreezeLines(target, frame)
-      if (frame.watermark) {
+      // A stream's tiles carry the server's visible mark: the client never stamps its own (parent §8.3).
+      if (frame.watermark && !frame.stream) {
         target.setTransform(frame.dpr, 0, 0, frame.dpr, 0, 0)
         paintWatermark(target, { widthPx: frame.viewport.width, heightPx: frame.viewport.height }, frame.watermark)
       }
@@ -272,6 +286,8 @@ export class SheetTileRenderer {
       if (this.cache.get(this.key(frame, col, row))) continue
       if (paintedNow > 0 && shouldYield()) { this.stats.prefetchRecords = batch.records; return false }
       const tile = this.tile(frame, col, row, false, batch.budget)
+      // A stream ring tile is requested (or an arrived one cached), never painted: every missing one is asked for.
+      if (frame.stream) { if (tile.retained) { batch.painted++; this.stats.prefetched++ } else tile.surface?.close(); continue }
       if (!tile.surface) break // not admitted: prefetch stops for this batch
       batch.records += tile.surface.cost?.records ?? 0
       paintedNow++
@@ -296,8 +312,9 @@ export class SheetTileRenderer {
     return { identity: frame.identity, paletteKey: frame.paletteKey, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
   }
 
-  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean; notice?: string } {
+  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean; notice?: string; pending?: boolean } {
     const key = this.key(frame, col, row)
+    if (frame.stream) return this.streamTile(frame.stream, key, visible)
     const cached = this.cache.get(key) as CanvasTile | undefined
     const cost = cached?.cost
     // A cached tile counts its detail work against this frame; one that no longer
@@ -398,6 +415,23 @@ export class SheetTileRenderer {
       surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes; admission?.nativeChanged?.(-bytes) } close() }
     }
     return { surface, retained }
+  }
+
+  /** A stream frame's tile (S4 §6.5): cached, else arrived (cached now under the same key), else requested and pending
+   * (never cached, never painted locally). */
+  private streamTile(stream: StreamTileSource, key: TileKey, visible: boolean): { surface: CanvasTile | null; retained: boolean; pending?: boolean } {
+    const cached = this.cache.get(key) as CanvasTile | undefined
+    if (cached) { if (visible) this.stats.tileHits++; return { surface: cached, retained: true } }
+    const arrived = stream.take(key)
+    if (arrived) {
+      const retained = this.cache.put(key, arrived)
+      if (!retained) this.stats.refused++
+      if (visible) this.stats.tileHits++
+      return { surface: arrived, retained }
+    }
+    stream.request(key, visible)
+    if (visible) this.stats.pendingTiles++
+    return { surface: null, retained: false, pending: true }
   }
 }
 
