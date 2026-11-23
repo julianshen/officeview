@@ -198,6 +198,8 @@ npx tsx scripts/cf-refs/audit.ts --stage 3
 
 ## 2f. The all-equal case (the all-equal follow-up, owner rulings 2026-11-23)
 
+**Captured** (13bba185, Excel 16.115; repair-free, verified, re-verified): each id matched one reading at every decisive cell (`evaluate`, `half`, `half` mirrored, `half-span`), every control held, and all four are registered (docs/validation/xlsx-cf.md §14.z.20). The table below is kept as committed before the capture.
+
 `stage3-bar-all-equal` is pre-registered: its readings, production behaviour and this table were committed before any capture (docs/validation/xlsx-cf.md §14.z.19). It is appended last and owns four questions, each registered non-discriminating ("Pre-registered …") until its capture:
 - `bar:all-equal-distinct-bounds` (B..K): two literal num bounds, lo < hi, over an all-equal scope;
 - the statistical twins of the verified `bar:degenerate-equal-values` (owner ruling Q2): `bar:degenerate-equal-ltr` (M), `bar:degenerate-equal-rtl` (N), `bar:degenerate-equal-10-90` (O).
