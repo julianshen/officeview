@@ -1,6 +1,7 @@
 /**
  * Stage 4b (plan P2, P6–P10): the `sheet-text` pool job. Each op runs a local engine over the text view (Task 1), so
- * parity with local mode holds by construction: `fit` (`autoFitSize`) here; `find`, `copy` and `a11y` in Tasks 6–8.
+ * parity with local mode holds by construction: `fit` (`autoFitSize`) and `find` (`WorkbookFind`) here; `copy` and
+ * `a11y` in Tasks 7–8.
  *
  * `textInputs` is the one place the ops get the local viewer's inputs (`InteractiveSheetDoc.tsx` find ~1814–1857 and
  * copy ~2611–2659): the row order, the row and column visibility, the store and the scope-aware display text. Fit
@@ -10,15 +11,18 @@
 import type { Box, WireSelection } from '../../../src/stream/sheet-wire'
 import { autoFitSize, createFitMeasure } from '../../../src/xlsx/view/autoFit'
 import type { Measure } from '../../../src/xlsx/view/axisSizes'
-import type { RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
-import type { EffectiveFormatScope } from '../../../src/xlsx/view/formatWorkspace'
+import type { AuthoritativeCell, RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
+import { WorkbookFind } from '../../../src/xlsx/view/find'
+import type { EffectiveFormatScope, FormatBudget } from '../../../src/xlsx/view/formatWorkspace'
+import { createObjectWorkbookSource } from '../../../src/xlsx/view/source'
+import { initialWorkbookOwner } from '../../../src/worker/viewerProtocol'
 import { createIdentityOrder } from '../../../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../../../src/xlsx/view/visibility'
 import type { FormatAllocation } from '../../../src/xlsx/formula/format'
 import { cellDisplayText } from '../../../src/xlsx/render'
-import type { XlsxCell } from '../../../src/xlsx/types'
+import type { XlsxCell, XlsxDocument } from '../../../src/xlsx/types'
 import type { WorkbookSource } from '../../../src/worker/viewerSession'
-import type { TextView } from './text-view'
+import { textDocument, type TextView } from './text-view'
 import type { WireSizes } from './view-state'
 
 export type SheetTextJob =
@@ -48,6 +52,9 @@ export interface TextInputs {
   /** Column visibility: the collapsed (zero-width) columns of the view's geometry are hidden. */
   columns: RowVisibility
   store(): SourceStore
+  /** The store local find reads (`InteractiveSheetDoc.tsx` ~1824): `store()` with a formula lacking any value marked
+   * unavailable (`withUnavailableFormulas`). Local copy reads the plain store, so only find uses this one. */
+  findStore(): SourceStore
   /** The cell's style as paint and copy use it: a table or pivot region style resolved over its own. */
   styleOf(cell: Pick<XlsxCell, 'row' | 'col'>): XlsxCell['style']
   /** Display text as the local viewer forms it: the region-resolved style through the scope's CF-effective style. */
@@ -57,6 +64,21 @@ export interface TextInputs {
 function cellOf(view: TextView, row: number, col: number): XlsxCell | undefined {
   if (view.geometry.kind !== 'ready') return undefined
   return view.geometry.cellsOf(row)?.find((c) => c.col === col)
+}
+
+/**
+ * A copy of the local viewer's private `withUnavailableFormulas` (`InteractiveSheetDoc.tsx` ~3573, a React module the
+ * worker cannot import): the object source reports a formula without a cached or evaluated value as a null cell, and
+ * find must count it unavailable (§4.4), never as a blank. Keep the two in step.
+ */
+function withUnavailableFormulas(store: SourceStore): SourceStore {
+  const mark = (cell: AuthoritativeCell): AuthoritativeCell =>
+    cell.formula !== undefined && cell.value === null && cell.hasCachedValue === false && !cell.unavailable ? { ...cell, unavailable: true } : cell
+  return Object.assign(Object.create(store) as SourceStore, {
+    async *scanPopulated(request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]) {
+      for await (const page of store.scanPopulated(request, options)) yield { ...page, items: page.items.map(mark) }
+    },
+  })
 }
 
 export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
@@ -81,6 +103,7 @@ export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
     visibility: visibilityFromHidden(createIntervalSet(authored)),
     columns: visibilityFromHidden(createIntervalSet(hiddenCols), colCount),
     store: () => source.store(sheetId),
+    findStore: () => withUnavailableFormulas(source.store(sheetId)),
     styleOf,
     textOf(cell, allocation, scope) {
       const base = styleOf(cell)
@@ -114,12 +137,81 @@ export function fitAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'fit'
   })
 }
 
-/** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views). */
-export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; measureText: Measure }): Promise<SheetTextReply> {
+/** The formatting one find job may hold at once (per cell, while its display text is formed and matched); past it the
+ * job fails, answered `policy-refused`. A hit's retained text is released when its cell is done (no `retain`). */
+export const FIND_FORMAT_BYTES = 16 * 1024 * 1024
+const FIND_DOC_ID = 'sheet-text'
+
+function jobBudget(max: number): FormatBudget {
+  let held = 0
+  return {
+    reserve(bytes) { if (held + bytes > max) throw new RangeError('sheet-find: formatting exceeds its budget'); held += bytes },
+    release(bytes) { held -= bytes },
+  }
+}
+
+/** `scope` lent to `WorkbookFind`, which disposes each scope `prepareScope` returns: the view owns (and releases) it. */
+function borrowed(scope: EffectiveFormatScope): EffectiveFormatScope {
+  return new Proxy(scope, {
+    get(target, key) {
+      if (key === 'dispose') return () => {}
+      const v = Reflect.get(target, key, target) as unknown
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v
+    },
+  })
+}
+
+/**
+ * One sheet's find (P6): local `WorkbookFind` over an object source of the text document (`workbook` with this sheet
+ * replaced by its view), restricted to this sheet, with the local viewer's inputs (`textInputs`): the identity order,
+ * the authored row visibility, `isColumnVisible` from the view's column sizes, the CF-effective `textOf`, and the
+ * view's CF scope from `prepareScope`. Pages (`FIND_PAGE_HITS` each) are pulled until the find completes or holds more
+ * than `limit` hits, so `more` is exact (`limit` 0 asks only whether any hit exists). Hits are `[row, col]`, in local
+ * order. A source failure fails the job (never a silently partial answer).
+ */
+export async function findAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'find' }>, workbook: XlsxDocument): Promise<{ hits: Array<[number, number]>; more: boolean }> {
+  const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), FIND_DOC_ID)
+  const inputs = textInputs(view, source)
+  const { sheetId } = inputs
+  const owner = initialWorkbookOwner(FIND_DOC_ID, source.sheets)
+  const v = owner.sheetVector.find((e) => e.sheetId === sheetId)!
+  const scope = view.scope
+  const find = new WorkbookFind({
+    owner,
+    sheets: [{
+      sheetId, store: inputs.findStore(),
+      identity: { docId: FIND_DOC_ID, sheetId, valueGen: v.valueGen, fontGen: owner.fontGen, viewGen: v.revision },
+      order: inputs.order, visibility: inputs.visibility,
+      // Zero-width columns are outside the visible search domain, as locally (`metrics.cols.size(col) > 0`).
+      isColumnVisible: (col) => inputs.columns.visible(col),
+    }],
+  }, { text: job.query, caseSensitive: job.matchCase, sheetIds: [sheetId] }, {
+    formatBudget: jobBudget(FIND_FORMAT_BYTES),
+    textOf: (cell, _sheetId, allocation, s) => inputs.textOf(cell, allocation, s),
+    ...(scope ? { prepareScope: () => Promise.resolve(borrowed(scope)) } : {}),
+  })
+  const hits: Array<[number, number]> = []
+  try {
+    for (;;) {
+      const page = await find.nextPage()
+      if (page.failures.length || page.incomplete.length) throw new Error('sheet-find: the text source failed')
+      for (const h of page.hits) hits.push([h.source.row, h.source.col])
+      if (page.complete || hits.length > job.limit) break
+    }
+  } finally { find.close() }
+  return { hits: hits.slice(0, job.limit), more: hits.length > job.limit }
+}
+
+/** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views;
+ * `workbook`: the servable workbook the text document is built over). */
+export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; measureText: Measure }): Promise<SheetTextReply> {
   switch (job.op) {
     case 'fit': return { op: 'fit', size: fitAnswer(await deps.viewOf(job.sheetIndex, job.sizes), job, deps.measureText) }
-    // Tasks 6–8 replace these.
-    case 'find':
+    case 'find': {
+      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      return { op: 'find', ...await findAnswer(view, job, deps.workbook()) }
+    }
+    // Tasks 7–8 replace these.
     case 'copy':
     case 'a11y':
       throw new Error(`sheet-text: op '${job.op}' is not implemented`)

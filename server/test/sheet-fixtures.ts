@@ -724,3 +724,25 @@ export async function tallColumn(): Promise<Uint8Array> {
   const rows: XlsxSheetSpec['rows'] = Array.from({ length: TALL_COLUMN.rows }, (_, i) => ({ r: i + 1, cells: [textCell(st, `A${i + 1}`, i === TALL_COLUMN.longRow ? 'TALL-LONG-TEXT-IN-A2901-FAR-PAST-THE-AUTOFIT-ROW-BOUND' : 'a')] }))
   return sheetWorkbook(rows, st.list)
 }
+
+/** `cfNumFmt` B1:B3. */
+export const CF_NUM_FMT_VALUES = Object.freeze([4, 7, 9])
+/** Task 6 (ruling F10): B1:B3 hold CF_NUM_FMT_VALUES under one `cellIs = 7` rule whose dxf writes `numFmt "0.0"`: B2
+ * paints `7.0` (its CF-effective display text), B1 and B3 paint `4` and `9`. */
+export async function cfNumFmt(): Promise<Uint8Array> {
+  const rows = CF_NUM_FMT_VALUES.map((v, i) => ({ r: i + 1, cells: [{ ref: `B${i + 1}`, v }] }))
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', '</cellXfs><dxfs count="1"><dxf><numFmt numFmtId="164" formatCode="0.0"/></dxf></dxfs>'))
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="B1:B3"><cfRule type="cellIs" dxfId="0" priority="1" operator="equal"><formula>7</formula></cfRule></conditionalFormatting>'))
+  })
+}
+
+/** `manyHits`: its row count (A1:A{MANY_HITS}). */
+export const MANY_HITS = 6_000
+/** Task 6: A1:A6000 each hold `hit-{r}`, so a find for `hit` matches 6,000 cells (past the 5,000-hit answer cap). */
+export async function manyHits(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: MANY_HITS }, (_, i) => ({ r: i + 1, cells: [textCell(st, `A${i + 1}`, `hit-${i + 1}`)] }))
+  return sheetWorkbook(rows, st.list)
+}

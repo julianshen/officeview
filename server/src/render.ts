@@ -412,6 +412,12 @@ export class DocumentHost {
           e.uses++; held.push(e)
           return e.view
         },
+        // Find's text document is built over the servable workbook, as the views are.
+        workbook: () => {
+          const doc = this.docs.get(docKey), saved = doc?.savedParse
+          if (!doc || !saved) throw new RenderRefusal('unknown-doc')
+          return this.servableWorkbook(doc, saved)
+        },
         measureText: (font, text) => {
           measureCtx ??= this.backend.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
           measureCtx.font = font

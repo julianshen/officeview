@@ -43,11 +43,11 @@ import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, p
 import { IpRates, SessionRates, type RateOverrides } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type MediaUnitRefs, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
-import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
+import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, TEXT_MESSAGE_BYTES, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { encodeSheetLayout, encodeTileBody, fitArgs, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
@@ -96,6 +96,34 @@ const SHEET_TEXT_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy',
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
+
+/** Stage 4b (P6): a find job's `[row, col]` hits as wire hits of `sheetIndex`, or undefined when any is not a pair of
+ * in-range integers (the caller refuses). */
+function findHits(sheetIndex: number, hits: readonly unknown[]): Array<[number, number, number]> | undefined {
+  const out: Array<[number, number, number]> = []
+  for (const h of hits) {
+    if (!Array.isArray(h) || h.length !== 2) return undefined
+    const [row, col] = h as unknown[]
+    if (!Number.isInteger(row) || !Number.isInteger(col) || (row as number) < 0 || (col as number) < 0 || (row as number) >= SHEET_MAX_ROWS || (col as number) >= SHEET_MAX_COLS) return undefined
+    out.push([sheetIndex, row as number, col as number])
+  }
+  return out
+}
+/** `sheet-find-result` messages of `hits`, each ≤ `limit` bytes of JSON UTF-8; none for no hits. */
+function chunkFindHits(reqId: number, hits: ReadonlyArray<readonly [number, number, number]>, limit = TEXT_MESSAGE_BYTES): Array<{ reqId: number; type: 'sheet-find-result'; hits: Array<readonly [number, number, number]> }> {
+  const base = enc.encode(JSON.stringify({ reqId, type: 'sheet-find-result', hits: [] })).length
+  const out: Array<{ reqId: number; type: 'sheet-find-result'; hits: Array<readonly [number, number, number]> }> = []
+  let cur: Array<readonly [number, number, number]> = [], size = base
+  for (const h of hits) {
+    // ASCII digits, commas and brackets: the JSON length is the UTF-8 length; a separating comma after the first.
+    const n = JSON.stringify(h).length
+    if (cur.length && size + 1 + n > limit) { out.push({ reqId, type: 'sheet-find-result', hits: cur }); cur = []; size = base }
+    size += (cur.length ? 1 : 0) + n
+    cur.push(h)
+  }
+  if (cur.length) out.push({ reqId, type: 'sheet-find-result', hits: cur })
+  return out
+}
 
 export interface StreamServerOptions {
   keys: Keys
@@ -225,7 +253,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4b (P1): true iff the document is in tiles mode and `features` hold `sheet-view@1`; fixed for the sid (a resume presents the same features). */ sheetView: boolean; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState; /** Stage 4b (S4 §6.3): the sid's per-sheet sizes and `viewGen`; survives resume, disposed at teardown. */ views: SessionViews }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4b (P6): the sid's in-flight `sheet-find` (one per sid; a newer one supersedes it). */ sheetFind?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4b (P1): true iff the document is in tiles mode and `features` hold `sheet-view@1`; fixed for the sid (a resume presents the same features). */ sheetView: boolean; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState; /** Stage 4b (S4 §6.3): the sid's per-sheet sizes and `viewGen`; survives resume, disposed at teardown. */ views: SessionViews }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -474,6 +502,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
+    if (sd?.sheetFind) { sd.sheetFind.stopped = true; sd.sheetFind = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
     if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
     if (sd) stopTiles(sd)
@@ -1021,6 +1050,72 @@ export function createStreamServer(o: StreamServerOptions) {
       send(ws, { reqId, type: 'sheet-fit-result', size: r.size })
     } finally {
       if (owns(ws, s.sid)) rates.sheetBusy = false
+    }
+  }
+
+  /**
+   * Stage 4b (P6, F15): `sheet-find {reqId, token, query, matchCase?, scope?}` on a `sheet-view@1` session. In order:
+   * the token (`textOp`); `findArgs`, else `policy-refused` (uncharged); the `'text'` rate (refuse-only, never toward
+   * 4008); the fingerprint (else close `layout-changed`) and the document ledger. Then it supersedes the sid's running
+   * find (answered `sheet-find-done {total: sent, truncated: true}`, as `supersede` does) and waits for its last job.
+   *
+   * Batched by sheet, as `runSearch` batches units: one `sheet-text` find job per sheet in workbook order (or the one
+   * `scope` sheet), each at that sheet's session sizes and with `limit` = 5,000 less the hits sent. Before each job it
+   * re-checks ownership, the stream phase, the session entry and supersession, and re-touches the ledger. Each job's
+   * hits go out as `sheet-find-result {hits: [[sheetIndex, row, col], …]}` chunks (≤ 48 KiB); `sheet-find-done {total,
+   * truncated}` ends the answer, `total` the hits sent and `truncated` true iff more matches existed. Once 5,000 are
+   * sent, later sheets run with `limit` 0, which only asks whether a match exists. Hits never carry text. A pool
+   * failure is a refusal (`rate-limited` for admission, else `policy-refused`) with no done after it.
+   */
+  async function onSheetFind(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const sheetCount = (sd.doc.sheets ?? []).length
+    const args = findArgs(msg, sheetCount)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    const out = (m: object) => send(ws, m)
+    const prev = sd.sheetFind
+    if (prev && !prev.stopped) {
+      prev.stopped = true
+      if (prev.alive()) prev.send({ reqId: prev.reqId, type: 'sheet-find-done', total: prev.sent, truncated: true })
+    }
+    let settle!: () => void
+    const run: SearchRun = { reqId, sent: 0, stopped: false, settled: new Promise<void>((r) => { settle = r }), send: out, alive }
+    sd.sheetFind = run
+    const current = () => !run.stopped && sd.sheetFind === run && alive()
+    const fail = (e?: unknown) => { run.stopped = true; refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') }
+    try {
+      // One find in flight per sid: wait for the superseded run's pool job.
+      if (prev) await prev.settled
+      const sheets = args.scope === 'workbook' ? Array.from({ length: sheetCount }, (_, i) => i) : [Number(args.scope)]
+      let truncated = false
+      for (const sheetIndex of sheets) {
+        if (!current()) return
+        // A long walk can outlive the parse: every job re-charges it.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return fail()
+        const limit = FIND_MAX_HITS - run.sent
+        let r: SheetTextReply
+        try {
+          r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'find', query: args.query, matchCase: args.matchCase, sheetIndex, sizes: sd.views.canonical(sheetIndex), limit }, undefined, ws.data.gone.signal)
+        } catch (e) { return current() ? fail(e) : undefined }
+        if (!current()) return
+        // Fail closed: only validated integer positions travel, rebuilt here (never the reply's own entries).
+        const hits = r.op === 'find' && Array.isArray(r.hits) && r.hits.length <= limit && typeof r.more === 'boolean' ? findHits(sheetIndex, r.hits) : undefined
+        if (!hits || r.op !== 'find') return fail()
+        for (const m of chunkFindHits(reqId, hits)) out(m)
+        run.sent += hits.length
+        if (r.more) { truncated = true; break }
+      }
+      if (current()) { run.stopped = true; out({ reqId, type: 'sheet-find-done', total: run.sent, truncated }) }
+    } finally {
+      run.stopped = true
+      if (sd.sheetFind === run) sd.sheetFind = undefined
+      settle()
     }
   }
 
@@ -1625,6 +1720,7 @@ export function createStreamServer(o: StreamServerOptions) {
     // Stage 4b: a sheet-view session's ops (the gate above admits only those).
     if (m.type === 'sheet-resize') return onSheetResize(ws, m)
     if (m.type === 'sheet-fit') return onSheetFit(ws, m)
+    if (m.type === 'sheet-find') return onSheetFind(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
