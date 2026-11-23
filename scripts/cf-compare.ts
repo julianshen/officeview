@@ -516,7 +516,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   const { prepareCfTextScope } = await import('../src/xlsx/cf/text')
   const { createTrackingBudget } = await import('./cf-refs/audit')
   const { createCfMemory, CF_LIMITS } = await import('../src/xlsx/cf/limits')
-  const { createCfService } = await import('../src/xlsx/cf/service')
+  const { createCfService, estimateCfPrepareBytes } = await import('../src/xlsx/cf/service')
   const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
   const { residentSource } = await import('../src/xlsx/cf/render')
   const { cfRulesVersion } = await import('../src/xlsx/view/pagedSource')
@@ -619,8 +619,14 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   } catch (error) {
     // The resident text scope's whole-request admission (its O(rules x cells) estimate against the scratch bound, pinned
     // by the Stage 2-4 pressure audits) refuses atomically and the viewer shows base formatting: withheld fail-closed, as
-    // the service batches above. A rule-heavy viewport (stage4-icon-glyph-key: 76 rules over A1:K42) lands here.
-    if ((error as { code?: string }).code === 'resource-limit') {
+    // the service batches above. A rule-heavy viewport (stage4-icon-glyph-key: 76 rules over A1:K42) lands here. Only that
+    // preflight refusal is withheld: the batch message AND the estimator refusing this very request (the condition
+    // tests/xlsx-cf-compare-interactive-refusal.test.ts pins case by case). Any other refusal (budget admission, a runtime
+    // statistics or accounting limit) still fails.
+    const preflightRefused = (error as { code?: string }).code === 'resource-limit'
+      && (error as Error).message === 'CF text preparation exceeds its admitted batch'
+      && estimateCfPrepareBytes(sheet.conditionalFormatting, [{ firstRow: rect.minRow, lastRow: rect.maxRow, firstCol: rect.minCol, lastCol: rect.maxCol }]) === undefined
+    if (preflightRefused) {
       return { id: c.id, mode: 'interactive', outcome: 'recipe-pending', reason: `Interactive text scope refused at its admitted batch (${(error as Error).message}); withheld fail-closed, pixel diff awaits Excel viewport refs.`, oracleRef, workbookHash, oracleHash, reads: 1 }
     }
     return fail(error instanceof Error ? error.message : String(error))
