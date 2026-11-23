@@ -4,10 +4,13 @@ Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4b; "As bu
 
 ## Status
 
-Every 4b gate is green except three that were already red, or already known, before 4b:
-- the eager size gate (index closure), red at the base 1e2fbf4d from the xlsx-cf work; 4b ends at the base figure, 426,556 B, Δ 0 (§Size gate);
-- one vitest case, `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed", which fails alone the same way (Node 26.13.1 exposes no `localStorage` without `--localstorage-file`), as 4a recorded at 53668e81; 4b touches neither the test nor `src/slideshow`;
-- one stream browser case, `tests/browser/stream-text.spec.ts` "a11y=off: no screen-reader layer and no a11y request" (PPTX, a 15 s paint timeout), in the full stream-project run only; alone the file passes 10/10 and the case 5/5 with `--repeat-each=5`. It is the flake Task 12 saw (§Known flakes).
+Every 4b gate is green except these:
+- **The eager size gate** (index closure) is red, as it was at the base 1e2fbf4d from the xlsx-cf work. 4b ends at the base figure, 426,556 B, Δ 0 (§Size gate).
+- **One vitest case fails, also alone:** `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed". Node 26.13.1 exposes no `localStorage` without `--localstorage-file`. 4a recorded the same failure at 53668e81. 4b does not change the test or `src/slideshow`: `git diff --stat 1e2fbf4d -- tests/slideshow-screens.test.ts src/slideshow` is empty.
+- **One stream browser case fails in every full stream-project run:** `tests/browser/stream-text.spec.ts:223` "a11y=off: no screen-reader layer and no a11y request" (PPTX). `canvas[data-painted="1"]` stays at 0 for 15 s.
+  - It failed in 3 of 3 full runs: Task 12's, and both of this task's.
+  - It passes alone: the file 10/10, the case 5/5 with `--repeat-each=5`, and 21/21 with `stream-sheet.spec.ts` run before it.
+  - The project runs serially on one worker, so the failure depends on order or on state left by earlier files. It first appeared in Task 12, which made `sheet-view@1` the default HELLO for every document and added five specs to `stream-sheet.spec.ts`. **Cause not found.**
 
 The compatibility matrix passes all eight legs, and `tests/stream` has 0 deleted lines since 1e2fbf4d. T8 tile p95, recorded and not gated, is 83.8 ms at dpr 1 and 56.0 ms at dpr 2 (GREEN against 120 ms).
 
@@ -30,7 +33,7 @@ Further 4b evidence by plan call:
 | P1 capability, F1 | `server/test/sheet-view-handshake.test.ts` (all); `tests/stream/remote-sheet.test.ts` "4b default HELLO (P1, F1)"; `tests/stream/manifest.test.ts` (`sheetView`); `tests/stream/remote-sheet-text.test.ts` "view present only with sheetView", "a resume that changes sheetView ends the session layout-changed"; compatibility legs (e)–(g) |
 | P2–P5 text view | `server/test/sheet-text-view.test.ts` (9 tests, including "current-view coverage", "merge tails and undrawn cells are blank", "CF over a long column (F3) …", "full is the identity") |
 | P9 fit | `server/test/sheet-fit.test.ts` (8 tests) |
-| P11–P14 resize and view state | `server/test/sheet-resize.test.ts` (15 tests), `server/test/trace-tiles.test.ts` "a capture of a resized view traces", `server/test/cache.test.ts` (identity hash golden, sizes hashed); `tests/xlsx-stream-text.test.ts`; `tests/xlsx-stream-selection.test.tsx` "resize routes to the server", "key-repeat folds into one pending resize", "resize refusals speak P12a's strings"; browser "resizing a column moves the tiles", "a slid-under cell stops answering after resize" |
+| P11–P14 resize and view state | `server/test/sheet-resize.test.ts` (14 tests), `server/test/trace-tiles.test.ts` "a capture of a resized view traces", `server/test/cache.test.ts` "identity hash unchanged", "sizes are hashed"; `tests/xlsx-stream-text.test.ts`; `tests/xlsx-stream-selection.test.tsx` "resize routes to the server", "key-repeat folds into one pending resize", "resize refusals speak P12a's strings"; browser "resizing a column moves the tiles", "a slid-under cell stops answering after resize" |
 | P10 a11y, Open item 2 | `server/test/sheet-a11y.test.ts` (9 tests); `tests/xlsx-stream-a11y.test.tsx` (18 tests) |
 | P13 lost replies | `tests/stream/remote-sheet-text.test.ts` "find is re-issued on resume; copy, a11y and resize reject session-rotated and are never re-sent"; `tests/xlsx-stream-text.test.ts` "a rejected resize re-fetches sheet-layout", "stale-view on copy, a11y or fit re-fetches sheet-layout and rejects stale-view" |
 | P15 notices, F15 | `tests/xlsx-stream-a11y.test.tsx` "notices: …", "copy off says text unavailable once; a11y on still fills the grid"; `tests/xlsx-stream-selection.test.tsx` 'a truncated answer says "Showing the first 5,000 matches."', "a hit hidden by the filter is said, never inspected (P15)" |
@@ -40,13 +43,13 @@ Further 4b evidence by plan call:
 
 ## Gates
 
-Run one at a time at d30394a3 (code; the docs commit after it changes no code) on the same machine, with nothing else of this task running. The 1-minute load from other processes was about 3.5–4.4 throughout.
+Run one at a time at d30394a3 (code; the docs commit after it changes no code) on the same machine, with nothing else of this task running. The 1-minute load, from other processes, read 3.51 at 04:07 before the gates, 3.95 at 04:39 and 4.35 at 04:42 (around `tile-p95`).
 
 | Gate | Command | Result |
 |---|---|---|
 | server | `cd server && bun test` | **1,541 pass, 0 fail**, 105 files, 646,223 `expect()` calls, 855 s |
 | client | `bun scripts/fetch-corpus.ts`, then `bunx vitest run` | 773 of 774 files; 15,872 pass, **1 fail**, 65 skipped, 1 todo (15,939), 892 s. The fail is `tests/slideshow-screens.test.ts` (pre-existing; alone: 9 pass, 1 fail, the same case) |
-| browser, stream | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream` | 51 passed, **1 failed**, 1 skipped (the existing no-codec media case), 3.7 min. The fail is `stream-text.spec.ts:223` "a11y=off …" (flake). Alone: `npx playwright test --config playwright.viewer.config.ts --project=stream tests/browser/stream-text.spec.ts` 10 passed; `… stream-text.spec.ts:223 --repeat-each=5` 5 passed |
+| browser, stream | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream` | run 1: 51 passed, **1 failed**, 1 skipped (the existing no-codec media case), 3.7 min; run 2 (after the docs commit, no code change): the same, 51 / 1 / 1, 3.7 min. Both fails are `stream-text.spec.ts:223` "a11y=off …" (see Status). Alone: `npx playwright test --config playwright.viewer.config.ts --project=stream tests/browser/stream-text.spec.ts` 10 passed; `… stream-text.spec.ts:223 --repeat-each=5` 5 passed |
 | browser, viewer (unmodified) | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer` | **67 passed**, 2.4 min |
 | typecheck | `npx tsc --noEmit -p .` | clean (exit 0) |
 | typecheck, server | `npm run -s typecheck:server` | clean (exit 0) |
@@ -108,11 +111,11 @@ Legs (a)–(d) are 4a's, unchanged. (e)–(g) are 4b's (Task 13): (e) decodes a 
 Seen during 4b; listed, not fixed. Each passed when its file ran alone.
 - `server/test/mark-geometry.test.ts` "registration time: uncropped zoom 1.5 registers in <= 15 s" and "zoom then a 10 % crop": wall-clock bounds under parallel load (Tasks 3, 5).
 - `server/test/print-wire.test.ts` "print then print-cancel back to back …" and "two cancelled jobs back to back …": cancel races under load (Task 7).
-- `tests/browser/stream-text.spec.ts` "a11y=off: no screen-reader layer and no a11y request" (PPTX): a 15 s paint timeout in a full stream-project run (Task 12).
+- `tests/browser/stream-text.spec.ts` "a11y=off: no screen-reader layer and no a11y request" (PPTX): a 15 s paint timeout in every full stream-project run since Task 12 (3 of 3), passing alone; order-dependent, cause not found (see Status). This is not a load flake.
 - `tests/xlsx-viewer-main-controls-accounting.test.ts` "keeps membership and independent reader copies charged through close": a heap-delta assertion under parallel load (Task 10).
 - `tests/xlsx-viewer-worker-overflow.test.ts` "SPEC guard epoch-after-stage preserves old rows and raw ownership": failed twice alone right after a full run, then passed at the base and three times after (Task 11). **Root cause not found.**
 - `tests/slideshow-screens.test.ts`, one case, fails under Node 26.13.1 (no `localStorage` in that realm), as at 4a's base; not 4b's.
-- In this task's runs only `stream-text` "a11y=off" recurred (above). Every other listed flake passed in the full runs.
+- In this task's runs only `stream-text` "a11y=off" failed (above). Every other listed flake passed in the full runs.
 
 ## Rulings and findings as built
 
@@ -144,7 +147,7 @@ The full text is in the S4 design, §11.2 "As built (4b)", and the dated parent 
 - **A drawing-bearing corpus XLSX** for the ink oracle (above).
 - **`streamSheets: 'tiles'` hosts** get no 4b text until they drop the option (F1); stated in `server/README.md` and the option's doc comments.
 - **Tile-side CF reads merge-tail values** (F20); only the owner can widen.
-- **Flake root cause:** `xlsx-viewer-worker-overflow` "SPEC guard epoch-after-stage".
+- **Root causes not found:** `stream-text` "a11y=off" in full stream-project runs (3 of 3 since Task 12); `xlsx-viewer-worker-overflow` "SPEC guard epoch-after-stage".
 - **Task 4 review was thin** (ledger note): the session view state, `sheet-resize` and sized tiles deserve extra attention in the final review.
 - Deferred minors from the ledger:
   - `blankCell`/`holdsContent` duplicated from `server/src/sheet/snapshot.ts` in `text-view.ts` (Task 1);

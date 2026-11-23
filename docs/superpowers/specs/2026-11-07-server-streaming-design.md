@@ -394,8 +394,9 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    `['sheet-view@1']`; the host option `streamSheets: 'tiles'` sends exactly
    `['sheet-tiles@1']` (4a behaviour), and `'units'` sends no `features`.
    A 4a server ignores `sheet-view@1`, so a default 4b client gets units
-   mode with Stage 3 text there. A resume whose manifest changes
-   `sheetView` ends the session `layout-changed`.
+   mode with Stage 3 text there. The server closes a resume whose
+   `features` differ `auth-failed` (4a); the client also ends a session
+   whose resumed manifest changes `sheetView`, `layout-changed`.
 2. **Version compatibility is set intersection** — the server picks a version
    it supports **from the client's set**; the empty intersection closes with
    `unsupported-version` (never a downgraded guess).

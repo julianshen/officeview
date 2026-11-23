@@ -741,6 +741,13 @@ fit, which is `'sheet'` (§6.8). All answer only from the snapshot.
   only when the host opts in (a `streamSheets: 'tiles'` option), so that
   4a never removes Stage 3 search and copy from a default client. From 4b,
   the client advertises it by default.
+  *Amendment (2026-11-24, Stage 4b as built; F1, F19):* from 4b the
+  default client advertises `sheet-view@1`, not `sheet-tiles@1`. A 4b
+  server selects tiles mode on either feature; a 4a server ignores
+  `sheet-view@1` and answers units mode, so a default client keeps Stage 3
+  text there. `streamSheets: 'tiles'` still sends exactly `sheet-tiles@1`
+  (4a behaviour, no 4b ops), and `streamSheets: 'units'` sends no feature.
+  See "As built (4b)" P1.
 - **Compatibility test (4a, required).** A matrix over real builds and the
   current server:
   - an old client (no `features`) with the new server gets units mode, and
@@ -981,6 +988,9 @@ none of them.
    `sheet-tiles@1` selects tiles mode for XLSX. Without it a session is in
    units mode, which is kept indefinitely. The mode is fixed per sid and
    checked on resume (§6.10).
+   *Amendment (2026-11-24, Stage 4b as built; F19):* a 4b server also
+   selects tiles mode on `sheet-view@1`, which adds `sheetView: 1` and the
+   4b ops. See "As built (4b)" P1.
 10. **§6.4/§12 scope:** the withholding steps take `contentPolicy` as a
     parameter and are off under `'full'`. The pivot refusal and saved
     values hold on every stream (§6.2).
@@ -1319,10 +1329,19 @@ round 1). An unknown-coverage sheet fits to the blank size; fit has no
   viewGen, reset: true}`, answered `sheet-view {sheetId, viewGen, change}`
   with the clamped size. A resize to the size already held, or a reset of a
   sheet with no sizes, answers the current `viewGen` and changes nothing.
+- A resize answer is applied by `StreamWorkbook.resize` itself
+  (`applyView`, which ignores a change at or below the held `viewGen`); the
+  viewer makes no second `applyView` and rebuilds its entry from the new
+  layout on the notify re-render.
+- `TileJob.sizes` is optional. A job without `sizes` is 4a's identity job
+  and keeps the `viewGen === 0` rule; the stream server and the tracer
+  always send `sizes`.
 - `sheet-layout` carries `sessionRows`/`sessionCols` (`[index, px]`,
   ascending) **only to a `sheetView` session and only when non-empty (F2)**.
   An unresized layout, and every layout to a `sheet-tiles@1`-only session,
   is byte-identical to 4a's, because the 4a decoder rejects unknown keys.
+  On decode, absent lists stay absent (not an empty list), and consumers
+  read `sessionRows ?? []`.
 
 **P12, refusals and caps, with ruling F17.**
 - Order: `stale-view`, `hidden-target`, `coverage-unknown` (resize only),
