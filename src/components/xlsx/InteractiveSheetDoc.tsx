@@ -32,12 +32,13 @@ import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaV
 import { workbookValuePolicy } from '../../xlsx/formula/value-policy'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
-  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
+  CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell, SourceRect } from '../../xlsx/view/coordinates'
 import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate, coverCellsToRects } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
+import { withUnavailableFormulas } from '../../xlsx/view/unavailableFormulas'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
 import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
@@ -3565,19 +3566,6 @@ function sizeCanvas(canvas: HTMLCanvasElement, width: number, height: number): v
   canvas.height = 0
   canvas.width = width
   canvas.height = height
-}
-
-/** TODO(S1.3): the interim object source reports a formula without a cached or
- * evaluated value as a null cell; find must count it as unavailable (§4.4), never
- * as a blank that silently cannot match. */
-function withUnavailableFormulas(store: SourceStore): SourceStore {
-  const mark = (cell: AuthoritativeCell): AuthoritativeCell =>
-    cell.formula !== undefined && cell.value === null && cell.hasCachedValue === false && !cell.unavailable ? { ...cell, unavailable: true } : cell
-  return Object.assign(Object.create(store) as SourceStore, {
-    async *scanPopulated(request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]) {
-      for await (const page of store.scanPopulated(request, options)) yield { ...page, items: page.items.map(mark) }
-    },
-  })
 }
 
 /** Status qualifiers retained with a published find page (§§10.4, 11.4). */

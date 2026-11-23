@@ -11,7 +11,8 @@
 import type { Box, WireSelection } from '../../../src/stream/sheet-wire'
 import { autoFitSize, createFitMeasure } from '../../../src/xlsx/view/autoFit'
 import type { Measure } from '../../../src/xlsx/view/axisSizes'
-import type { AuthoritativeCell, RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
+import type { RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
+import { withUnavailableFormulas } from '../../../src/xlsx/view/unavailableFormulas'
 import { WorkbookFind } from '../../../src/xlsx/view/find'
 import type { EffectiveFormatScope, FormatBudget } from '../../../src/xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../../src/xlsx/view/source'
@@ -64,21 +65,6 @@ export interface TextInputs {
 function cellOf(view: TextView, row: number, col: number): XlsxCell | undefined {
   if (view.geometry.kind !== 'ready') return undefined
   return view.geometry.cellsOf(row)?.find((c) => c.col === col)
-}
-
-/**
- * A copy of the local viewer's private `withUnavailableFormulas` (`InteractiveSheetDoc.tsx` ~3573, a React module the
- * worker cannot import): the object source reports a formula without a cached or evaluated value as a null cell, and
- * find must count it unavailable (§4.4), never as a blank. Keep the two in step.
- */
-function withUnavailableFormulas(store: SourceStore): SourceStore {
-  const mark = (cell: AuthoritativeCell): AuthoritativeCell =>
-    cell.formula !== undefined && cell.value === null && cell.hasCachedValue === false && !cell.unavailable ? { ...cell, unavailable: true } : cell
-  return Object.assign(Object.create(store) as SourceStore, {
-    async *scanPopulated(request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]) {
-      for await (const page of store.scanPopulated(request, options)) yield { ...page, items: page.items.map(mark) }
-    },
-  })
 }
 
 export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
