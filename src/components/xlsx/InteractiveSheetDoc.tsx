@@ -51,6 +51,7 @@ import {
 import { SHEET_ZOOM_STEPS, dprBucket, keyboardSheetZoom, nearestZoomStep, pinchSheetZoom, wheelSheetZoom, zoomSheetAt } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
+import type { StreamFindHit } from './streamText'
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { createFrameHostSource } from '../../xlsx/view/frameHosts'
@@ -110,7 +111,8 @@ import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
 import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
 import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../../xlsx/view/frozenPanes'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, clampSize, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { copyText } from '../../core/clipboard'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
@@ -213,8 +215,11 @@ export interface InteractiveSheetDocProps {
   pivotVerifiedKinds?: ReadonlySet<PivotDeltaKind>
   /** @internal Stage 4a (RemoteSheetView): a tiles-mode stream's own chrome. `textUnavailable` is the parent §15
    * notice, shown once in its own status region; `print` starts the server's print (`RemoteOfficeDoc.print`) from
-   * Ctrl/Cmd+P, and `toolbar` holds its controls. Read only when the source is a stream. */
-  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode }
+   * Ctrl/Cmd+P, and `toolbar` holds its controls. Read only when the source is a stream. Stage 4b: `copyFailure` words
+   * a refused stream copy (S3 item 10's strings, which need the manifest's copy caps). */
+  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode; copyFailure?: (error: unknown) => string }
+  /** @internal Called after each committed selection change (the stream selection parity tests). */
+  onSelection?: (sheetId: string, selection: GridSelection) => void
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -344,10 +349,11 @@ function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
 export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): ReactElement {
   const docId = props.source?.store(props.source.sheets[0].sheetId).stamp.docId ?? documentIdOf(props.doc)
   // Stage 4a (S4 §6.11, R6): a stream has no cell data, so no copy and no find; its screen never prints (print is
-  // the server's static units, through `remoteChrome.print`), so the local print path stays off.
-  const streamed = sheetSourceOf(props.source).stream !== null
+  // the server's static units, through `remoteChrome.print`), so the local print path stays off. Stage 4b (a stream
+  // with text ops): find and copy are the server's, and the host's `showSearch`/`allowCopy` stand.
+  const stream = sheetSourceOf(props.source).stream
   return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props}
-    {...(streamed ? { allowCopy: false, allowPrint: false, showSearch: false } : {})} />
+    {...(stream ? stream.textOps ? { allowPrint: false } : { allowCopy: false, allowPrint: false, showSearch: false } : {})} />
 }
 
 interface SheetEntry {
@@ -380,6 +386,15 @@ interface SheetEntry {
 const FALLBACK_PANE = { width: 640, height: 400 }
 /** Prefetch slice: leaves most of a 16.7 ms frame to input and presentation. */
 const PREFETCH_SLICE_MS = 6
+/** Stage 4b (P12a): a stream's find query is sent this long after the last keystroke. */
+const STREAM_FIND_SETTLE_MS = 250
+/** P12a / S3 item 10: a `rate-limited` refusal of a stream op. */
+const STREAM_RATE_LIMITED = 'Too many requests. Try again shortly.'
+/** P15: a find hit in a row the filter hides opens nothing. */
+const STREAM_FILTER_HIDDEN_HIT = 'This match is in a row hidden by the filter.'
+/** F15: a stream find answer stops at 5,000 hits. */
+const STREAM_FIND_TRUNCATED = 'Showing the first 5,000 matches.'
+const streamFailure = (error: unknown): string | undefined => (error as { code?: unknown } | null)?.code === 'rate-limited' ? STREAM_RATE_LIMITED : undefined
 /** Stage 4a (S4 §6.5): a stream's wheel zoom settles to the nearest step once no wheel event came for this long. */
 const STREAM_ZOOM_SETTLE_MS = 150
 /** A server tile's PNG as a tile surface (a 512² canvas; the bitmap is closed once drawn). */
@@ -473,6 +488,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // `stream` is a tiles-mode stream (kind 'stream', no cell data); `shared` is either, typed to the members both have.
   const { paged: remote, stream } = sheetSourceOf(source)
   const shared: ViewerSheetSource | null = remote ?? stream
+  // Stage 4b: a stream whose session serves find, copy, fit and resize (`sheet-view@1`); it selects as local mode does.
+  const streamText = stream?.textOps ? stream : null
   useEffect(() => {
     if (!remote) return
     return remote.subscribeSparklineEvictions(sheetId => {
@@ -1808,9 +1825,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const inspectHidden = (sheetId: string, target: SourceCell, reason: string) =>
     setInspection({ target, hiddenReason: reason === 'filter-hidden' ? 'hidden by filter' : 'authored hidden', source: source.store(sheetId) })
   const inputRef = useRef<HTMLInputElement | null>(null)
+  // Stage 4b (F15): the pages of a stream find whose answer was truncated, by their hits array (FindController
+  // publishes the session's page hits as they are).
+  const truncatedHits = useRef(new WeakSet<readonly FindHit[]>()).current
   const finder = useMemo(() => new FindController({ currentOwner: () => ownerRef.current(),
-    ...(remote ? { createSession: (input, query, options) => remote.findSession(input.owner, query, options) } : {}),
-  }), [remote])
+    ...(remote ? { createSession: (input, query, options) => remote.findSession(input.owner, query, options) } : streamText ? {
+      // No local text index on a stream (parent §8.3): the server's `sheet-find` answers, positions only.
+      createSession: (input, query, options) => {
+        const session = streamText.findSession(input.owner, query, options)
+        return { close: () => session.close(), nextPage: async () => {
+          const page = await session.nextPage()
+          if (page.truncated) truncatedHits.add(page.hits)
+          return page
+        } }
+      },
+    } : {}),
+  }), [remote, streamText])
   useEffect(() => () => finder.dispose(), [finder])
   const cellAt = (sheetEntry: SheetEntry, at: SourceCell): XlsxCell | undefined => sheetEntry.geometry.cellsOf(at.row)?.find(cell => cell.col === at.col)
   const styleForCell = (sheetEntry: SheetEntry, cell: Pick<XlsxCell, 'row' | 'col' | 'styleIndex'> & { style?: XlsxCell['style'] }): import('../../xlsx/types').XlsxCellStyle | undefined => {
@@ -1819,7 +1849,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const findInput = (): FindInput => ({
     owner: ownerOf(),
-    sheets: remote ? [] : sheetIds.map(sheetId => {
+    sheets: shared ? [] : sheetIds.map(sheetId => {
       const sheetEntry = entryFor(sheetId)
       return {
         sheetId, store: withUnavailableFormulas(source.store(sheetId)), identity: identityOf(sheetId), order: sheetEntry.view.order, visibility: sheetEntry.view.visibility,
@@ -1833,53 +1863,59 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => {
     // Only an empty query cancels: whitespace is a literal search (core/search parity).
     if (query.length === 0) { finder.cancel(); runArgs.current = null; setPage(null); setActiveHit(-1); setSearching(false); return }
-    let cancelled = false
+    let cancelled = false, run: Promise<FindPublication | null> | undefined, searched: Array<() => void> = []
     setSearching(true)
-    const input = findInput()
-    const byId = new Map(remote ? [] : sheetIds.map(id => [id, entryFor(id)]))
-    const options: FindOptions = {
-      formatBudget: mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]),
-      // The same canonical display text the cell paints (authored formats, semantics,
-      // and the prepared current-generation CF effective format when in scope).
-      textOf: (cell, sheetId, allocation, scope) => {
-        const sheetEntry = byId.get(sheetId)
-        if (!sheetEntry) return String(cell.value ?? '')
-        const styled = cellAt(sheetEntry, cell)
-        // The style paint and copy use: a styled table or pivot region resolved over the cell's own.
-        const base = styleForCell(sheetEntry, { row: cell.row, col: cell.col, styleIndex: cell.styleIndex, style: styled?.style })
-        const style = scope?.effectiveStyle(cell.row, cell.col, base) ?? base
-        return cellDisplayText(sheetEntry.sheet, { value: (styled ?? cell).value, style }, allocation)
-      },
-      // Resident batches prepare their own scope; the worker prepares its own.
-      prepareScope: remote ? undefined : (sheetId, rects, batchSignal) => {
-        const sheetEntry = byId.get(sheetId)
-        if (!sheetEntry) return Promise.resolve(undefined)
-        return prepareResidentScope(sheetEntry.sheet, rects, batchSignal, mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]))
-      },
+    const start = () => {
+      const input = findInput()
+      const byId = new Map(shared ? [] : sheetIds.map(id => [id, entryFor(id)]))
+      const options: FindOptions = {
+        formatBudget: mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]),
+        // The same canonical display text the cell paints (authored formats, semantics,
+        // and the prepared current-generation CF effective format when in scope).
+        textOf: (cell, sheetId, allocation, scope) => {
+          const sheetEntry = byId.get(sheetId)
+          if (!sheetEntry) return String(cell.value ?? '')
+          const styled = cellAt(sheetEntry, cell)
+          // The style paint and copy use: a styled table or pivot region resolved over the cell's own.
+          const base = styleForCell(sheetEntry, { row: cell.row, col: cell.col, styleIndex: cell.styleIndex, style: styled?.style })
+          const style = scope?.effectiveStyle(cell.row, cell.col, base) ?? base
+          return cellDisplayText(sheetEntry.sheet, { value: (styled ?? cell).value, style }, allocation)
+        },
+        // Resident batches prepare their own scope; the worker prepares its own.
+        prepareScope: shared ? undefined : (sheetId, rects, batchSignal) => {
+          const sheetEntry = byId.get(sheetId)
+          if (!sheetEntry) return Promise.resolve(undefined)
+          return prepareResidentScope(sheetEntry.sheet, rects, batchSignal, mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]))
+        },
+      }
+      runArgs.current = { input, query, options }
+      // A resident search reads every sheet's order and mask across awaits: its
+      // run holds those entries until it is replaced and has settled (§12.4).
+      searched = [...byId.values()].map(sheetEntry => holds.extra(sheetEntry))
+      run = finder.run(input, { text: query, caseSensitive: false }, options)
+      void run.then(published => {
+        if (cancelled) return
+        pageRef.current = published
+        activeRef.current = published && published.hits.length ? 0 : -1
+        setPage(published)
+        setActiveHit(activeRef.current)
+        setSearching(false)
+      }).catch(error => {
+        if (cancelled) return
+        setSearching(false)
+        pageRef.current = null
+        activeRef.current = -1
+        setPage(null)
+        setActiveHit(-1)
+        const message = (streamText ? streamFailure(error) : undefined) ?? (error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
+        setFindFailure({ generation: searchGen.current, message })
+        setAnnouncement(message)
+      })
     }
-    runArgs.current = { input, query, options }
-    // A resident search reads every sheet's order and mask across awaits: its
-    // run holds those entries until it is replaced and has settled (§12.4).
-    const searched = [...byId.values()].map(sheetEntry => holds.extra(sheetEntry))
-    const run = finder.run(input, { text: query, caseSensitive: false }, options)
-    void run.then(published => {
-      if (cancelled) return
-      pageRef.current = published
-      activeRef.current = published && published.hits.length ? 0 : -1
-      setPage(published)
-      setActiveHit(activeRef.current)
-      setSearching(false)
-    }).catch(error => {
-      if (cancelled) return
-      setSearching(false)
-      pageRef.current = null
-      activeRef.current = -1
-      setPage(null)
-      setActiveHit(-1)
-      setFindFailure({ generation: searchGen.current, message: error instanceof Error ? error.message.slice(0, 256) : 'Search failed.' })
-      setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
-    })
-    return () => { cancelled = true; void run.catch(() => {}).finally(() => { for (const release of searched) release() }) }
+    // P12a: a stream's query is sent once typing has rested; a newer one supersedes it.
+    const timer = streamText ? setTimeout(start, STREAM_FIND_SETTLE_MS) : undefined
+    if (!streamText) start()
+    return () => { cancelled = true; clearTimeout(timer); if (run) void run.catch(() => {}).finally(() => { for (const release of searched) release() }) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, ownerKey])
   // A finished page over sheets that were still importing says so instead of
@@ -2002,9 +2038,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     navQueue.current = run
     return run
   }
+  /** The `onSelection` seam: called after each committed selection change. */
+  const selectionCommitted = (sheetId: string) => props.onSelection?.(sheetId, session.get(sheetId).selection)
   const goToHit = (hit: FindHit) => {
     if (!sheetIds.includes(hit.sheetId)) return
     cancelCopy()
+    // P15: a stream hit in a filtered-out row is said, never inspected (the client holds no cell to show).
+    if (stream && (hit as StreamFindHit).hidden === 'filter') {
+      setInspection(undefined)
+      session.activate(hit.sheetId)
+      setActiveSheetId(hit.sheetId)
+      setAnnouncement(STREAM_FILTER_HIDDEN_HIT)
+      rerender()
+      return
+    }
     const sheetEntry = entryFor(hit.sheetId)
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
     let result = navigateToHit({ session, windows, viewport, frozen: sheetId => entries.get(sheetId)?.frozen }, hit)
@@ -2013,11 +2060,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (nextGutter !== gutter) result = navigateToHit({ session, windows, viewport: viewportOf(nextGutter), frozen: sheetId => entries.get(sheetId)?.frozen }, hit)
     }
     if (result.kind === 'needs-projection') return
-    if (result.kind === 'hidden') inspectHidden(hit.sheetId, hit.source, result.hiddenReason)
+    // A stream has no cell to inspect (its store rejects every read).
+    if (result.kind === 'hidden' && !stream) inspectHidden(hit.sheetId, hit.source, result.hiddenReason)
     else setInspection(undefined)
     session.activate(hit.sheetId)
     setActiveSheetId(hit.sheetId)
     setAnnouncement(result.announcement)
+    selectionCommitted(hit.sheetId)
     rerender()
   }
   useEffect(() => {
@@ -2586,8 +2635,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cancelCopy = () => { copyToken.current++; copyJob.current?.abort(); setCopyPending(false) }
   useEffect(() => { cancelCopy() }, [identityKey, allowCopy, selection])
   useEffect(() => () => { copyToken.current++; copyJob.current?.abort() }, [])
+  /** Stage 4b: a stream's copy is the server's display text (`sheet-copy`), written to the clipboard here. Nothing is
+   * read or serialized locally (parent §8.3). */
+  const copyStream = async (ops: NonNullable<typeof streamText>) => {
+    cancelCopy()
+    const token = ++copyToken.current, abort = new AbortController(); copyJob.current = abort
+    const sheetId = activeSheetId
+    setCopyPending(true)
+    try {
+      const text = await ops.copy(sheetId, selection)
+      if (!live.current || token !== copyToken.current) return
+      const outcome = await copyText(text, { allowed: () => current.current.allowCopy && current.current.activeSheetId === sheetId, signal: abort.signal })
+      if (live.current && token === copyToken.current) setAnnouncement(outcome === 'failed' ? 'Copy failed. Try copying again.' : 'Selection copied.')
+    } catch (error) {
+      if (live.current && token === copyToken.current) setAnnouncement(props.remoteChrome?.copyFailure?.(error) ?? (error instanceof Error ? error.message : 'Copy unavailable; retry.'))
+    } finally { if (live.current && token === copyToken.current) setCopyPending(false) }
+  }
   const copyGrid = async () => {
     if (!current.current.allowCopy || !entry) return
+    if (stream) { if (streamText) await copyStream(streamText); return }
     cancelCopy()
     const token = ++copyToken.current, abort = new AbortController(); copyJob.current = abort
     // The copy reads this entry's order, mask and projection across awaits.
@@ -2742,7 +2808,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const toViewport = (rect: HighlightRect): HighlightRect => ({ x: (rect.x - origin.x) * scroll.zoom + bias.x, y: (rect.y - origin.y) * scroll.zoom + bias.y, width: rect.width * scroll.zoom, height: rect.height * scroll.zoom })
     // Search: lazily materialized geometry for this page's hits on the pane only.
     const highlights: HighlightRect[] = [], active: HighlightRect[] = []
-    if (page) {
+    // A stream hit has no text, so no hit rects: its cell's selection is what shows it.
+    if (page && !stream) {
       const host = layoutHost(entry.sheet)
       page.hits.forEach((hit, index) => {
         if (hit.sheetId !== activeSheetId) return
@@ -3069,10 +3136,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [allowPrint, instance])
 
   const onGridChange = (transition: GridTransition) => {
-    // Stage 4a: a stream selects nothing (selection is 4b); only the window may move.
-    if (stream) { if (transition.window !== scroll) setWindow(activeSheetId, transition.window); return }
+    // Stage 4a: a stream without text ops selects nothing; only the window may move. A 4b stream selects as local does.
+    if (stream && !streamText) { if (transition.window !== scroll) setWindow(activeSheetId, transition.window); return }
     cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
+    selectionCommitted(activeSheetId)
     setAnnouncement(transition.announcement)
     setInspection(undefined)
     let nextWindow = transition.window
@@ -3098,8 +3166,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const nextGutter = gutterOf(entry, moved.window)
     if (nextGutter !== gutter) moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     cancelCopy()
-    // A stream's Go To scrolls only: it selects nothing (4b).
-    if (!stream) session.setSelection(activeSheetId, result.selection)
+    // A 4a stream's Go To scrolls only: it selects nothing.
+    if (!stream || streamText) { session.setSelection(activeSheetId, result.selection); selectionCommitted(activeSheetId) }
     setWindow(activeSheetId, moved.window)
   }
   // ---- view-only row/column resizing (spec §5.6) ----
@@ -3114,8 +3182,72 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return region.axis === 'x' ? box.x + box.width > region.from : box.y + box.height > region.from
     })
   }
+  // Stage 4b (P11, P12a): a stream's sizes are the server's. One `sheet-resize` is in flight per viewer; steps made
+  // meanwhile (key repeat) fold into one pending target, the latest winning, sent when the reply lands. A fit is two
+  // ops (`sheet-fit`, then `sheet-resize`). `resize` applies the server's answer itself: the view and its viewGen move,
+  // and the entry is rebuilt on the re-render that follows, so nothing here sizes the geometry.
+  interface StreamResizeJob { sheetId: string; name: string; column: boolean; index: number; size?: number; fit?: { pane: LogicalCellBox; regions: LogicalCellBox[] }; reset?: true }
+  const streamResizes = useRef<{ inFlight: StreamResizeJob | null; pending: StreamResizeJob | null }>({ inFlight: null, pending: null }).current
+  const streamResizeFailure = (job: StreamResizeJob, error: unknown): string | undefined => {
+    const code = (error as { code?: unknown } | null)?.code
+    if (code === 'closed' || (error as { name?: unknown } | null)?.name === 'AbortError') return undefined
+    if (code === 'rate-limited') return STREAM_RATE_LIMITED
+    if (job.reset) return 'Sizes were not restored; try again.'
+    if (code === 'view-state-limit') return `${job.name} was not resized: this sheet already has the maximum number of resized ${job.column ? 'columns' : 'rows'}. Reset sizes to start over.`
+    if (code === 'coverage-unknown') return `${job.name} can't be resized in this viewing mode.`
+    if (code === 'hidden-target') return `${job.name} is hidden; it cannot be resized.`
+    return `${job.name} was not ${job.fit ? 'fitted' : 'resized'}; try again.`
+  }
+  const sendStreamResize = (job: StreamResizeJob) => {
+    const ops = streamText
+    if (!ops) return
+    if (streamResizes.inFlight) { streamResizes.pending = job; return }
+    streamResizes.inFlight = job
+    const axis = job.column ? 'col' as const : 'row' as const
+    void (async () => {
+      try {
+        const size = job.fit ? await ops.fit({ sheetId: job.sheetId, axis, index: job.index, pane: job.fit.pane, regions: job.fit.regions }) : job.size!
+        const answer = await ops.resize(job.reset ? { sheetId: job.sheetId, reset: true } : { sheetId: job.sheetId, axis, index: job.index, size })
+        if (!live.current) return
+        if ('reset' in answer.change) setAnnouncement('Column widths and row heights restored to the workbook sizes.')
+        else {
+          const applied = answer.change.size, limit = RESIZE_LIMITS[axis]
+          const bound = applied === limit.max ? ' (maximum)' : applied === limit.min ? ' (minimum)' : ''
+          setAnnouncement(`${job.name} ${job.column ? 'width' : 'height'} ${applied} pixels${bound}${job.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`)
+        }
+        rerender()
+      } catch (error) {
+        // A refused step drops the steps folded behind it: they were relative to a size the server did not take.
+        streamResizes.pending = null
+        const text = live.current ? streamResizeFailure(job, error) : undefined
+        if (text) setAnnouncement(text)
+      } finally {
+        streamResizes.inFlight = null
+        const next = streamResizes.pending
+        streamResizes.pending = null
+        if (next && live.current) sendStreamResize(next)
+      }
+    })()
+  }
+  const resizeStream = (request: ResizeRequest) => {
+    if (!entry || !scroll) return
+    const sheetId = activeSheetId, metrics = entry.metrics, column = request.kind === 'column'
+    const slot = column ? -1 : metrics.order.sourceToDisplay(request.index)
+    const name = column ? `Column ${columnToLetters(request.index)}` : `Row ${slot + 1}`
+    const current = column ? metrics.cols.size(request.index) : metrics.rows.size(slot)
+    if (!(current > 0)) { setAnnouncement(`${name} is hidden; it cannot be resized.`); return }
+    if (request.fit) {
+      sendStreamResize({ sheetId, name, column, index: request.index, fit: { pane: visibleLogicalViewport(scroll, viewport), regions: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).reverse() } })
+      return
+    }
+    // A step continues from the target already asked for (in flight or pending), not from the size shown.
+    const target = (job: StreamResizeJob | null) => job && job.sheetId === sheetId && job.column === column && job.index === request.index ? job.size : undefined
+    const base = target(streamResizes.pending) ?? target(streamResizes.inFlight) ?? current
+    sendStreamResize({ sheetId, name, column, index: request.index, size: clampSize(column ? 'col' : 'row', request.size ?? base + (request.delta ?? 0)) })
+  }
   const resizeLine = (request: ResizeRequest) => {
     if (!entry || !scroll) return
+    if (stream) { resizeStream(request); return }
     const sheetId = activeSheetId, metrics = entry.metrics
     const column = request.kind === 'column'
     const slot = column ? -1 : metrics.order.sourceToDisplay(request.index)
@@ -3239,7 +3371,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return domClassBytes({ cell: 2 * rows * cols, header: 3 * rows + 8 * cols, other: 2 * rows + cols })
   }
   const domReservation = useRef(0)
+  const streamSized = (sheetId: string) => { const sizes = streamText!.sizes(sheetId); return sizes.rows.size + sizes.cols.size > 0 }
   const resetSizes = () => {
+    if (stream) { if (streamText && streamSized(activeSheetId)) sendStreamResize({ sheetId: activeSheetId, name: 'Sizes', column: false, index: 0, reset: true }); return }
     const sheetId = activeSheetId, sizes = sizesOf(sheetId)
     if (sizes.empty) return
     const candidate = admitCandidate(sheetId, NO_SESSION_SIZES, 'Sizes were', () => true, '')
@@ -3250,7 +3384,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setAnnouncement('Column widths and row heights restored to the workbook sizes.')
     rerender()
   }
-  const resized = Boolean(activeSheetId && !sizesOf(activeSheetId).empty)
+  const resized = Boolean(activeSheetId && (stream ? streamText && streamSized(activeSheetId) : !sizesOf(activeSheetId).empty))
 
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
@@ -3299,7 +3433,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
-          {!stream && (
+          {/* A stream's Copy is the server's (4b), and is absent while copy is off. */}
+          {(stream ? streamText && allowCopy : true) && (
             <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
               <Icon icon={Copy} name="copy" size={14} />
               <span className={toolbarLabel}>Copy selection</span>
@@ -3316,8 +3451,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               <span className={toolbarLabel}>Print</span>
             </button>
           )}
-          {/* A stream's sizes are the server's (a local resize would misalign its tiles; sheet-resize is 4b). */}
-          {!stream && (
+          {/* A stream's sizes are the server's: a 4a stream has none to reset; a 4b one resets through sheet-resize. */}
+          {(!stream || streamText) && (
             <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
               <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
               <span className={toolbarLabel}>Reset sizes</span>
@@ -3357,7 +3492,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
-              {...(stream ? { positionsOnly: true } : {
+              {...(stream ? streamText ? { positionsOnly: true, onResize: resizeLine } : { positionsOnly: true, selectable: false } : {
                 onResize: resizeLine,
                 onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
               })} pendingSortColumn={sortPending?.col ?? null} onNotice={setAnnouncement}
@@ -3424,7 +3559,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 const anchor = rootRef.current?.querySelector<HTMLElement>(`[data-pivot-key="${target.pivot}:${at.row}:${at.col}"]`) ?? undefined
                 void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
                 return true
-              } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              } : undefined} announcement={[page && truncatedHits.has(page.hits) ? STREAM_FIND_TRUNCATED : '', sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={stream ? undefined : at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

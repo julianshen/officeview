@@ -69,10 +69,12 @@ export interface GridSemanticsProps {
   /** A cell control's keyboard route from the focused grid (Ruling S3-J): Alt+↓ opens, Alt+→ expands, Alt+← collapses
    * the active cell's control. True when the cell has such a control (the key is then the grid's). */
   onCellControl?: (at: SourceCell, action: 'open' | 'expand' | 'collapse', grid: HTMLElement) => boolean
-  /** Stage 4a (a tiles-mode stream, S4 §6.11): the grid carries positions only. Each gridcell has its
-   * `aria-rowindex`/`aria-colindex` and no text or description, and nothing selects (no click, header or keyboard
-   * selection: selection is 4b). Off by default. */
+  /** Stage 4a (a tiles-mode stream, S4 §6.11): the gridcells carry positions only. Each gridcell has its
+   * `aria-rowindex`/`aria-colindex` and no text or description. Off by default. */
   positionsOnly?: boolean
+  /** Click, header, keyboard and select-all selection (default true). Stage 4a's stream passes false: nothing selects
+   * there. A 4b stream selects as local mode does, its cells still positions only. */
+  selectable?: boolean
 }
 const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
   ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
@@ -162,6 +164,7 @@ function spanWindow(axis: { visibleBetween(start: number, end: number): AxisWind
 export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const instance = useId(), { projection, window: scroll, viewport, view } = props
   const gutter = props.gutter ?? GRID_HEADER_SIZE
+  const selectable = props.selectable !== false
   const { docId, sheetId, valueGen, fontGen, viewGen } = props.owner
   const touchControls = useControlMedia('(pointer: coarse)')
   const headerHeight = columnHeaderHeight(touchControls, Boolean(props.onSortCycle || props.onFilter || props.onSortDialog), Boolean(props.onSortDialog))
@@ -281,7 +284,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   })
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
-    if (props.positionsOnly) return
+    if (!selectable) return
     const grid = gridRef.current
     if (event.key === 'Escape' && props.popup && (grid?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement))) {
       event.preventDefault(); event.stopPropagation()
@@ -344,7 +347,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { gutter, projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
-      if (props.positionsOnly) return
+      if (!selectable) return
       // A corner-lane button (S13.2) names its column; only strip buttons are re-hit-tested.
       if (event.detail > 0 && !coarse && gridRef.current && event.currentTarget.dataset.headerLane === undefined) {
         const bounds = gridRef.current.getBoundingClientRect()
@@ -372,7 +375,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         return { selection: selected, window: moved, announcement: selected.active ? activeAnnouncement(projection, selected.active) : 'No visible records.' }
       })
     },
-    onSelectAll: () => props.positionsOnly ? undefined : publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
+    onSelectAll: () => !selectable ? undefined : publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
   const rowShift = rowFrameShift(-scroll.logicalOrigin.x * scroll.zoom)
   // Stale-value marks of the rendered cells (Ruling S3-AM), collected while the rows render and drawn above them.
@@ -380,7 +383,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
-      aria-multiselectable={props.positionsOnly ? undefined : 'true'} aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
+      aria-multiselectable={selectable ? 'true' : undefined} aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
       onFocusCapture={event => {
@@ -392,7 +395,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) event.currentTarget.focus() }}
       onDoubleClick={event => event.stopPropagation()}
       onClick={event => {
-        if (props.positionsOnly || event.defaultPrevented || event.detail > 1 || (event.target as Element).closest('[data-officeview-ui]')) return
+        if (!selectable || event.defaultPrevented || event.detail > 1 || (event.target as Element).closest('[data-officeview-ui]')) return
         const bounds = event.currentTarget.getBoundingClientRect()
         const target = hitTestViewport(scroll, projection, viewport, { x: event.clientX - bounds.left - gutter, y: event.clientY - bounds.top - headerHeight })
         if (!target) return
@@ -439,9 +442,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
                 style={{ position: 'absolute', left: cellBox.x + cellBox.width - Math.min(STALE_MARK_PX, cellBox.width), top: box.y, width: Math.min(STALE_MARK_PX, cellBox.width), height: Math.min(STALE_MARK_PX, box.height),
                   background: 'var(--ov-color-accent, #0f6cbd)', clipPath: 'polygon(0 0, 100% 0, 100% 100%)', pointerEvents: 'auto' }} />)
             }
-            // Positions only (a stream): the cell's place, never its text.
+            // Positions only (a stream): the cell's place, never its text (a 4b stream also says whether it is selected).
             if (props.positionsOnly) {
-              return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-rowindex={slot + 2} aria-colindex={col + 2}
+              return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-rowindex={slot + 2} aria-colindex={col + 2} aria-selected={selectable ? isSelected : undefined}
                 style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }} />
             }
             // Name from contents: the visually hidden text IS the name, so VoiceOver
