@@ -91,3 +91,19 @@ describe('document ledger', () => {
     expect(dropped).toEqual(['d2|visible-only', 'd1|visible-only'])
   })
 })
+
+describe('Stage 4b view-state hash (S4 §6.3)', () => {
+  const clock = { day: '2026-11-23', timeZone: 'UTC' }
+  test('identity hash unchanged', () => {
+    // Printed by `viewStateHash` at 56431d14 (4a's identity view), under this clock.
+    expect(viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock })).toBe('ed406e854c26f24450bbdd81d392b23810110369f6d89c8cd5d9302ebd51c645')
+  })
+  test('sizes are hashed', () => {
+    const id = viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock })
+    const a = viewStateHash({ sort: null, filters: [], sizes: [{ axis: 'col', index: 2, px: 1790 }], authorHiddenTier: 'none', clock })
+    const b = viewStateHash({ sort: null, filters: [], sizes: [{ axis: 'col', index: 2, px: 1789 }], authorHiddenTier: 'none', clock })
+    const c = viewStateHash({ sort: null, filters: [], sizes: [{ axis: 'row', index: 2, px: 1790 }], authorHiddenTier: 'none', clock })
+    expect(new Set([id, a, b, c]).size).toBe(4)
+    expect(viewStateHash({ clock, sizes: [{ px: 1790, index: 2, axis: 'col' }], authorHiddenTier: 'none', filters: [], sort: null })).toBe(a)
+  })
+})

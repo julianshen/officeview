@@ -17,15 +17,16 @@ import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { prepareSheetAssets } from '../../src/components/xlsx/sheetAssets'
 import { clockEpochMs, type SheetClock } from './sheet/clock'
-import { buildStreamLayout, LayoutUnavailable } from './sheet/layout'
-import { LayoutTooLarge, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { buildStreamLayout, LayoutUnavailable, type ServerSheetLayout } from './sheet/layout'
+import { LayoutTooLarge } from '../../src/stream/sheet-wire'
 import { buildSheetSnapshot, servableSheet, type ServableSheet, type SheetSnapshot } from './sheet/snapshot'
 import { TILE_PALETTE_COLORS, tileJobProblem, tileLimit, type RenderedTile, type TileJob } from './sheet/tile'
+import { sessionSizesOf, type WireSizes } from './sheet/view-state'
 import { TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 import { renderSheetViewport } from '../../src/xlsx/view/renderViewport'
 import { tileLogicalBox } from '../../src/xlsx/view/tileCache'
 import { LayoutCache } from '../../src/xlsx/view/textLayout'
-import { frameBudgetFor, planViewport } from '../../src/xlsx/view/viewport'
+import { buildSheetGeometry, frameBudgetFor, planViewport, type SheetGeometryResult } from '../../src/xlsx/view/viewport'
 import type { LogicalViewport } from '../../src/xlsx/view/contracts'
 import { getPaintables, staticSheetSpec, type PaintableArray } from '../../src/render/paint'
 import type { XlsxDocument } from '../../src/xlsx/types'
@@ -65,6 +66,8 @@ import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordS
 
 export const MAX_UNIT_PX = 8192
 export const SCALE_BUCKETS = [1, 2] as const
+/** Stage 4b: sized snapshot geometries kept per document (LRU). */
+export const SIZED_GEOMETRIES = 8
 export { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec }
 export type Projection = 'final-raster' | 'commands'
 
@@ -113,7 +116,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4b: the snapshot geometries at session sizes, by `snapshot key|sha256(sizes)`, at most `SIZED_GEOMETRIES` (LRU), released on `drop`. */ sizedGeometries?: Map<string, SheetGeometryResult>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -367,13 +370,18 @@ export class DocumentHost {
    * A layout too fragmented to fit any answer is `RenderRefusal('layout-too-large')`; a diagnostic geometry `bad-job`.
    * The caller encodes (and applies the R14 caps to) the result.
    */
-  async sheetLayout(docKey: string, sheetIndex: number, clock: SheetClock): Promise<StreamSheetLayout> {
+  async sheetLayout(docKey: string, sheetIndex: number, clock: SheetClock): Promise<ServerSheetLayout> {
     const snap = await this.sheetSnapshot(docKey, sheetIndex, clock)
     const saved = this.docs.get(docKey)?.savedParse
     if (!saved) throw new RenderRefusal('unknown-doc')
     const sheet = saved.sheets[sheetIndex]!
     const declared = saved.declaredFilters?.find((d) => sheet.sourcePartPath !== undefined ? d.partPath === sheet.sourcePartPath : d.sheetId === sheet.sheetId)
-    try { return buildStreamLayout(snap, String(sheetIndex), declared) } catch (e) {
+    try {
+      const layout: ServerSheetLayout = buildStreamLayout(snap, String(sheetIndex), declared)
+      // Stage 4b: server-only (never encoded), for the `coverage-unknown` refusal of `sheet-resize`.
+      if (snap.coverage !== 'off' && snap.coverage.kind === 'unknown') layout.coverageUnknown = true
+      return layout
+    } catch (e) {
       if (e instanceof LayoutTooLarge) throw new RenderRefusal('layout-too-large', e.message)
       if (e instanceof LayoutUnavailable) throw new RenderRefusal('bad-job', e.message)
       throw e
@@ -386,14 +394,16 @@ export class DocumentHost {
    * (`paintMarkRegion`), encoded metadata-free. Text layouts are cached per snapshot (`OpenDoc.tileLayouts`). The logical box is `(col, row)·512/s` with `s = zoom·dpr`; the plan is
    * profile `'D'` against a fresh per-tile `frameBudgetFor('D')`. An edge tile is a full 512² surface, blank past the
    * sheet's extent (R15). A blank tile is marked too (owner ruling). Refused `bad-job`: a malformed job, a sheet out of
-   * range, `zoomStep` outside 0..10, `dpr` outside {1, 2}, an unknown palette, `viewGen !== 0` (4a), a negative index
+   * range, `zoomStep` outside 0..10, `dpr` outside {1, 2}, an unknown palette, a `viewGen` other than 0 without `sizes` (4a) or
+   * malformed `sizes` (4b: the tile is painted over the snapshot's geometry at those sizes, `sizedGeometry`), a negative index
    * or one past `tileLimit` (F8), or a sheet whose geometry is a diagnostic (it has no layout either). Reads no clock.
    */
   async renderTile(docKey: string, job: TileJob): Promise<RenderedTile> {
     const problem = tileJobProblem(job)
     if (problem) throw new RenderRefusal('bad-job', `tile: ${problem}`)
     const snap = await this.sheetSnapshot(docKey, job.sheetIndex, job.clock)
-    const geometry = snap.geometry
+    if (snap.geometry.kind !== 'ready') throw new RenderRefusal('bad-job', 'tile: sheet geometry unavailable')
+    const geometry = job.sizes?.length ? this.sizedGeometry(docKey, snap, job.sizes) : snap.geometry
     if (geometry.kind !== 'ready') throw new RenderRefusal('bad-job', 'tile: sheet geometry unavailable')
     const zoom = TILE_ZOOM_STEPS[job.zoomStep]!, dpr = job.dpr, s = zoom * dpr
     const m = geometry.metrics
@@ -422,6 +432,24 @@ export class DocumentHost {
     return { png, w: TILE_PX, h: TILE_PX, palette: job.palette }
   }
 
+  /**
+   * Stage 4b (P5): the snapshot's geometry at the session's `sizes` (non-empty, canonical): `buildSheetGeometry` over the
+   * snapshot's sheet with those sizes, so its drawings are placed by them too (`sizedDrawings`). Cached per
+   * `(snapshot key, sha256(sizes))`, at most `SIZED_GEOMETRIES` per document (LRU), released on `drop`.
+   */
+  private sizedGeometry(docKey: string, snap: SheetSnapshot, sizes: WireSizes): SheetGeometryResult {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    const cache = doc.sizedGeometries ??= new Map()
+    const key = `${snap.sheetIndex}|${snap.clock.day}|${snap.clock.timeZone}|${createHash('sha256').update(JSON.stringify(sizes.map((e) => [e.axis, e.index, e.px]))).digest('hex')}`
+    let g = cache.get(key)
+    if (g) { cache.delete(key); cache.set(key, g); return g }
+    g = buildSheetGeometry(snap.sheet, { sizes: sessionSizesOf(sizes) })
+    cache.set(key, g)
+    while (cache.size > SIZED_GEOMETRIES) cache.delete(cache.keys().next().value!)
+    return g
+  }
+
   /** The static paintables every units path paints from (synchronous: `ensurePaintables` builds them). */
   private paintablesOf(doc: OpenDoc): PaintableArray {
     if (!doc.paintables) throw new PaintablesUnbuilt()
@@ -436,6 +464,7 @@ export class DocumentHost {
       for (const built of d.snapshots?.values() ?? []) built.then((snap) => snap.release(), () => undefined)
       d.snapshots?.clear()
       d.tileLayouts?.clear()
+      d.sizedGeometries?.clear()
     }
     this.served.drop(docKey)
   }

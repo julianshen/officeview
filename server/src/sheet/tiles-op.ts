@@ -20,9 +20,10 @@ const u32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >=
  * The request's shape, needing no sheet geometry: `sheetId` the canonical decimal index of one of `sheetCount`
  * visible sheets (R12); `zoomStep` an index into `SHEET_ZOOM_STEPS`; `dpr` ∈ {1, 2}; `palette` ∈ {light, dark};
  * `tiles` 1 to 64 distinct `{col, row}` u32 pairs. Anything else is `'policy-refused'`. A well-formed `viewGen` other
- * than the sheet's (0 in 4a) is `'stale-view'`.
+ * than the sheet's current one (`viewGenOf`, Stage 4b: the session's; 0 for an identity view never changed) is
+ * `'stale-view'`.
  */
-export function tilesArgs(msg: Record<string, unknown>, sheetCount: number): TilesArgs | 'policy-refused' | 'stale-view' {
+export function tilesArgs(msg: Record<string, unknown>, sheetCount: number, viewGenOf: (sheetIndex: number) => number = () => 0): TilesArgs | 'policy-refused' | 'stale-view' {
   const { sheetId, viewGen, zoomStep, dpr, palette, tiles } = msg
   if (typeof sheetId !== 'string' || !SHEET_ID.test(sheetId) || Number(sheetId) >= sheetCount) return 'policy-refused'
   if (!u32(viewGen)) return 'policy-refused'
@@ -39,7 +40,7 @@ export function tilesArgs(msg: Record<string, unknown>, sheetCount: number): Til
     if (seen.has(k)) return 'policy-refused'
     seen.add(k); out.push({ col, row })
   }
-  if (viewGen !== 0) return 'stale-view'
+  if (viewGen !== viewGenOf(Number(sheetId))) return 'stale-view'
   return { sheetId, sheetIndex: Number(sheetId), viewGen, zoomStep: zoomStep as number, dpr: dpr as 1 | 2, palette: palette as TilePalette, tiles: out }
 }
 
@@ -52,8 +53,9 @@ export function tilesInGrid(a: Pick<TilesArgs, 'zoomStep' | 'dpr' | 'tiles'>, e:
   return a.tiles.every((t) => t.col < cols && t.row < rows)
 }
 
-/** One `tiles` request in progress. `stopped`: `sheet-cancel`, a resume or the session's teardown; no tile starts after. */
-export interface TileBatch { reqId: number; stopped: boolean }
+/** One `tiles` request in progress. `stopped`: `sheet-cancel`, a resume, the session's teardown or (Stage 4b, P14) a
+ * view change of its sheet; no tile starts after. `sheetIndex`: set once its arguments are valid. */
+export interface TileBatch { reqId: number; stopped: boolean; sheetIndex?: number }
 
 /** R4: a sid's tile jobs in flight (render plus Layer-1), at most `limit`, shared by all of its batches. FIFO. */
 export class TileSlots {

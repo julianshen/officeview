@@ -8,6 +8,7 @@ import type { AuditRowInput } from './audit'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 import type { MarkSpec } from './render'
 import type { SheetClock } from './sheet/clock'
+import type { WireSizes } from './sheet/view-state'
 
 /** §9.3: rows are kept 90 days, then deleted. */
 export const AUDIT_RETENTION_SEC = 90 * 24 * 3600
@@ -27,8 +28,8 @@ export interface DeliveryRecord { sid: string; unitIndex: number; scale: number;
  * applied to. Deduplicated like `DeliveryRecord`.
  */
 export interface TileDeliveryRecord { sid: string; sheetId: string; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: 'light' | 'dark'; col: number; row: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
-/** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7: the identity view in 4a), with the session clock. Write-once. */
-export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: [] }; clock: SheetClock; at: number }
+/** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7; Stage 4b: the session's canonical sizes, `[]` for the identity view), with the session clock. Write-once. */
+export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: WireSizes }; clock: SheetClock; at: number }
 /** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated. */
 export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
 /** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */

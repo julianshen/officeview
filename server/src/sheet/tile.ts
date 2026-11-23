@@ -7,10 +7,13 @@ import { TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type TilePalette } 
 import { THEME_DEFAULTS, type CanvasToken } from '../../../src/styles/tokens'
 import type { MarkSpec } from '../mark/visible'
 import type { SheetClock } from './clock'
+import type { WireSizes } from './view-state'
 
 /** One tile of sheet `sheetIndex` (an index into the visible sheets, R12) at `(TILE_ZOOM_STEPS[zoomStep], dpr)`: the
- * 512² device-px square at `(col·512, row·512)` of the sheet's global device grid (`tileRangeFor`). */
-export interface TileJob { sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; col: number; row: number; mark: MarkSpec; clock: SheetClock }
+ * 512² device-px square at `(col·512, row·512)` of the sheet's global device grid (`tileRangeFor`), painted at the
+ * session's `sizes` (Stage 4b, canonical `WireSizes`). A job without `sizes` is the 4a identity job: its `viewGen`
+ * must be 0. With `sizes` (even `[]`, a reset view) `viewGen` is any u32: the paint reads the sizes, never the number. */
+export interface TileJob { sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; col: number; row: number; mark: MarkSpec; clock: SheetClock; sizes?: WireSizes }
 /** What a tile job returns: the canonical (pre-forensic) PNG, and the palette it was painted under (F24: audited). */
 export interface RenderedTile { png: Uint8Array; w: typeof TILE_PX; h: typeof TILE_PX; palette: TilePalette }
 
@@ -44,13 +47,34 @@ const validMark = (m: unknown) => {
   return k === 'fixed' || k === 'off' || (k === 'viewer' && typeof (m as { text?: unknown }).text === 'string')
 }
 
-/** Why `job` is malformed (every check that needs no sheet), or undefined. `viewGen` is 0 in 4a. The sheet index and
- * the tile bounds are checked against the snapshot. */
+/** At most this many session sizes per axis (`MAX_SESSION_SIZES`, duplicated: this module stays light). */
+const SIZES_PER_AXIS = 4096
+const AXIS_COUNT = { col: 16_384, row: 1_048_576 } as const
+/** `sizes` is canonical `WireSizes`: axis `'col'` before `'row'`, each strictly ascending, in range, a finite size > 0,
+ * at most 4,096 per axis. */
+function sizesProblem(sizes: unknown): boolean {
+  if (!Array.isArray(sizes) || sizes.length > 2 * SIZES_PER_AXIS) return true
+  let prev: { axis: string; index: number } | undefined, perAxis = 0
+  for (const e of sizes as unknown[]) {
+    if (!e || typeof e !== 'object') return true
+    const { axis, index, px } = e as Record<string, unknown>
+    if ((axis !== 'col' && axis !== 'row') || !nonNegInt(index) || (index as number) >= AXIS_COUNT[axis] || typeof px !== 'number' || !Number.isFinite(px) || px <= 0) return true
+    if (prev && (prev.axis === axis ? prev.index >= (index as number) : prev.axis === 'row')) return true
+    perAxis = prev?.axis === axis ? perAxis + 1 : 1
+    if (perAxis > SIZES_PER_AXIS) return true
+    prev = { axis, index: index as number }
+  }
+  return false
+}
+
+/** Why `job` is malformed (every check that needs no sheet), or undefined. A job without `sizes` has `viewGen` 0 (4a);
+ * with them, any u32. The sheet index and the tile bounds are checked against the snapshot. */
 export function tileJobProblem(job: unknown): string | undefined {
   if (!job || typeof job !== 'object') return 'job'
   const j = job as Partial<TileJob>
   if (!nonNegInt(j.sheetIndex)) return 'sheetIndex'
-  if (j.viewGen !== 0) return 'viewGen'
+  if (j.sizes === undefined ? j.viewGen !== 0 : !nonNegInt(j.viewGen) || j.viewGen! > 0xffffffff) return 'viewGen'
+  if (j.sizes !== undefined && sizesProblem(j.sizes)) return 'sizes'
   if (!nonNegInt(j.zoomStep) || j.zoomStep! >= TILE_ZOOM_STEPS.length) return 'zoomStep'
   if (!(TILE_DPRS as readonly unknown[]).includes(j.dpr)) return 'dpr'
   if (!(TILE_PALETTES as readonly unknown[]).includes(j.palette)) return 'palette'

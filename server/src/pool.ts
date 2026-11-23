@@ -396,7 +396,7 @@ export class Pool {
   async tile(sessionId: string, job: PoolTileJob, bytesEstimate: number, signal?: AbortSignal): Promise<RenderedTile> {
     const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const { docRef, contentPolicy, hangMs, crash, ...rest } = job
-    const tile: TileJob = { sheetIndex: rest.sheetIndex, viewGen: rest.viewGen, zoomStep: rest.zoomStep, dpr: rest.dpr, palette: rest.palette, col: rest.col, row: rest.row, mark: rest.mark, clock: rest.clock && { day: rest.clock.day, timeZone: rest.clock.timeZone } }
+    const tile: TileJob = { sheetIndex: rest.sheetIndex, viewGen: rest.viewGen, zoomStep: rest.zoomStep, dpr: rest.dpr, palette: rest.palette, col: rest.col, row: rest.row, mark: rest.mark, clock: rest.clock && { day: rest.clock.day, timeZone: rest.clock.timeZone }, ...(rest.sizes !== undefined ? { sizes: rest.sizes } : {}) }
     const slot = this.pick(docRef)
     try {
       return await this.exclusive(slot, async () => {

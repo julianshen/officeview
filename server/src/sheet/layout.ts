@@ -11,6 +11,7 @@ import type { AxisMetrics, AxisSizeInterval } from '../../../src/xlsx/view/contr
 import type { XlsxSheet } from '../../../src/xlsx/types'
 import { LAYOUT_LIMITS, LayoutTooLarge, type StreamSheetLayout } from '../../../src/stream/sheet-wire'
 import type { SheetSnapshot } from './snapshot'
+import type { WireSizes } from './view-state'
 
 /** The snapshot's geometry is a diagnostic (its axes could not be built): there is no layout to serve. */
 export class LayoutUnavailable extends Error { constructor() { super('sheet geometry unavailable'); this.name = 'LayoutUnavailable' } }
@@ -112,4 +113,25 @@ export function buildStreamLayout(s: SheetSnapshot, sheetId: string, declared?: 
     merges, ...(used ? { used } : {}), filters,
     sort: null, filterSummary: [], authorHidden, counts: { visibleRows: totalRows - collapsedBelow, totalRows },
   }
+}
+
+/**
+ * Stage 4b: what the docRef's worker answers a layout job with: the identity layout, plus `coverageUnknown` (the
+ * snapshot's base coverage is unknown under `'visible-only'`), which ws.ts reads to refuse `sheet-resize`
+ * `coverage-unknown`. `coverageUnknown` never travels: `encodeSheetLayout` reads only the wire fields, and
+ * `sessionLayout` drops it.
+ */
+export type ServerSheetLayout = StreamSheetLayout & { coverageUnknown?: true }
+
+/**
+ * Stage 4b (P11): the identity layout `base` under a session's view: its current `viewGen`, and the session's sizes as
+ * `sessionRows`/`sessionCols` (`[index, px]`, ascending), each present only when non-empty, so an identity view is the
+ * 4a layout key for key. `rows`/`cols` stay the authored sizes: the client merges the session's over them
+ * (`streamSheetGeometry`), as `buildSheetGeometry` does.
+ */
+export function sessionLayout(base: StreamSheetLayout, viewGen: number, sizes: WireSizes): StreamSheetLayout {
+  const { coverageUnknown: _c, sessionRows: _r, sessionCols: _k, ...rest } = base as ServerSheetLayout
+  const sessionCols = sizes.filter((e) => e.axis === 'col').map((e): [number, number] => [e.index, e.px])
+  const sessionRows = sizes.filter((e) => e.axis === 'row').map((e): [number, number] => [e.index, e.px])
+  return { ...rest, viewGen, ...(sessionRows.length ? { sessionRows } : {}), ...(sessionCols.length ? { sessionCols } : {}) }
 }
