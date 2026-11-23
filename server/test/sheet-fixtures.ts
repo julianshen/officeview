@@ -257,6 +257,20 @@ export async function unfilledShapeOverText(): Promise<Uint8Array> {
   return sheetWorkbook(rows, st.list, async (zip) => { await addDrawing(zip, 0, insideB2()) })
 }
 
+/**
+ * PR #104 fix 1: A1:A4 merged with A1 = `MERGED-A1` (B1:B4 hold `CELL-r-2`), under an unfilled box strictly inside
+ * A3:A4 (x 8..56, y 44..76 CSS px). A1's own row box (y 0..20) misses the drawing; its merged rectangle (y 0..80)
+ * meets it, so A1 is covered. B1:B4 stay clear.
+ */
+export async function shapeOverMergeTail(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [1, 2, 3, 4].map((r) => ({ r, cells: [...(r === 1 ? [textCell(st, 'A1', 'MERGED-A1')] : []), textCell(st, `B${r}`, `CELL-${r}-2`)] }))
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, twoCellAnchorXml({ col: 0, row: 2, colOffPx: 8, rowOffPx: 4 }, { col: 0, row: 3, colOffPx: 56, rowOffPx: 16 },
+      rectShapeXml({ id: 2, name: 'Unfilled', offPx: [8, 44], extPx: [48, 32], fill: null, line: '404040' })))
+  }, { merges: ['A1:A4'] })
+}
+
 /** B1:B3 of `unfilledShapeOverDataBar`; B2 (20) sits under the box. */
 export const DATA_BAR_VALUES = Object.freeze([10, 20, 30])
 /**

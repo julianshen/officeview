@@ -217,6 +217,11 @@ export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): B
     const b = metrics.sourceCellToLogical({ row, col })
     return b ? { left: b.x, top: b.y, right: b.x + b.width, bottom: b.y + b.height } : undefined
   }
+  /** A merge cell's painted rectangle: the merge's, joined with the cell's own box. */
+  const mergedBox = (merge: { minRow: number; minCol: number; maxRow: number; maxCol: number }, own: Box): Box => {
+    const a = gridBox(merge.minRow, merge.minCol), z = gridBox(merge.maxRow, merge.maxCol)
+    return a && z ? { left: Math.min(a.left, own.left), top: Math.min(a.top, own.top), right: Math.max(z.right, own.right), bottom: Math.max(z.bottom, own.bottom) } : own
+  }
   const anyMeets = (b: Box) => extents.some((e) => meets(b, e))
   const covered = new Set<number>()
   let count = 0
@@ -226,13 +231,14 @@ export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): B
     for (const row of sheet.rows) {
       for (const cell of row.cells) {
         const r = cellSourceRow(row, cell), c = cell.col
-        let box = gridBox(r, c)
-        if (!box || box.top >= union.bottom || box.bottom <= union.top) continue
+        const own = gridBox(r, c)
+        if (!own) continue
+        // The vertical early-out tests the merged rectangle, never a merge cell's own row box (PR #104 fix 1): a
+        // merge anchor whose own row misses the drawings can still paint under them through the rows below it.
         const merge = geometry.merges.first({ r0: r, r1: r, c0: c, c1: c })
-        if (merge) {
-          const a = gridBox(merge.minRow, merge.minCol), z = gridBox(merge.maxRow, merge.maxCol)
-          if (a && z) box = { left: Math.min(a.left, box.left), top: Math.min(a.top, box.top), right: Math.max(z.right, box.right), bottom: Math.max(z.bottom, box.bottom) }
-        } else {
+        let box = merge ? mergedBox(merge, own) : own
+        if (box.top >= union.bottom || box.bottom <= union.top) continue
+        if (!merge) {
           const sides = spillSides(cell, cell.style)
           if (sides.left || sides.right) {
             const room = cellTextOverflow(geometry, { row: r, col: c })
@@ -263,8 +269,10 @@ export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): B
     covered(row: number, col: number): boolean {
       if (!isValidCoordinate(row, col)) return false
       if (covered.has(row * MAX_COLS + col)) return true
-      const box = extents.length ? gridBox(row, col) : undefined
-      return box !== undefined && anyMeets(box)
+      const own = extents.length ? gridBox(row, col) : undefined
+      if (!own) return false
+      const merge = geometry.merges.first({ r0: row, r1: row, c0: col, c1: col })
+      return anyMeets(merge ? mergedBox(merge, own) : own)
     },
   }
 }

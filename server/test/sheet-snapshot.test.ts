@@ -22,7 +22,7 @@ import { augmentedFixtures } from './fixtures'
 import { rejection } from './fixtures/rejection'
 import {
   cfToday, cfTodayFormula, crossSheetCoveredRef, sparklineUnderShape, CF_TODAY_SERIALS, DATA_BAR_VALUES, rotatedBox, savedFormula, spillUnderShape, SPILL_TEXT,
-  unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor, labelBesideShape, LONG_LABEL, BOLD_REACH_LABEL,
+  shapeOverMergeTail, unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor, labelBesideShape, LONG_LABEL, BOLD_REACH_LABEL,
 } from './sheet-fixtures'
 
 const hosts: DocumentHost[] = []
@@ -91,6 +91,18 @@ describe('the servable snapshot (S4 §6.2)', () => {
     expect(full.coverage).toBe('off')
     expect(full.contentPolicy).toBe('full')
     expect(cellAt(full.sheet, 1, 1)!.value).toBe('COVERED-B2')
+  }, 60_000)
+
+  test('a merge anchor is covered when its merged rectangle meets a drawing below its own row', async () => {
+    const bytes = await shapeOverMergeTail()
+    const { snap } = await snapshotOf(bytes)
+    const c = known(snap.coverage)
+    expect(c.covered(0, 0)).toBe(true)
+    expect(c.count).toBe(1)
+    for (let r = 0; r < 4; r++) expect(c.covered(r, 1)).toBe(false)
+    expect(cellAt(snap.sheet, 0, 0)!.value).toBeNull()
+    expect(cellAt(snap.sheet, 0, 1)!.value).toBe('CELL-1-2')
+    expect(cellAt((await snapshotOf(bytes, 'full')).snap.sheet, 0, 0)!.value).toBe('MERGED-A1')
   }, 60_000)
 
   test('covered cells draw no CF', async () => {
