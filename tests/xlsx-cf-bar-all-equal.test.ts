@@ -142,7 +142,7 @@ describe('2a: bar:degenerate-equal-values paints its verified half length on the
   }, 300_000)
 })
 
-describe('2b: the pre-registered all-equal readings are implemented, selectable and unregistered', () => {
+describe('2b: the pre-registered all-equal readings are implemented and selectable (unregistered until 13bba185, then registered)', () => {
   const PRE = ['bar:degenerate-equal-ltr', 'bar:degenerate-equal-rtl', 'bar:degenerate-equal-10-90', 'bar:all-equal-distinct-bounds']
   const HALF_MIN = { rule: 'half-min@x14', measured: ['base-only/gradient', 'base-only/solid', 'x14/gradient', 'x14/solid'], settledBy: ['bar:lengths-default-10-90'] }
   const LAYOUT = { allPositive: SPAN, mixedSign: { origin: 'axis', lengthBasis: 'side' } } as const
