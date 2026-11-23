@@ -25,7 +25,8 @@ export type SheetTextJob =
   | { op: 'find'; query: string; matchCase: boolean; sheetIndex: number; sizes: WireSizes; limit: number }
   | { op: 'copy'; sheetIndex: number; selection: WireSelection; sizes: WireSizes; maxBytes: number }
   | { op: 'a11y'; sheetIndex: number; rows: Array<[number, number]>; cols: [number, number]; sizes: WireSizes }
-  | { op: 'fit'; sheetIndex: number; axis: 'row' | 'col'; index: number; pane: Box; regions: Box[]; sizes: WireSizes }
+  /** `regions` absent (never `[]`): `autoFitSize` then treats the pane as the one visible region, as the local fit does. */
+  | { op: 'fit'; sheetIndex: number; axis: 'row' | 'col'; index: number; pane: Box; regions?: Box[]; sizes: WireSizes }
 export type SheetTextReply =
   | { op: 'find'; hits: Array<[number, number]>; more: boolean } // [row, col] in local order; more: hits past `limit`
   | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; bytes: number }
@@ -105,7 +106,9 @@ export function fitAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'fit'
   const extent = { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }
   const fit = createFitMeasure({ admit: ({ heap, native }) => heap + native <= FIT_MEASURE_BYTES, measureText, sheet: view.sheet })
   return autoFitSize(job.axis === 'col' ? 'column' : 'row', job.index, {
-    geometry, sheet: view.sheet, pane: clampBox(job.pane, extent), regions: job.regions.map((r) => clampBox(r, extent)),
+    // Fix round 1: no regions is `undefined`, never `[]` (`autoFitSize` reads `regions ?? [pane]`; `[]` would mean no
+    // visible rows at all).
+    geometry, sheet: view.sheet, pane: clampBox(job.pane, extent), ...(job.regions?.length ? { regions: job.regions.map((r) => clampBox(r, extent)) } : {}),
     knownRows: (limit) => view.sheet.rows.slice(0, limit).map((r) => r.index),
     measure: fit.measure, allocation: fit.allocation,
   })

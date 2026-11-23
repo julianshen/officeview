@@ -712,3 +712,15 @@ export async function cfLongColumn(kind: 'fill' | 'top1-hidden'): Promise<Uint8A
     await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting', `<conditionalFormatting sqref="A1:A${CF_LONG_ROWS}">${rule}</conditionalFormatting>`))
   })
 }
+
+/** `tallColumn`: A1:A3000 hold `a`, but A2901 holds `TALL-LONG-TEXT-IN-A2901-FAR-PAST-THE-AUTOFIT-ROW-BOUND`. */
+export const TALL_COLUMN = Object.freeze({ rows: 3000, longRow: 2900 })
+/**
+ * Task 5 fix round 1: more rows than `AUTOFIT_MAX_ROWS` (2,048) in column A, with the one long text at row 2901.
+ * A column fit with no visible rows reads only the first rows it knows and misses it; a pane scrolled to it does not.
+ */
+export async function tallColumn(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: TALL_COLUMN.rows }, (_, i) => ({ r: i + 1, cells: [textCell(st, `A${i + 1}`, i === TALL_COLUMN.longRow ? 'TALL-LONG-TEXT-IN-A2901-FAR-PAST-THE-AUTOFIT-ROW-BOUND' : 'a')] }))
+  return sheetWorkbook(rows, st.list)
+}

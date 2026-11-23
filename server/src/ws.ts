@@ -1013,7 +1013,7 @@ export function createStreamServer(o: StreamServerOptions) {
       if (runs.some((r) => r.start <= args.index && args.index <= r.end)) return refuse(ws, reqId, 'hidden-target')
       let r: SheetTextReply
       try {
-        r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'fit', sheetIndex: args.sheetIndex, axis: args.axis, index: args.index, pane: args.pane, regions: args.regions ?? [], sizes }, undefined, ws.data.gone.signal)
+        r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'fit', sheetIndex: args.sheetIndex, axis: args.axis, index: args.index, pane: args.pane, ...(args.regions?.length ? { regions: args.regions } : {}), sizes }, undefined, ws.data.gone.signal)
       } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
       if (!alive()) return
       // Fail closed: only a fit answer with a finite size travels.

@@ -19,7 +19,7 @@ import { textInputs } from '../src/sheet/text-ops'
 import { sheetTextView, textDocument } from '../src/sheet/text-view'
 import { Client, disposePool, start } from './harness'
 import { rejectionMessage } from './fixtures/rejection'
-import { cfHiddenFormat, slidUnderAnchor, textGrid, TEXT_GRID, unfilledShapeOverText, unresolvedAnchor } from './sheet-fixtures'
+import { cfHiddenFormat, slidUnderAnchor, tallColumn, TALL_COLUMN, textGrid, TEXT_GRID, unfilledShapeOverText, unresolvedAnchor } from './sheet-fixtures'
 
 const hosts: DocumentHost[] = []
 afterAll(async () => {
@@ -122,6 +122,22 @@ describe('sheet-fit (P9, P12)', () => {
     d.close(); await g.stop()
   }, 30_000)
 
+  test('fit without regions puts the pane rows first (fix round 1)', async () => {
+    // More rows than AUTOFIT_MAX_ROWS: a pane scrolled to row 2901 must read it, as local autoFitSize with no regions does.
+    const bytes = await tallColumn()
+    const { saved } = await projectedOf(bytes)
+    const sheet = saved.sheets[0]!
+    const pane = { x: 0, y: TALL_COLUMN.longRow * 20 - 100, width: 640, height: 400 }
+    const scrolled = localFit(sheet, 'column', 0, pane), top = localFit(sheet, 'column', 0)
+    // The fixture can tell them apart: at the top the long text is past the row bound.
+    expect(scrolled).toBeGreaterThan(top)
+    const h = await start({ doc: bytes })
+    const c = await open(h.url)
+    expect(await fit(c, { axis: 'col', index: 0, pane })).toMatchObject({ type: 'sheet-fit-result', size: scrolled })
+    expect(await fit(c, { axis: 'col', index: 0 })).toMatchObject({ type: 'sheet-fit-result', size: top })
+    c.close(); await h.stop()
+  }, 30_000)
+
   test('fit is on without copy', async () => {
     const bytes = await textGrid()
     const { saved } = await projectedOf(bytes)
@@ -212,7 +228,7 @@ describe('sheet-fit (P9, P12)', () => {
     let held = 0
     doc.textBudget = { reserve: (b: number) => { held += b }, release: (b: number) => { held -= b } }
     const clock: SheetClock = { day: '2026-11-23', timeZone: 'UTC' }
-    const fitJob = (px: number) => ({ op: 'fit' as const, sheetIndex: 0, axis: 'col' as const, index: 1, pane: PANE, regions: [], sizes: px ? [{ axis: 'col' as const, index: 3, px }] : [] })
+    const fitJob = (px: number) => ({ op: 'fit' as const, sheetIndex: 0, axis: 'col' as const, index: 1, pane: PANE, sizes: px ? [{ axis: 'col' as const, index: 3, px }] : [] })
     const first = await host.sheetText(docKey, clock, fitJob(0))
     expect(first).toEqual({ op: 'fit', size: expect.any(Number) })
     const one = held
