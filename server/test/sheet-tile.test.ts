@@ -67,13 +67,14 @@ describe('sheet tiles (S4 §6.5)', () => {
     expect(sha(c.png)).not.toBe(sha(a.png))
   })
 
-  test('a tile\'s bytes do not depend on what its host painted before (shared layout cache, mark state)', async () => {
-    const warmUp: Array<Partial<TileJob>> = [{ col: 1 }, {}, { zoomStep: 1, dpr: 2 }, { zoomStep: 8, col: 2, row: 3 }, { zoomStep: 0, mark: { kind: 'viewer', text: 'someone else' } }, { palette: 'dark' }, { zoomStep: 10, dpr: 2 }]
-    const cfDay = { clock: { day: '2026-11-22', timeZone: 'UTC' } }
-    for (const [make, targets] of [
-      [grid500x100, [{ mark: { kind: 'fixed' } }, { zoomStep: 1, dpr: 2, mark: { kind: 'fixed' } }, { zoomStep: 9, dpr: 2, col: 1 }]],
-      [cfToday, [{ ...cfDay, mark: { kind: 'fixed' } }, { ...cfDay, zoomStep: 1, dpr: 2 }, { ...cfDay, zoomStep: 9 }]],
-    ] as Array<[() => Promise<Uint8Array>, Array<Partial<TileJob>>]>) {
+  const warmUp: Array<Partial<TileJob>> = [{ col: 1 }, {}, { zoomStep: 1, dpr: 2 }, { zoomStep: 8, col: 2, row: 3 }, { zoomStep: 0, mark: { kind: 'viewer', text: 'someone else' } }, { palette: 'dark' }, { zoomStep: 10, dpr: 2 }]
+  const cfDay = { clock: { day: '2026-11-22', timeZone: 'UTC' } }
+  // One test per workbook (PR #104: the combined test ran 5.48 s on CI's Linux runner).
+  for (const [name, make, targets] of [
+    ['grid500x100', grid500x100, [{ mark: { kind: 'fixed' } }, { zoomStep: 1, dpr: 2, mark: { kind: 'fixed' } }, { zoomStep: 9, dpr: 2, col: 1 }]],
+    ['cfToday', cfToday, [{ ...cfDay, mark: { kind: 'fixed' } }, { ...cfDay, zoomStep: 1, dpr: 2 }, { ...cfDay, zoomStep: 9 }]],
+  ] as Array<[string, () => Promise<Uint8Array>, Array<Partial<TileJob>>]>) {
+    test(`a tile's bytes do not depend on what its host painted before (shared layout cache, mark state): ${name}`, async () => {
       const bytes = await make()
       const warm = await opened(bytes)
       for (const o of warmUp) await warm.host.renderTile(warm.docKey, job({ ...o, ...('clock' in targets[0]! ? cfDay : {}) }))
@@ -84,8 +85,8 @@ describe('sheet tiles (S4 §6.5)', () => {
         const later = await warm.host.renderTile(warm.docKey, job(t))
         expect([JSON.stringify(t), sha(later.png)]).toEqual([JSON.stringify(t), sha(first.png)])
       }
-    }
-  })
+    })
+  }
 
   test('the tile bound is tileRangeFor\'s last + 1 (F8)', () => {
     for (const [extent, zoom, dpr] of [[1_048_576, 0.33, 1], [1_048_576, 1, 1], [20_971_520, 4, 2], [100, 0.25, 1], [0, 1, 1]] as const) {
