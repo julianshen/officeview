@@ -88,6 +88,8 @@ const NOTES_PLAN_BYTES = 4 * 1024 * 1024
 const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 'copy', 'a11y'])
 /** Stage 4b (P1): the ops served only to a `sheet-view@1` session; every other session refuses them `unsupported-op`. */
 const SHEET_VIEW_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y', 'sheet-fit', 'sheet-resize'])
+/** Stage 4b: the SHEET_VIEW_OPS that ride the `'text'` rate class (the rest ride `'sheet'`). */
+const SHEET_TEXT_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y'])
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -1475,7 +1477,11 @@ export function createStreamServer(o: StreamServerOptions) {
     const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
     if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
     // Stage 4b (P1): the sheet-view ops need `sheet-view@1` (units mode and a 4a tiles session refuse them).
-    if (SHEET_VIEW_OPS.has(m.type as string) && !sessionDoc.get(ws.data.sid ?? '')?.sheetView) return refuse(ws, m.reqId, 'unsupported-op')
+    if (SHEET_VIEW_OPS.has(m.type as string) && !sessionDoc.get(ws.data.sid ?? '')?.sheetView) {
+      // Controller ruling: an off-mode find, copy or a11y is charged one 'text' check first (refuse-only, as Stage 3's text ops); fit and resize are not charged.
+      if (SHEET_TEXT_OPS.has(m.type as string) && ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, m.reqId, 'rate-limited')
+      return refuse(ws, m.reqId, 'unsupported-op')
+    }
     // The tile ops (never served in units mode): `sheet-layout` (Task 6), `tiles` and `sheet-cancel` (Task 9).
     if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') {
       if (mode !== 'tiles') return refuse(ws, m.reqId, 'unsupported-op')
