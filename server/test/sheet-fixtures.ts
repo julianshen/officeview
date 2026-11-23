@@ -762,3 +762,14 @@ export async function bigText(): Promise<Uint8Array> {
   })
   return sheetWorkbook(rows, st.list)
 }
+
+/** `a11yFocus`: its text cells, by 0-based (row, col). */
+export const A11Y_FOCUS = Object.freeze({ b1: [0, 1, 'FOCUS-B1'] as const, b3: [2, 1, 'FOCUS-B3'] as const, b5: [4, 1, 'FOCUS-B5'] as const })
+/**
+ * Task 8 (ruling F10): B1, B3 and B5 hold `FOCUS-B1`, `FOCUS-B3` and `FOCUS-B5` on sheet `S`; B2 and B4 are empty.
+ * Nothing is covered, merged, hidden or conditionally formatted, so every text cell is servable.
+ */
+export async function a11yFocus(): Promise<Uint8Array> {
+  const st = stringTable()
+  return sheetWorkbook([A11Y_FOCUS.b1, A11Y_FOCUS.b3, A11Y_FOCUS.b5].map(([r, , text]) => ({ r: r + 1, cells: [textCell(st, `B${r + 1}`, text)] })), st.list)
+}

@@ -1,7 +1,7 @@
 /**
  * Stage 4b (plan P2, P6–P10): the `sheet-text` pool job. Each op runs a local engine over the text view (Task 1), so
- * parity with local mode holds by construction: `fit` (`autoFitSize`), `find` (`WorkbookFind`) and `copy`
- * (`serializeSelection`) here; `a11y` in Task 8.
+ * parity with local mode holds by construction: `fit` (`autoFitSize`), `find` (`WorkbookFind`), `copy`
+ * (`serializeSelection`) and `a11y` (`formatCellPresentation`).
  *
  * `textInputs` is the one place the ops get the local viewer's inputs (`InteractiveSheetDoc.tsx` find ~1814–1857 and
  * copy ~2611–2659): the row order, the row and column visibility, the store and the scope-aware display text. Fit
@@ -9,6 +9,7 @@
  * scope). No op reads a clock: the session clock is in the job and the view.
  */
 import type { Box, WireSelection } from '../../../src/stream/sheet-wire'
+import { formatCellPresentation } from '../../../src/components/xlsx/formatPresentation'
 import { autoFitSize, createFitMeasure } from '../../../src/xlsx/view/autoFit'
 import type { Measure } from '../../../src/xlsx/view/axisSizes'
 import type { RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
@@ -37,7 +38,7 @@ export type SheetTextJob =
 export type SheetTextReply =
   | { op: 'find'; hits: Array<[number, number]>; more: boolean } // [row, col] in local order; more: hits past `limit`
   | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; bytes: number }
-  | { op: 'a11y'; cells: Array<[number, number, string]> }
+  | { op: 'a11y'; cells: Array<[number, number, string]> } // [row, col, text]: non-empty texts only, row by row
   | { op: 'fit'; size: number }
 
 /** The measurement scratch one fit may hold (`createFitMeasure`'s admitted heap + native bytes); past it the fit is
@@ -238,6 +239,44 @@ export async function copyAnswer(view: TextView, job: Extract<SheetTextJob, { op
   return { op: 'copy', text: result.text, paragraphs }
 }
 
+/** The formatting one a11y job may hold at once (per cell, while its text is formed); past it the job fails. */
+export const A11Y_FORMAT_BYTES = 16 * 1024 * 1024
+const A11Y_DOC_ID = 'sheet-a11y'
+
+/**
+ * One window's a11y text (P10): each cell the local grid would present (the authored-visible rows and the non-zero-width
+ * columns of the window, from `textInputs`), as local `presentCell` gives it (`InteractiveSheetDoc.tsx` ~274–282):
+ * `formatCellPresentation(view.sheet, cell, budget, false, cf)`, where `cf` is the view's CF scope's effective style
+ * over the region-resolved style (no scope: no `cf`, the cell's own style, as locally). The CF descriptor is omitted
+ * (S4 §6.7's default). A withheld cell is blank in the view, so its text is `''` and it is not listed. A cell whose
+ * formatting is refused (`state: 'error'`) fails the job: its fallback text never travels.
+ */
+export function a11yAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'a11y' }>, workbook: XlsxDocument): Array<[number, number, string]> {
+  const geometry = view.geometry
+  if (geometry.kind !== 'ready') throw new Error('sheet-a11y: sheet geometry unavailable')
+  const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), A11Y_DOC_ID)
+  const inputs = textInputs(view, source)
+  const budget = jobBudget(A11Y_FORMAT_BYTES)
+  const scope = view.scope
+  const [c0, c1] = job.cols
+  const out: Array<[number, number, string]> = []
+  for (const [r0, r1] of job.rows) {
+    for (let row = r0; row <= r1; row++) {
+      if (!inputs.visibility.visible(inputs.order.sourceToDisplay(row))) continue
+      const cells = geometry.cellsOf(row)
+      if (!cells) continue
+      const inWindow = cells.filter((c) => c.col >= c0 && c.col <= c1 && inputs.columns.visible(c.col)).sort((a, b) => a.col - b.col)
+      for (const cell of inWindow) {
+        const cf = scope ? { gen: scope.gen, style: scope.effectiveStyle(row, cell.col, inputs.styleOf(cell)) } : undefined
+        const p = formatCellPresentation(view.sheet, cell, budget, false, cf)
+        if (p.state === 'error') throw new Error('sheet-a11y: formatting exceeds its budget')
+        if (p.text !== '') out.push([row, cell.col, p.text])
+      }
+    }
+  }
+  return out
+}
+
 /** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views;
  * `workbook`: the servable workbook the text document is built over). */
 export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; measureText: Measure }): Promise<SheetTextReply> {
@@ -251,9 +290,10 @@ export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetI
       const view = await deps.viewOf(job.sheetIndex, job.sizes)
       return await copyAnswer(view, job, deps.workbook())
     }
-    // Task 8 replaces this.
-    case 'a11y':
-      throw new Error(`sheet-text: op '${job.op}' is not implemented`)
+    case 'a11y': {
+      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      return { op: 'a11y', cells: a11yAnswer(view, job, deps.workbook()) }
+    }
     default: {
       const never: never = job
       throw new Error(`sheet-text: unknown op ${JSON.stringify((never as { op?: unknown }).op)}`)

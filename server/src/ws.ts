@@ -47,11 +47,12 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { copyArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { a11yArgs as sheetA11yArgs, copyArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
 import { sessionLayout, type ServerSheetLayout } from './sheet/layout'
+import { runSheetA11y } from './sheet/a11y-turn'
 import { runSheetCopy } from './sheet/copy-turn'
 import { SessionViews, ViewStateLedger, type WireSizes } from './sheet/view-state'
 
@@ -1155,6 +1156,44 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
+  /**
+   * Stage 4b (P10): `sheet-a11y {reqId, token, sheetId, viewGen, rows, cols}` on a `sheet-view@1` session, in `onA11y`'s
+   * order: the token (`textOp`); `a11yArgs` (≤ 2,000 cells), else `policy-refused` (uncharged); the `'text'` rate
+   * (refuse-only), charged before the off refusal; `off` ⇒ `text-unavailable`; the fingerprint (else close
+   * `layout-changed`). Then `runSheetA11y` queues it on the sid's copy queue: the mode in force (a `focused` request is
+   * 1×1), `stale-view` when the sheet's viewGen is no longer the request's (ruling F8: after the token and the charge,
+   * before any count or audit row), the pool's a11y job over the text view at that viewGen's sizes, the shared session
+   * quota (`focused` with text), the audit row (`sheetId`, the window's bounding `rect`, the sheet index as the unit
+   * range) and the `sheet-a11y-result` chunks. A queued request re-charges the document ledger when it runs.
+   */
+  async function onSheetA11y(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = sheetA11yArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    // Every valid authenticated a11y request is charged, 'off' sessions included.
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (sd.policy.textA11y === 'off') return refuse(ws, reqId, 'text-unavailable')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    const i = args.sheetIndex
+    await runSheetA11y({
+      slot: sd, reqId, sheetIndex: i, sheetId: args.sheetId, viewGen: args.viewGen, rows: args.rows, cols: args.cols,
+      view: () => ({ viewGen: sd.views.viewGen(i), sizes: sd.views.canonical(i) }),
+      mode: () => sd.policy.textA11y,
+      caps: () => sd.policy.copy,
+      job: (sizes) => {
+        // A queued request can outlive the parse: charge it when it runs.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'a11y', sheetIndex: i, rows: args.rows, cols: args.cols, sizes }, undefined, ws.data.gone.signal)
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'a11y', ...r }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
+    })
+  }
+
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
    * audited and charged before `print-start`; everything after the token
    * await up to `print-start` is synchronous, so two prints cannot both pass
@@ -1758,6 +1797,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'sheet-fit') return onSheetFit(ws, m)
     if (m.type === 'sheet-find') return onSheetFind(ws, m)
     if (m.type === 'sheet-copy') return onSheetCopy(ws, m)
+    if (m.type === 'sheet-a11y') return onSheetA11y(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
