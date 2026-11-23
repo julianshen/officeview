@@ -189,6 +189,16 @@ export function verifyCellExpectations(
       const styled = exp.fillRgb !== undefined || exp.fontRgb !== undefined || exp.bold !== undefined || exp.underline !== undefined || exp.strikethrough !== undefined || exp.borderTop !== undefined || exp.borderBottom !== undefined
       if (!styled) continue
     }
+    // An unmeasured Stage 5 case: `s5Case` seeds every cell matched: false as a placeholder until capture replaces it, so a
+    // declared positive control (a literal `cellIs greaterThan 0` over 1, verified by every measured case) is compared on
+    // the token the case itself declares for it. A withheld or differently painted control fails; nothing else changes.
+    const control = c.stage === 5 && c.status !== 'measured' ? stage5SeedPositiveControls(c).get(exp.ref.toUpperCase()) : undefined
+    if (control !== undefined) {
+      const got = stage5TokenOfActual(actual)
+      const shown = actual.unresolved ? 'withheld' : `${got.fill}${got.strike ? '+strike' : ''}`
+      if (shown !== control) return `Positive control ${exp.ref}: expected ${control}, but production shows ${shown}`
+      continue
+    }
     if (exp.matched) {
       // Task 39 (fix rounds 1-5): a Stage 5 unresolved cell was checked against the counterfactual above. A Stage 2 one is
       // justified against Excel's observation in verifyCaseCells, and may never carry a painted fill (codex final P2).
@@ -387,6 +397,18 @@ export function stage5TokenOfActual(actual: ActualCellOutcome): Stage5Production
   const visual = 'icon' in actual && 'bar' in actual ? stage5VisualToken(actual.bar, actual.icon, slots) : undefined
   return { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: slots,
     ...(visual !== undefined ? { visual } : {}), ...(actual.properties ? { properties: actual.properties } : {}), ...('scaleArgb' in actual ? { colorScale: stage5ScaleToken(actual.scaleArgb) } : {}), ...(actual.visualDetail !== undefined ? { visualDetail: actual.visualDetail } : {}) }
+}
+
+/** An unmeasured Stage 5 case's declared positive controls in the main observation table (no pre:/calc:/post: prefix),
+ * upper-cased ref -> the token Excel shows there (`S5_POSITIVE_CONTROLS`: a fill ARGB, or `none+strike`). */
+export function stage5SeedPositiveControls(c: CfOracleCase): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const cfg of c.formulaConfigurations ?? []) {
+    for (const [ref, token] of Object.entries(cfg.positiveControls ?? {})) {
+      if (!/^(pre|calc|post):/.test(ref)) out.set(ref.toUpperCase(), token)
+    }
+  }
+  return out
 }
 
 /** The refs a Stage 5 case is checked at: its expected cells and Excel's observed ones. */
