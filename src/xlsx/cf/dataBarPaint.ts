@@ -77,8 +77,9 @@ export const CF_BAR_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['bar:
 export function barPaintable(bar: CfBarDescriptor | undefined, model: CfBarRenderModel = CF_BAR_RENDER_MODEL, check: (cap: string) => boolean = defaultHasEvidence): bar is CfBarDescriptor {
   if (!bar) return false
   // A descriptor crosses the wire: a fraction that is not a finite number in 0..1 makes it invalid, and an invalid
-  // descriptor neither paints, hides text nor announces (fail closed). `valueFraction` is the announced position.
-  for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction, bar.valueFraction]) if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1) return false
+  // descriptor neither paints, hides text nor announces (fail closed). `valueFraction` is the announced position; it is
+  // absent only when the value has no position (lo = hi, owner ruling Q1), and invalid when present but not in 0..1.
+  for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction, ...('valueFraction' in bar ? [bar.valueFraction] : [])]) if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1) return false
   for (const cap of CF_BAR_PAINT_CAPABILITIES) if (!check(cap)) return false
   if (!bar.isGradient) return true
   return bar.borderColor !== undefined ? barGradientBorderModel(model, check) !== undefined : barGradientModel(model, check) !== undefined

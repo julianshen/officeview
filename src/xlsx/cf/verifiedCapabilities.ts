@@ -156,6 +156,7 @@ export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
 ])
 
 export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
+  'bar:all-equal-distinct-bounds',
   'bar:axis-automatic',
   'bar:axis-middle',
   'bar:axis-none',
@@ -174,6 +175,9 @@ export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
   'bar:composition-overlapping-bars',
   'bar:composition-with-scale',
   'bar:degenerate-beyond-bounds',
+  'bar:degenerate-equal-10-90',
+  'bar:degenerate-equal-ltr',
+  'bar:degenerate-equal-rtl',
   'bar:degenerate-equal-values',
   'bar:degenerate-inverted',
   'bar:degenerate-single-cell',
@@ -423,6 +427,7 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'aboveAverage:stdDev-4',
   'aboveAverage:stdDev-negative',
   'aboveAverage:stdDev-with-equalAverage',
+  'bar:all-equal-distinct-bounds',
   'bar:axis-automatic',
   'bar:axis-middle',
   'bar:axis-none',
@@ -442,6 +447,9 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'bar:composition-overlapping-bars',
   'bar:composition-with-scale',
   'bar:degenerate-beyond-bounds',
+  'bar:degenerate-equal-10-90',
+  'bar:degenerate-equal-ltr',
+  'bar:degenerate-equal-rtl',
   'bar:degenerate-equal-values',
   'bar:degenerate-inverted',
   'bar:degenerate-single-cell',

@@ -68,7 +68,7 @@ export function describeCfWin(
   unresolvedReason: string | undefined,
   locale: string | undefined,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
-  bar?: Readonly<{ fraction: number }>,
+  bar?: Readonly<{ fraction?: number }>,
   icon?: Readonly<{ bucket: number; buckets: number }>,
 ): CfDescriptor | undefined {
   if (unresolvedReason !== undefined) return describeCfUnavailable(locale)
@@ -86,7 +86,8 @@ export function describeCfWin(
   // Ruling S3-P: a painted bar announces a fixed label and the value's integer position in the range (the value text
   // itself stays in the accessible name). It precedes a scale and the DXF aspects: one bounded label per cell. With a
   // painted icon too, the icon's label follows the bar's (S4-N); past the bound only the bar's is announced.
-  if (bar !== undefined && Number.isFinite(bar.fraction)) {
+  // A bar with no value position (lo = hi, owner ruling Q1, 2026-11-23) announces nothing: no "N% of range".
+  if (bar !== undefined && bar.fraction !== undefined && Number.isFinite(bar.fraction)) {
     const pct = Math.max(0, Math.min(100, Math.round(bar.fraction * 100)))
     const text = isZh ? `資料橫條 ${pct}%` : `Data bar, ${pct}% of range`
     const joined = iconText !== undefined ? `${text}${tableFor(locale).joiner}${iconText}` : undefined

@@ -71,7 +71,8 @@ describe('stage3-bar-bounds-num (synthetic capture)', () => {
     expect(c.status).toBe('measured')
     expect(CF_STAGE3_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE3_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
-    expect(CF_STAGE3_CASES.at(-1)!.id).toBe(ID)
+    // Appended last in its time; stage3-bar-all-equal (the all-equal follow-up) is appended after it.
+    expect(CF_STAGE3_CASES.at(-2)!.id).toBe(ID)
     // stage3-bar-lengths keeps its column E (now a cross-check) and its capture.
     expect(CF_STAGE3_CASES.find(x => x.id === 'stage3-bar-lengths')!.markers.some(m => m.capabilityId === CAP)).toBe(true)
     expect(c.markers.map(m => m.capabilityId)).toEqual([CAP, CAP])

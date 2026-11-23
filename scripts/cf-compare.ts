@@ -14,6 +14,7 @@
  * and enforces per-case tolerances (`meanAbs <= 2.0/255`, `rowMax <= 4.0/255`, `strong <= round(0.003 * W * H)`).
  * Static/print/export use the shared prepared Paintable; unmeasured references remain pending.
  */
+import type { CfBarDescriptor } from '../src/xlsx/cf/model'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
@@ -455,6 +456,16 @@ export function verifyCaseCells(
   return undefined
 }
 
+/**
+ * Owner ruling Q1 (2026-11-23): a bar over a statistical all-equal scope (lo = hi) announces no position, so it has no
+ * descriptor. It counts as applied only where the presentation path paints it: the scope's `barAt` (the painter's own
+ * withholds: merged hosts, paint gates, `barWithheld`) reports it, and it carries no `valueFraction`.
+ */
+export function q1BarPainted(scope: { barAt?(row: number, col: number): CfBarDescriptor | undefined } | undefined, row: number, col: number): boolean {
+  const bar = scope?.barAt?.(row, col)
+  return bar !== undefined && !('valueFraction' in bar)
+}
+
 export async function compareInteractiveViewport(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
   const oracleRef = `${c.id} [${c.status}]`
   const workbookHash = c.expected.savedSha256
@@ -588,7 +599,10 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     // A data bar is no cell style (Ruling S3-I) and Excel's DisplayFormat records no fill for it, so on a bar cell only
     // the style counts as applied (Task 39 fix round 1, F2: E2/G2/Y2 zero-length bars at the column minimum).
     const barCell = c.markers.some(m => m.ruleType === 'dataBar' && isCellInSqref(a1Of(row, col), m.sqref))
-    const applied = hasStyle || (hasWinningDesc && !(barCell && c.stage === 5))
+    // A bar over a statistical all-equal scope announces no position (owner ruling Q1, 2026-11-23), so it has no
+    // descriptor: there the presentation path's own painted bar is the applied evidence (`q1BarPainted`), never the
+    // service outcome alone (codex pre-capture P2).
+    const applied = hasStyle || (hasWinningDesc && !(barCell && c.stage === 5)) || (c.stage !== 5 && q1BarPainted(scope, row, col))
     const unresolved = outcome === undefined
       || outcome.kind === 'unresolved'
       || (outcome.writes && outcome.writes.length > 0)

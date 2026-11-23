@@ -35,6 +35,13 @@ in git history.
   - **Reach:** 81 captured cells paint exactly: the 14 withheld after `stage2-scale-upper-window` and the 67 of this capture. No captured cell is mispainted, and no other cell moves.
   - **Still withheld:** a 3-colour lower segment bounded by two literal `num` thresholds (the earlier num-segment withhold), a segment with a formula bound in this shape, and every upper-segment cell the earlier withholds cover.
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.18.
+- **Data bars over all-equal ranges now paint where Excel's drawing is measured.** Before, every data bar whose numeric cells were all equal was withheld.
+  - **Lowest / highest value bounds (min/max), all equal:** the bar is half the cell's bar span. It carries no "N% of range" text, since the value has no position in a zero-width range. That holds at 0/100 lengths for the default direction and for explicit left-to-right or right-to-left bars (the right-to-left half grows from the right edge), and at the default 10/90 lengths for the default direction.
+  - **Number bounds with a real range (for example num 0/100) over equal values:** the bar is drawn as for any other value: full at the top bound, the minimum length at the bottom one (no bar at 0/100), proportional in between, and announced at the value's position. All-negative bounds draw at 0/100 only.
+  - **Why:** a pre-registered Excel 16.115 capture (`stage3-bar-all-equal`) matched exactly one reading per shape at every test cell, and every control cell drew as expected (`bar:all-equal-distinct-bounds`, `bar:degenerate-equal-ltr`, `-rtl`, `-10-90`; 350 verified capabilities).
+  - **Reach:** 51 captured cells now match Excel's pixels: the 36 all-equal cells of that capture (at the bottom bound under 0/100, C2:C4 draw no bar, as Excel), `stage3-bar-degenerate` B2:B6 and `stage3-bar-geometry` H2:H6 and I2:I6. No captured cell is mispainted, and no other cell moves.
+  - **Still withheld:** a single numeric cell, equal number bounds (num 0/0), number bounds of mixed sign, gradient or bordered bars, formula bounds, the explicit-direction bars on a right-to-left sheet, and percent or percentile bounds over equal values.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.19 and §14.z.20.
 
 ### Added
 

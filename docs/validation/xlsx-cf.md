@@ -1039,6 +1039,10 @@ the capability lifts):
 | `bar:bounds-percentile` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
 | `bar:lengths-all-negative` | `stage3-bar-lengths` | S3-B and S3-L | pixel-measured | verified | — |
 | `bar:degenerate-equal-values` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:all-equal-distinct-bounds` | `stage3-bar-all-equal` (§14.z.20) | S3-E | pixel-measured | verified (`evaluate`) | — (literal num lo < hi over an all-equal scope: evaluated as usual; mixed sign, gradient, border, formula bounds and all-negative at 10/90 stay withheld) |
+| `bar:degenerate-equal-ltr` | `stage3-bar-all-equal` (§14.z.20) | S3-E, Q2 | pixel-measured | verified (`half`) | — (the verified min/max shape with explicit `leftToRight`, LTR sheet only) |
+| `bar:degenerate-equal-rtl` | `stage3-bar-all-equal` (§14.z.20) | S3-E, Q2 | pixel-measured | verified (`half`, mirrored) | — (explicit `rightToLeft`, LTR sheet only) |
+| `bar:degenerate-equal-10-90` | `stage3-bar-all-equal` (§14.z.20) | S3-E, Q2 | pixel-measured | verified (`half-span`) | — (the verified min/max shape at 10/90: half of the span) |
 | `bar:degenerate-single-cell` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
 | `bar:degenerate-inverted` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
 | `bar:degenerate-beyond-bounds` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
@@ -3427,3 +3431,121 @@ Both stages recompute the justification independently of production (`scripts/cf
   - `collectSegmentCells` treats a guard-boundary cell painted at raw floor the way it treated the withheld one, and records any other painted fill as a harness fault.
   - The num-segment, upper-whole and upper-window searches stay recorded as of their own captures (`SEARCH_EXCLUDED_CASES`, `UPPER_WHOLE_LATER_CASES`, `UPPER_WINDOW_LATER_CASES`).
   - The upper-window rehearsal is pinned as recorded at ed0fccb6, without this registration's evidence.
+
+### 14.z.19 The all-equal follow-up: the verified half registered on its shape; distinct bounds and three twins pre-registered (2026-11-23)
+
+**Why.** Production refused every data bar over an all-equal scope (`cf-degenerate-scope`, Ruling S3-E), whatever its bounds. Two facts were on record:
+- `bar:degenerate-equal-values` was verified and published (`stage3-bar-degenerate` B: min/max over all 42, Excel 86..174, 89 of 177 px, matched `half`), yet never painted.
+- `stage3-bar-geometry` H and I hold all 100 under num 0/100, and Excel drew full bars (§14.z.10).
+
+**Census** (`scripts/cf-refs/bar-all-equal-census.ts`, pinned by `tests/xlsx-cf-bar-all-equal-census.test.ts`):
+- 23 measured cases with a bar, 133 bar rules. No Stage 4 or Stage 5 bar has an all-equal scope.
+- The `cf-degenerate-scope` refusals were exactly `stage3-bar-degenerate` B and C, `stage3-bar-geometry` H and I, and the num 0/0 shapes `stage5-cfvo-formulas` X and `stage5-bar-bounds-formula` D.
+- Half of the span fits B and C only (89 px); it misses H (5 vs 9 px) and I (89 vs 177 px). `evaluate` and `full` both fit H and I (every captured distinct-bounds cell is at hi).
+
+**Owner rulings (2026-11-23).**
+- **Ruling Q1 (the announced position at lo = hi).** Paint the verified half-length bar with no announced percentage: the "Data bar, N% of range" text is omitted when lo = hi. `CfBarDescriptor.valueFraction` is optional and absent only there; nothing else is announced differently.
+- **Ruling Q2 (how wide).** Gate on the exact evidence shape only: min/max bounds, the x14 paired form, minLength 0 / maxLength 100, solid, no border, `context` direction on a left-to-right sheet, automatic axis, positive values (two or more numeric cells, all equal). Everything else stays withheld. The new case adds twins of this shape with explicit `leftToRight`, `rightToLeft` and 10/90 lengths, each with pre-registered readings and production behaviour committed before capture.
+- Single-cell C2, num 0/0, inverted, beyond-bounds and percent shapes stay as they are.
+
+**2a, a registration of existing verified evidence.** `CF_BAR_ALL_EQUAL_PRODUCTION_READINGS` in `src/xlsx/cf/dataBar.ts` registers `half` for `bar:degenerate-equal-values` on its shape (`barAllEqualShape`). No published state changed (the capability was already published). `stage3-bar-degenerate` B2:B6 now paint 0..0.5 of the span, Excel's 86..174 within 1 px. The Lesson 1 bar pins moved to 560 painted / 503 measured / 22 withheld (was 555/498/27).
+
+**2b, pre-registered and unregistered.** Each paints only when registered in that table AND its capability is evidenced; `injectCfBarAllEqualReadings` is the rehearsal seam.
+- `bar:all-equal-distinct-bounds`: two literal num bounds, lo < hi, over an all-equal scope whose value lies within them; not of mixed sign; x14, solid, no border, automatic axis, context LTR, 0/100 or 10/90. Readings: `evaluate` (v), `full` (hi; lo for a negative value), `degenerate-half` (the bounds' midpoint), `none`. Each is an effective value through the usual geometry; the announced position stays the real value's.
+- `bar:degenerate-equal-ltr`: `half`, `none`, `full`.
+- `bar:degenerate-equal-rtl`: `half` (mirrored), `half-ltr`, `none`, `full`.
+- `bar:degenerate-equal-10-90`: `half-span` (0.5), `half-min` (0.45, t = 0.5 through `half-min@x14`), `none`, `full` (0.85).
+- The twins announce no position (Q1).
+
+**3, the case.** `stage3-bar-all-equal` (recipe `docs/validation/xlsx-cf-recipes-stage3.md` §2f), appended last, recipe-pending. It owns the four ids, each in `CF_STAGE3_NONDISCRIMINATING` as "Pre-registered …" until its capture. The hypothesis family gains the knob `allEqual` (first value `evaluate`, so every earlier prediction is unchanged) and three `equal` values (`half-span`, `half-min`, `half-ltr`) after the first three.
+
+**4, rehearsal** (`tests/xlsx-cf-bar-all-equal-case.test.ts`): each of the 15 readings planted on a synthetic capture comes back as the one match; a three-quarter-length plant matches none; each registration (reading + evidence) makes production paint the generated workbook as planted (±1 px), and moves no earlier Stage 3 capture except `stage3-bar-geometry` H2..H6 and I2..I6 under a painting distinct-bounds reading. There `evaluate` and `full` reproduce Excel's px; `degenerate-half` and `none` contradict them.
+
+**Not asked, and withheld.**
+- Mixed-sign bounds: an all-equal scope has no zero cell to locate the automatic axis. The synthetic rehearsal refused it (`bar-edge-unstable`), so production excludes it from the distinct shape.
+- Gradient bars: production's distinct shape is solid only.
+- Percent and percentile over all-equal data: these resolve to lo = hi = v.
+
+**Harness.** `cf-compare`'s interactive adapter counts a ready bar as applied when it has no descriptor (Q1). The conformance `MARKER_ONLY` registry lists the case's non-equal controls J and K.
+
+**Gates.**
+- `npx vitest run tests/xlsx-cf tests/xlsx-viewer tests/worker tests/view`: 276 files, 5770 passed.
+- `tsc` (both configs) clean. `OV_MODULE_MAP=1 vite build` then `check-eager`: eager graph ok.
+- `cf-compare --stage 3` (both modes): the new case is recipe-pending, and the failures equal main's.
+- Audits:
+  - Stage 3: ok, `structural=17/17 pending=1 unverifiedNonDiscriminating=10`, complete.
+  - Stage 5: ok, complete.
+- Nothing was published: the published set is unchanged.
+
+### 14.z.20 The all-equal follow-up: captured; each of the four ids matched one reading and is registered (2026-11-23)
+
+**Why.** §14.z.19 pre-registered `stage3-bar-all-equal`: four ids, their readings and their production behaviour, all committed before any capture (3beeb651, 71d4b96e, 6a2d53f3, f039c659). Recipe: `docs/validation/xlsx-cf-recipes-stage3.md` §2f. Interpretation: `.superpowers/sdd/cf-bar-allequal/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The census:** fa933300.
+2. **2a and the readings:** daed2478, 71d4b96e.
+3. **The case:** 3beeb651, 6a2d53f3, f039c659.
+4. **Capture:** 13bba185 (Excel 16.115). The build opened repair-free; the capture verified, and `--verify-only` re-verified it.
+5. **Registration:** d0c4c18d.
+
+**The capture is sound.**
+- **Controls.** Rows 6..8 (the unconditioned copies) hold no bar pixel in any column, only the number text. J (num 0/100 over 30/60/90: 58, 115, 173 px) and K (num 0/100 at 10/90 over 0/30/100: 10, 56, 163 px) are exactly as every reading predicts. L, the verified shape itself, drew the verified half: 96 of 192 px, `bar:degenerate-equal-values` matched `half` again.
+- **Replicates.** In every all-equal column (B..I, L..O) the three rows are identical, to the pixel; J and K vary by design.
+- **Geometry.** Every bar spans rows top + 2 .. top + 27 and lies within the span 2 px inside its cell's left edge (192 px wide). I's bar (red, the negative fill) and N's are anchored to the span's right end; every other bar to its left end.
+
+**The result.** `verifyCfCase` and `evaluateBarCapabilities` on the real capture, recomputed independently from the PNG (a saturated-pixel scan of every cell) and from the closed formulas (192 px span, round half up). The separation was ≥ 3 px, or bar against none, as pre-registered. Every decisive cell is within 0 px of the one matching reading.
+
+| Id | Decisive cells | Excel drew (px, from the leading inset) | Matched | The others |
+|---|---|---|---|---|
+| `bar:all-equal-distinct-bounds` | B..I, 24 | B 192, C none, D 58, E 134, F 10, G 56, H 163, I 144+48 (red) | `evaluate` at 24/24 | `full` 6/24 (B, H), `none` 3/24 (C), `degenerate-half` 0/24 |
+| `bar:degenerate-equal-ltr` | M, 3 | 96 | `half` | `full` (192) and `none` 0/3 |
+| `bar:degenerate-equal-rtl` | N, 3 | 96+96 (from the right edge) | `half` (mirrored) | `half-ltr` (0+96), `full`, `none` 0/3 |
+| `bar:degenerate-equal-10-90` | O, 3 | 96 | `half-span` | `half-min` (86), `full` (163), `none` 0/3 |
+
+- **`evaluate`** is the reading `stage3-bar-geometry` H and I already supported (Excel full at hi). Neither contradicted reading (`degenerate-half`, `none`) matched any id.
+- **Under distinct bounds an all-equal scope is not degenerate:** Excel draws the value's own position, the minimum length at lo (F, 10/90) and no bar at lo under 0/100 (C).
+- **The 10/90 twin** draws half of the span, not the `half-min@x14` length of t = 0.5. Under 10/90 that also equals (minLength + maxLength) / 2. The two readings agree on every symmetric lengths pair and are not told apart here; production registers the reading only for 10/90.
+
+**Registration.**
+- **`CF_BAR_ALL_EQUAL_PRODUCTION_READINGS`** in `src/xlsx/cf/dataBar.ts`, the seam Phase 1 built, gains `bar:all-equal-distinct-bounds: evaluate`, `bar:degenerate-equal-ltr: half`, `bar:degenerate-equal-rtl: half` and `bar:degenerate-equal-10-90: half-span`.
+- **Their four `CF_STAGE3_NONDISCRIMINATING` entries are removed.** A test pins each matched reading against the table.
+- **Published** with `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5`. Two runs were byte-identical, sha-256 `0f95a5189cea72785180e365548797c6e2c338f38b0ddb5131fb0fcd86a0d7e6`. Exactly the four ids were added: 350 verified, 56 Stage 3.
+- **One narrowing, made after the capture (it withholds and never paints).** The explicit `leftToRight` and `rightToLeft` twins were measured on a left-to-right sheet only, so their shape now also requires `sheetRightToLeft === false` (Q2: the exact evidence shape). The other two ids already required a `context` bar on an LTR sheet.
+- **The shapes registered**, each with x14 pairing, solid fill, no border, automatic axis and two or more numeric cells all equal:
+  - **distinct bounds:** two literal num bounds with lo < hi and the value within them, `context` on an LTR sheet. Non-negative bounds at 0/100 or 10/90; all-negative bounds at 0/100 only (production's all-negative layout is measured at 0/100 only).
+  - **the twins:** min/max bounds with values > 0 at 0/100, explicit `leftToRight` / `rightToLeft` on an LTR sheet; and the same with `context` at 10/90.
+- **Without an id's evidence** its shape is withheld (`cf-degenerate-scope`) exactly as before. The tests rehearse that state by withholding the four ids (`PRE_CAPTURE`).
+
+**Reach.**
+
+| Case | Cells | Before | Now |
+|---|---|---|---|
+| `stage3-bar-all-equal` | B..I (24), M..O (9) | withheld | painted at Excel's px (0 px off; C at lo paints a zero-length bar, no fill, as Excel) |
+| `stage3-bar-all-equal` | L (3), the verified shape | painted since 2a (daed2478) | unchanged, at Excel's 96 px |
+| `stage3-bar-geometry` | H2..H6, I2..I6 (10; 5 designated) | withheld (a recorded finding) | painted full, at Excel's px |
+| every other measured case | — | — | unchanged (the census: no other all-equal bar outside the withheld shapes) |
+
+**Still withheld:**
+- num 0/0 (`stage5-cfvo-formulas` X, `stage5-bar-bounds-formula` D: lo = hi under literal bounds);
+- single-cell C2 (verified at 89 px, not implemented);
+- mixed-sign distinct bounds (no zero cell locates the axis, unmeasurable);
+- gradient or bordered all-equal bars;
+- formula-resolved bounds;
+- all-negative distinct bounds at 10/90;
+- distinct bounds under `leftToRight` / `rightToLeft` or on an RTL sheet;
+- the twins on an RTL or unknown-direction sheet;
+- min/max twins at other lengths or with values ≤ 0;
+- percent and percentile over all-equal data (lo = hi = v);
+- inverted and beyond-bounds shapes.
+
+**Effect on the passes.**
+- **Conformance (Lesson 1).** 607 painted, 550 measured, 17 withheld findings (was 560/503/22). The case's 42 cells are added, and `stage3-bar-geometry`'s five designated H/I cells move from findings to painted; 0 disagreements. The J/K `MARKER_ONLY` entries and the geometry H/I findings are retired.
+- **Census.** Pinned as of its own run (the earlier captures, `PRE_CAPTURE` evidence) and after this capture: 147 rules. The refusals are only C2, X and D.
+- **cf-compare `--stage 3`.**
+  - interactive: 36 pass, 0 pending, 3 unsupported, 4 fail;
+  - paged: 38 pass, 0 pending, 3 unsupported, 2 fail;
+  - the new case passes all 84 cell expectations in both modes;
+  - the failures are main's: the two today-clock cases (interactive only), participation B4 and composition F2.
+- **Audits.**
+  - Stage 3: ok, `structural=17/17 pending=0 unverifiedNonDiscriminating=6`, complete.
+  - Stage 5: ok, complete; 3194 records, 0 disagreeing.

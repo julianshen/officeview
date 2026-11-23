@@ -196,6 +196,55 @@ npx tsx scripts/cf-refs/audit.ts --stage 3
 - `observedBars` right edges B2..B6 (cell from 84 px, bar from 86 px): num predicts 100/132/159/191/247, min/max none/124/156/195/262. Run of 2026-11-19 (6a83cbe2): 100/132/159/191/247, the num reading.
 - `bar-hypothesis-none` or a `min-max` match is a finding: record the px, never refit.
 
+## 2f. The all-equal case (the all-equal follow-up, owner rulings 2026-11-23)
+
+**Captured** (13bba185, Excel 16.115; repair-free, verified, re-verified): each id matched one reading at every decisive cell (`evaluate`, `half`, `half` mirrored, `half-span`), every control held, and all four are registered (docs/validation/xlsx-cf.md §14.z.20). The table below is kept as committed before the capture.
+
+`stage3-bar-all-equal` is pre-registered: its readings, production behaviour and this table were committed before any capture (docs/validation/xlsx-cf.md §14.z.19). It is appended last and owns four questions, each registered non-discriminating ("Pre-registered …") until its capture:
+- `bar:all-equal-distinct-bounds` (B..K): two literal num bounds, lo < hi, over an all-equal scope;
+- the statistical twins of the verified `bar:degenerate-equal-values` (owner ruling Q2): `bar:degenerate-equal-ltr` (M), `bar:degenerate-equal-rtl` (N), `bar:degenerate-equal-10-90` (O).
+
+L (min/max over all 42, context, 0/100) is the verified shape itself, a control: it must draw the verified half.
+
+Every column is 32.51 characters (195 px, as `stage3-bar-geometry` F measured), so the span is 192 px and a half is a whole 96 px. Rows are 30 pt; data rows 2..4 (three replicate cells per column); controls rows 6..8. Paired solid bars, no border, automatic axis, fill FF0000FF (I's negative fill FFFF0000).
+
+```
+bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-all-equal --refresh-clock-date
+bun scripts/cf-refs/capture.ts --stage 3 --case stage3-bar-all-equal
+bun scripts/cf-refs/capture.ts --stage 3 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 3
+```
+
+No same-named workbook may be open before the run.
+
+Predicted `observedBars` (absolute px, inclusive left..right; every row of a column is the same unless listed). Cell lefts: B 84, then +195 per column; a bar starts 2 px inside the cell.
+
+| Col | Rule / values | evaluate | full | degenerate-half | none |
+|---|---|---|---|---|---|
+| B | num 0/100, 0/100, all 100 (at hi) | 86..277 | 86..277 | 86..181 | no bar |
+| C | num 0/100, all 0 (at lo) | no bar | 281..472 | 281..376 | no bar |
+| D | num 0/100, all 30 | 476..533 | 476..667 | 476..571 | no bar |
+| E | num 0/100, all 70 | 671..804 | 671..862 | 671..766 | no bar |
+| F | num 0/100, 10/90, all 0 (at lo) | 866..875 | 866..1028 | 866..951 | no bar |
+| G | num 0/100, 10/90, all 30 | 1061..1116 | 1061..1223 | 1061..1146 | no bar |
+| H | num 0/100, 10/90, all 100 (at hi) | 1256..1418 | 1256..1418 | 1256..1341 | no bar |
+| I | num -100/-20, all -40 (from the right edge, red) | 1595..1642 | 1451..1642 | 1547..1642 | no bar |
+| J | control: num 0/100 over 30/60/90 | 1646..1703 / ..1760 / ..1818 under every reading |||
+| K | control: num 0/100, 10/90 over 0/30/100 | 1841..1850 / ..1896 / ..2003 under every reading |||
+
+| Col | Question | Readings |
+|---|---|---|
+| L | control `bar:degenerate-equal-values` (min/max, all 42) | half 2036..2131 (the verified answer) |
+| M | `bar:degenerate-equal-ltr` (`direction="leftToRight"`) | half 2231..2326; full 2231..2422; none |
+| N | `bar:degenerate-equal-rtl` (`direction="rightToLeft"`) | half (mirrored) 2522..2617; half-ltr 2426..2521; full 2426..2617; none |
+| O | `bar:degenerate-equal-10-90` (10/90) | half-span 2621..2716; half-min 2621..2706; full 2621..2783; none |
+
+- 10/90 lengths follow the verified `half-min@x14` rule (0.05 + 0.8·t of the span); `half-span` is 0.5 of the span outright.
+- Arithmetic (192 px span, round half up): 0.3 → 57.6 → 58; 0.7 → 134.4 → 134; 0.05 → 9.6 → 10; 0.29 → 55.68 → 56; 0.45 → 86.4 → 86; 0.85 → 163.2 → 163; 0.25 → 48; 0.5 → 96. No edge is on a half pixel.
+- Each pair of readings differs by at least 3 px, or bar against none, at three or more cells of one column (tests/xlsx-cf-bar-all-equal-case.test.ts).
+- Mixed-sign bounds are not asked: an all-equal scope has no zero cell, so the measurer cannot locate the automatic axis (`bar-edge-unstable`, found on the synthetic rehearsal); production keeps that shape withheld.
+- A cell matching no reading, or two readings matching, is a finding: record the px, never refit. A `degenerate-half` or `none` match would contradict `stage3-bar-geometry` H and I (Excel drew full bars at hi) and needs an owner ruling before any registration.
+
 ## 3. The unresolved-shapes case (named explicitly)
 
 `stage3-bar-unresolved-shapes` is `unsupported` and lifts no capability, so `build.ts` skips it unless it is named:
