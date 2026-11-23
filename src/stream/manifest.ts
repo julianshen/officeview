@@ -1,6 +1,8 @@
 /** The §6.2 rule-3 MANIFEST JSON (inside a kind-1 OVSD frame) and its
  * fail-closed client validation: numbers range-checked, unit sizes 1..8192,
  * enums closed, token ≤ 512 chars, unknown fields ignored. */
+import { MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS } from './sheet-wire'
+
 export interface Manifest {
   v: 1
   docRef: string
@@ -19,7 +21,16 @@ export interface Manifest {
   recorder: { commands: 'ovsd-1'; textMode: 'text'; scalesBuckets: number[]; requiredFaces: Array<{ id: string; hash: string; alias?: string }>; projection: 'final-raster' | 'culled-commands' | 'commands' }
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
+  /** Stage 4a: `'tiles'` for an XLSX session the server serves as tiles (the client sent `sheet-tiles@1`). Absent =
+   * units mode, and then `sheets` and `tiles` are absent too (ignored if sent). */
+  sheetMode?: 'tiles'
+  /** Tiles mode: the visible sheets in tab order; `sheetId` is the decimal index `"0".."n-1"` (R12). */
+  sheets?: ManifestSheet[]
+  /** Tiles mode: the fixed tile grid (S4 §6). */
+  tiles?: ManifestTiles
 }
+export interface ManifestSheet { sheetId: string; name: string }
+export interface ManifestTiles { px: 512; zoomSteps: number[]; dprs: [1, 2]; palettes: ['light', 'dark']; maxBatch: 64 }
 /** `hidden`: a hidden slide under contentPolicy 'full' (it is a unit, but a show skips it). Only `true` is valid.
  * `anim`: the slide has timing, a transition, or both, so a show asks for its SHOW_PLAN (piece 4 D5). Only `true` is valid; without it the slide is a still. */
 /** `media` (piece 5, D19): the slide ships an audio record or a transition sound, so a show asks for its SHOW_PLAN
@@ -51,6 +62,25 @@ function mediaCaps(v: unknown): MediaCaps | null | undefined {
   if (a.maxBytes !== MEDIA_AUDIO_CAPS.maxBytes) throw new Bad('caps.media.audio.maxBytes')
   return { audio: { maxSeconds: MEDIA_AUDIO_CAPS.maxSeconds, maxBytes: MEDIA_AUDIO_CAPS.maxBytes } }
 }
+
+/** `tiles`: exactly the S4 §6 grid; anything else rejects the manifest. */
+function tilesBlock(v: unknown): ManifestTiles {
+  const t = obj(v, 'tiles')
+  if (t.px !== TILE_PX) throw new Bad('tiles.px')
+  const same = (a: unknown, b: readonly unknown[]) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i])
+  if (!same(t.zoomSteps, TILE_ZOOM_STEPS)) throw new Bad('tiles.zoomSteps')
+  if (!same(t.dprs, TILE_DPRS)) throw new Bad('tiles.dprs')
+  if (!same(t.palettes, TILE_PALETTES)) throw new Bad('tiles.palettes')
+  if (t.maxBatch !== TILE_BATCH_MAX) throw new Bad('tiles.maxBatch')
+  return { px: TILE_PX, zoomSteps: [...TILE_ZOOM_STEPS], dprs: [...TILE_DPRS], palettes: [...TILE_PALETTES], maxBatch: TILE_BATCH_MAX }
+}
+/** `sheets`: ≤ 256 entries, ids `"0".."n-1"` in sequence, names ≤ 31 characters. */
+const sheetList = (v: unknown): ManifestSheet[] => arr(v, 'sheets', MAX_SHEETS).map((x, i) => {
+  const o = obj(x, `sheets[${i}]`)
+  const sheetId = str(o.sheetId, `sheets[${i}].sheetId`, 3, /^\d{1,3}$/)
+  if (sheetId !== String(i)) throw new Bad(`sheets[${i}].sheetId`)
+  return { sheetId, name: str(o.name, `sheets[${i}].name`, SHEET_NAME_CHARS) }
+})
 
 const HEX = /^[0-9a-f]+$/
 const PROJ = ['final-raster', 'culled-commands', 'commands'] as const
@@ -107,6 +137,7 @@ export function validateManifest(json: unknown): ManifestResult {
       },
       limits: { maxUnitPx: int(l.maxUnitPx, 'limits.maxUnitPx', 1, 8192), maxAssetBytes: int(l.maxAssetBytes, 'limits.maxAssetBytes', 1, 1 << 30), wsFrameBytes: int(l.wsFrameBytes, 'limits.wsFrameBytes', 1024, 1 << 20), tilePx: int(l.tilePx, 'limits.tilePx', 16, 8192) },
       notices: arr(m.notices, 'notices', MAX_NOTICES).map((n, i) => str(n, `notices[${i}]`, 128)),
+      ...(m.sheetMode === undefined ? {} : { sheetMode: oneOf(m.sheetMode, 'sheetMode', ['tiles'] as const), sheets: sheetList(m.sheets), tiles: tilesBlock(m.tiles) }),
     }
     return { ok: true, manifest }
   } catch (e) {

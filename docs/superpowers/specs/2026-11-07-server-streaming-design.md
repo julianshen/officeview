@@ -347,6 +347,38 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
 1. **HELLO (client → server, first message; bounded `4 KiB`):** `{ client:
    'officeview/1.0', recVersions: number[] (a set), token?: string,
    resume?: { sid, resumeProof } }`.
+   *Amendment (2026-11-23, Stage 4a, as built; S4 design §6.10 and §10
+   item 9; 3df10667, 5aa80083):* HELLO gains an optional bounded
+   `features: string[]`. A list that is not an array, or that has more than
+   16 entries, a non-string entry, an empty entry, an entry over 32
+   characters or a duplicate fails the HELLO and closes
+   `unsupported-version`. A well-formed unknown entry is ignored.
+   `sheet-tiles@1` selects **tiles mode** for an XLSX document; DOCX and
+   PPTX stay in units mode. Without it the session is in units mode, whose
+   manifest is Stage 3's key for key, and that path is kept indefinitely.
+   The mode is fixed per sid: a resume must present the same `features`
+   list, or it closes `auth-failed`. A tiles manifest adds `sheetMode:
+   'tiles'`, `sheets: [{ sheetId, name }]` and `tiles: { px: 512,
+   zoomSteps, dprs: [1, 2], palettes: ['light', 'dark'], maxBatch: 64 }`.
+   The wire `sheetId` is the decimal index of the sheet in the projected
+   sheets in tab order (`"0"`, `"1"`, …): `visible-only` strips hidden
+   sheets before it is counted, and under `'full'` they stay, as in local
+   mode. The workbook's own `sheetId` attribute is never sent. A workbook
+   whose projected sheets would break the client's manifest bounds (more
+   than 256 sheets, or a sheet name over 31 characters) is served in units
+   mode instead (5aa80083). On an XLSX tiles session `unit`, `search`,
+   `select`, `copy` and `a11y` are refused `unsupported-op`, because
+   serving them would render units; `print` works. A units session
+   answers `tiles`, `sheet-layout` and `sheet-cancel` with
+   `unsupported-op`. **Session clock (S4 R9):** a tiles session carries
+   `(day, timeZone)`. `timeZone` is the decision's `policy.timeZone` (an
+   IANA zone checked with `Intl`), else the server's `sheetTimeZone`
+   option (default `'UTC'`); an invalid zone closes `policy-refused`.
+   `day` is the calendar date of the server's `now()` at open in that zone.
+   The pair is fixed for the sid: it survives resume and midnight, and a
+   resume whose decision resolves to another zone closes `auth-failed`. It
+   lives on the session entry beside `features`, not in the effective
+   policy.
 2. **Version compatibility is set intersection** — the server picks a version
    it supports **from the client's set**; the empty intersection closes with
    `unsupported-version` (never a downgraded guess).
@@ -457,6 +489,9 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `print-too-large` | op refusal, never a CLOSE (added 2026-11-13, Stage 3b); carries `limit` and `requested` over `maxPages`, neither when the job fits at no print scale | a print job over `maxPages`, or one whose pages fit neither scale 2 nor scale 1 (`planPrint`); the client also fails a job locally with this code (no `limit`) over its 192 MiB blob ceiling (Stage 3 design §4.2) |
    | `print-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-13) | a print job that would take the session's printed pages past `maxSessionPages` |
    | `invalid-unit` | op refusal, never a CLOSE (added 2026-11-14, Stage 3c) | a `notes` request for a unit out of range, not an integer, or a hidden slide (Stage 3 design §4.3) |
+   | `unsupported-op` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | an op the session's sheet mode does not serve: `unit`, `search`, `select`, `copy` or `a11y` on an XLSX tiles session, or `tiles`, `sheet-layout` or `sheet-cancel` on a units session (S4 design R6) |
+   | `stale-view` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a well-formed `tiles` request whose `viewGen` is not the session's current view (always 0 in 4a) |
+   | `layout-too-large` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a `sheet-layout` over a list cap (65,536 entries per list, 1,024 filter ranges) or over 64 messages (S4 design R14) |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -532,6 +567,54 @@ session (§18 Never carries the same qualification).
 | Pivot tables / slicers / timelines (`src/worker/viewerProtocol.ts:31` lists `pivot*`/`control*`) | interactive, pre-cache | **refused on protected 4c streams** until a scoped design lands; pivot caches and slicer items backed by hidden/veryHidden sheets or hidden rows/cols are **stripped before serving** |
 | ODT / RTF inputs | parsed into DocxDocument locally (`loadOfficeSource.ts:67–68`) | **refused fail-closed at stream admission** (`unsupported-format`) until hidden-text filters exist (§19.3) |
 | **Any other hidden/visibility flag** the parser sees but this table does not name (e.g. a new `hidden`/`vanish`/`state` attribute value, `visibility="hidden"` in DrawingML extensions) | as authored | **fails closed** (owner ruling §2 item 14a): the element is not drawn, indexed, copied or exposed to a11y, and a `hidden-unrecognised` diagnostic is recorded; recognising it later is a policy change, not a default |
+
+*Amendment (2026-11-23, Stage 4a, as built; S4 design §6.2 and §10 items
+1 and 10):*
+- **The policy parameter.** The withholding steps of the servable sheet
+  snapshot take `contentPolicy` and are the identity under `'full'`, which
+  gets local parity on its own snapshot. Tiles paint **saved values** on
+  every stream: a tiles-mode open also parses the projected package with
+  `valuePolicy: 'cached'` and paints from that parse, and nothing
+  recomputes on a stream (02c03957). The units-mode engine parse is
+  unchanged. The pivot refusal is Stage 4c.
+- **Drawing coverage (the coverage clause of S4 §10 item 1).** Under
+  `visible-only`, a cell is **base-covered** when its grid rect, or its
+  spill rect, meets any top-level drawing's transformed, effect-padded
+  painted extent in the author view, whatever the fill or transparency;
+  a base-covered cell is blank in the snapshot and paints empty (§12).
+  Unresolved anchors, an effect the analysis cannot bound, or a transform
+  it cannot compute make the coverage `unknown`, never absent, and such a
+  sheet's tiles paint as authored. The spill rect is **measured**
+  (d4ece036, 0b583d55): a text cell's rect reaches only as far as its text
+  measurably overflows its cell, laid out with the tile renderer's own cell
+  layout and fonts, on the sides its alignment allows (general or left
+  spills right, right spills left, centred both ways; wrap, fill, justify,
+  distributed, shrink-to-fit and numbers never spill), plus a slack of the
+  antialiasing margin and a quarter em, capped by the empty run beside it.
+  Text that fits its cell never spills. On a sheet with conditional
+  formats each spilling cell is measured in the widest font a rule could
+  give it: its base font plus bold and italic. The whole empty run is still
+  taken (fail closed) where nothing can be measured: no canvas backend,
+  rotated or stacked text, a layout that throws, a sheet with region
+  styles, and a CF sheet whose CF set or a rule is unresolved, a rule that
+  writes an unknown set, a font size or name, or a number format, or an
+  icon set rule.
+- **What coverage withholds, and what it cannot (Task 5 ruling,
+  36cb848e).** Blanking stops covered cells from painting. It does not
+  make their values underivable: saved values of visible formulas (such
+  as `=B2`) and charts can still show them. For consistency the CF and
+  formula evaluation view of every sheet, not only the tiled one, reads
+  the blanked sheets, and a sparkline located in a covered cell is
+  dropped. A sparkline in an uncovered cell that plots covered values
+  still paints (accepted).
+- **A sheet view's pane state is layout (6a554adf).** `<pane
+  state="frozen" | "frozenSplit" | "split">` describes layout, not
+  visibility (ECMA-376 §18.3.1.66), so worksheet `sheetView` and `pane`
+  nodes are handled by the XLSX projection rather than failing closed as
+  an unowned visibility flag. Before this, every frozen-pane workbook was
+  refused `unsupported-format` under `visible-only`; it now opens, **in
+  units mode too**. A genuinely unknown `state` flag elsewhere still fails
+  closed.
 
 The client never participates; it renders what arrives.
 
@@ -1065,6 +1148,20 @@ tiles; the presenter notes sidecar namespace
   restored verbatim in substance (finding-3's lifecycle rules).
 - Session run table fields: `sid → { docRef, viewerId, role,
   effectivePolicy, activeSocket, jti, startedAt, status }`.
+- *Amendment (2026-11-23, Stage 4a, as built; S4 design §6.3, §6.5 and
+  §10 item 5; dac352b6):* a sheet tile's key is the key above with
+  `scaleBucket` = dpr, `unitId` = the sheet index, `policyDetails =
+  { projection, viewStateHash }`, and a `tile` field `{ sheetIndex,
+  zoomStep, dpr, palette, col, row }`. `viewStateHash` is the SHA-256 of
+  the canonical JSON of `{ sort, filters, sizes, authorHiddenTier, clock:
+  { day, timeZone } }`: the identity view `{ sort: null, filters: [],
+  sizes: [], authorHiddenTier: 'none' }` in 4a, plus the session clock.
+  The sid is never in it. Two sessions with the same clock share canonical
+  tiles while their marked bytes differ; a different day or zone never
+  shares. A unit key carries no `viewStateHash`, so unit keys are
+  byte-identical to Stage 3's (a golden pins it). Canonical tiles are
+  pre-forensic and live in the render cache under the same 512 MiB
+  ceiling; a tile key can never equal a unit key.
 
 ### 9.4 Marks: visible + forensic, per session (normative)
 
@@ -1199,6 +1296,29 @@ pairs.
 - **Rate classes:** sort/filter ops and print jobs each carry their own
   §14 class.
 - **Wire audit** covers the §6.4/§12 rows (T8).
+
+*Amendment (2026-11-23, Stage 4a, as built; S4 design §10 items 3 and 8):*
+- **Covered stays covered, as it applies to tiles.** Under `visible-only`
+  a base-covered cell (§6.4 amendment) is blank in the session's snapshot,
+  so its tile paints it as an empty cell. 4a has no sort, filter or resize,
+  so no cell moves; the answers half of the rule lands with 4b and 4c.
+- **The tile path as built.** The worker paints a tile with
+  `renderSheetViewport` from the resident projected parse
+  (`detectAndParse`, `buildSheetGeometry`, `prepareSheetAssets`), not from
+  `openImportSession`, and never from `getPaintables`. A tile is a full
+  512 device-px surface on the client's `tileRangeFor` grid, blank past the
+  sheet extent, keyed as the §9.3 amendment states. The visible mark is laid
+  out in global sheet space, so it scales with zoom·dpr and stays
+  continuous across seams (eeae85cd).
+- **Drifted anchors (re-checked at 4a's head).** `AuthoritativeCell` is
+  `src/xlsx/view/contracts.ts:72`; `SheetDrawings` is `:557` (`images` at
+  `:561`); `SheetLayout` is `:869`; the view delta is `ViewCommitDelta` at
+  `:935`, and `viewProtocol.ts` does not exist. The static path's
+  too-large refusal paintable is `src/render/paint.ts:162` (chosen at
+  `:148`); `StaticExportLimitError` is `src/xlsx/render.ts:55`, thrown at
+  `:545` and `:808`. `SheetTileRenderer` is
+  `src/components/xlsx/sheetTiles.ts:158` and `renderSheetViewport` is
+  `src/xlsx/view/renderViewport.ts:188`.
 
 ## 12a. Presentation mode for streamed decks
 
@@ -1666,6 +1786,25 @@ outcomes.
   count against the message budget only. The client coalesces
   `media-cursor` to at most one per 200 ms, and paces its requests to the
   class with its own send log.
+  *Amendment (2026-11-23, Stage 4a, as built; S4 design §6.8, R3, R4;
+  dac352b6):* sheet tiles are rate class `'tile'`, `TILE_RATE` = 600
+  tiles per 10 s per sid with a burst of 120 per 1 s, counted **per tile**
+  when a batch is admitted and separate from `'unit'`. It is refuse-only:
+  the tiles past the windows' room are refused one by one in `tiles-done`
+  as `rate-limited`, with `retryAfterMs` (the time until every window has
+  room for them), and never count toward the 4008 breach window. At most 8
+  tile jobs per sid are in flight (the pool's `perSessionOutstanding`). A
+  `sheet-layout` request is charged to `'unit'` once; its later messages
+  charge nothing. The client keeps at most 2 batches of at most 64 tiles
+  in flight, paces its sends at 8 per 1 s and 80 per 10 s, retries a
+  `rate-limited` tile after `retryAfterMs` (1,000 ms when absent, capped
+  at 10 s), fails a sheet request with nothing heard for 5 s, and retries a
+  failed visible tile at most 3 times in a row. **T8:** tile p95 ≤ 120 ms
+  at zoom 1, dpr 1 and dpr 2, on the 500×100 fixture, timed from the
+  moment a tile passes validation, the token and the `'tile'` rate check
+  to the moment its last fragment is handed to the socket, one tile per
+  request, serially, warm document cache, cold render cache, mark on
+  (`docs/validation/streaming-s4a.md`).
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1694,6 +1833,17 @@ outcomes.
   | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB (as built, 2026-11-13: client per-job page cap = min(64 MiB, 44 MiB, the range's largest scale-2 unit cost); see below) |
   | MEDIA_CHUNK (kind 9; amended 2026-11-20, Stage 3 piece 5) | ≤ 4 MiB | ≤ 4 MiB (sent stored) |
   | text control message | ≤ 64 KiB | ≤ 64 KiB |
+
+  *Amendment (2026-11-23, Stage 4a, as built; S4 design §10 item 4, tile
+  part; R13):* one `tiles` request (at most 64 coordinates) is answered by
+  **several** `XLSX_TILE` messages under its `reqId`, one per tile, each
+  within the caps above, then a `tiles-done { reqId, refused, retryAfterMs?,
+  cancelled? }` text message. The kind-5 body is an `encodeUnit` body with
+  `unitId` = the sheet index and discriminator 3: `u32 viewGen, u8
+  zoomStep, u8 dpr, u16 0, u32 col, u32 row`, then the `UNIT_RASTER` body
+  `u32 w, u32 h, u32 pngLen, PNG` with `w = h = 512`. `zoomStep` indexes the
+  11 `SHEET_ZOOM_STEPS`, `dpr` ∈ {1, 2}. `sheet-cancel { target }` stops a
+  batch; an unknown target is ignored. Every new text message is ≤ 64 KiB.
 
   *Amendment (2026-11-14, Stage 3 piece 4, D1):* one charged show request
   may answer with **several** `SHOW_PLAN` messages under its `reqId`, each
@@ -2011,6 +2161,11 @@ render pipeline.
    abstain explicitly (§13.2); whole-search attribution bounds are
    simulation-verified over the declared table (§13.5), never analytic
    promises.
+   *Amendment (2026-11-23, Stage 4a, owner ruling):* on sheet tiles the
+   claim is **a marked blank pane never names a wrong session**. Blank
+   tiles stay marked (the white cells carry the mark), so a blank pane is
+   attributed to the right session or abstains, and never to another one.
+   This replaces "flat tiles may abstain" (S4 design §10 item 6).
 9. **Stage 3 service limits (owner, 2026-11-11; Stage 3 design):** per-session
    copy/print caps reset when the viewer opens the document again; search
    answers only highlight boxes but repeated probing can reconstruct text
@@ -2106,6 +2261,20 @@ render pipeline.
       a frame.
     - (i) A presenter can retype the notes (item 5); each notes request is
       audited and both marks are on the image.
+
+13. **Stage 4a sheet tiles as built (2026-11-23; S4 design §11.2 "As built
+    (4a)"; `docs/validation/streaming-s4a.md`).**
+    - (a) Tiles are read-only in 4a: no selection, find, copy or a11y
+      text, and the a11y grid gives positions only, with the §15 notice
+      once. Host canvas tokens do not reach tiles; only the fixed `light`
+      and `dark` server palettes do.
+    - (b) Coverage blanking withholds covered cells' paint, not every
+      derivation of their values (§6.4 amendment).
+    - (c) The tile after a worker recycle waits about 0.9 s (about 1 tile
+      in 256), a visible hitch while scrolling. It is a follow-up.
+    - (d) Open, pre-existing (units mode): an XLSX unit over 8192 px gives
+      a manifest the client rejects, so such a workbook does not open in
+      units mode. Tiles mode advertises the refusal unit for it (5d6fc8d7).
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

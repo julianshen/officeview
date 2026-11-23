@@ -444,6 +444,19 @@ print rasters (parent T2 constructs).
 >   "not recorded", not "print was off"). `AuditTable.get(sid).printed` is
 >   `{jobs, pages}`.
 
+> **Amendment (2026-11-23, Stage 4a as built; S4 design §6.10 and §10
+> item 7).** In XLSX **tiles mode** a print page is still the static
+> per-sheet unit, but it is rendered lazily, on a print request only, never
+> at open (7a6c16e9). A tiles-mode open builds no static paintables; the
+> manifest's unit sizes come from the sheet metrics alone
+> (`staticSheetSpec`, the `computeMetrics` size or the refusal spec), and
+> the first `print` (or any other units path) builds the paintables once.
+> A unit over 8192 px, which units mode lists as is and its client then
+> rejects, is advertised in tiles mode as the static refusal unit
+> (480 × 96), so the manifest validates and printing that sheet is refused
+> (5d6fc8d7, ruling B1). Units mode is unchanged: its open stays eager and
+> its print is this section's. Validation: `docs/validation/streaming-s4a.md`.
+
 ### 4.3 Piece 3 — presenting, slide by slide, with notes (parent 3b)
 
 The parent §12a.8 3b list, verbatim in intent: present a streamed deck;

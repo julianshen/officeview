@@ -10,14 +10,18 @@
  * There is no zoom.
  * With copy and text a11y both off the view says "text unavailable in this
  * viewing mode" once.
+ * Stage 4a: a tiles-mode session (`document.sheets` set) is routed, before any
+ * units-mode hook runs, to the lazy RemoteSheetView (the interactive sheet
+ * viewer over server tiles); no unit, text or a11y request is sent for it.
  */
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement } from 'react'
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement } from 'react'
 import type { RemoteOfficeDoc } from '../../stream/remote/remote-doc'
 import { presentRemote } from '../../stream/remote/present-start'
 import { defaultPlatform, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type SlideShowDiagnostic, type SlideShowMotion } from '../present'
 import { themeRootProps, type ThemeMode } from '../theme'
 import { BUTTON, useRemotePrint } from './RemotePrint'
 import { UnitWrap, useRemoteText } from './RemoteText'
+import { TEXT_UNAVAILABLE } from './textUnavailable'
 
 export interface RemoteDocViewProps {
   document: RemoteOfficeDoc
@@ -43,7 +47,7 @@ export interface RemoteDocViewProps {
   __presentPlatform?: PresentPlatform
 }
 
-export const TEXT_UNAVAILABLE = 'text unavailable in this viewing mode'
+export { TEXT_UNAVAILABLE }
 /** Belt and braces under the always-hidden root: the chrome (search bar,
  * print controls, hit/selection boxes, screen-reader layer, status line, all
  * marked data-ov-remote-chrome) never prints. Owned by this view, so local
@@ -58,10 +62,22 @@ export function remotePrintGuard(instance: string): string {
   return `@media print{[data-ov-theme-root][data-ov-instance="${quoted}"]{display:none!important}}`
 }
 
+/** Stage 4a: the tiles-mode sheet view, in its own chunk (it reuses the InteractiveSheetDoc chunk). */
+const RemoteSheetView = lazy(() => import('./RemoteSheetView').catch((e: unknown) => (console.warn('[officeview] chunk not loaded', e), {
+  default: () => <div role="alert" data-stream-error="viewer-unavailable">Spreadsheet viewer could not load. Reload to retry.</div>,
+})))
+
 /** Host props that do not apply to a remote document are ignored: the baked
  * mark is authoritative (no `watermark`), copy follows the server's `can.copy`,
- * and print follows the server's `can.print`. */
-export default function RemoteDocView({
+ * and print follows the server's `can.print`. A tiles-mode session
+ * (`document.sheets`, fixed for the sid) opens in the sheet viewer; every other
+ * prop, the viewer's @internal ones included, passes through to it. */
+export default function RemoteDocView(props: RemoteDocViewProps): ReactElement {
+  if (props.document.sheets) return <Suspense fallback={null}><RemoteSheetView {...props} /></Suspense>
+  return <RemoteUnitsView {...props} />
+}
+
+function RemoteUnitsView({
   document: doc, theme, className, style, background, pageGapPx = 16, allowPrint = true, title,
   allowPresent = true, presentShortcuts = true, slideShowMotion = 'auto', onSlideShowStart, onSlideShowEnd, onSlideShowSlideChange, onSlideShowDiagnostic,
   presentRef, __presentPlatform = defaultPlatform,

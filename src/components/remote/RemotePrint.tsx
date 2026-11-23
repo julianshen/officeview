@@ -39,8 +39,11 @@ const BAR: CSSProperties = { position: 'absolute', top: 8, left: 12, display: 'f
 const SURFACE: CSSProperties = { background: 'var(--ov-color-chrome, #fff)', color: 'var(--ov-color-text, inherit)', border: '1px solid var(--ov-color-border, #ccc)', borderRadius: 'var(--ov-radius-control, 6px)', padding: '4px 8px' }
 export const BUTTON: CSSProperties = { ...SURFACE, cursor: 'pointer', font: 'inherit', minHeight: 28 }
 
-/** `lead`: controls shown first in the same bar (the remote view's Present button). */
-export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; title?: string; themeRoot: RefObject<HTMLElement | null>; lead?: ReactElement | null }): RemotePrint {
+/** `lead`: controls shown first in the same bar (the remote view's Present button). Stage 4a (tiles mode, where each
+ * unit is one sheet's static print unit): `noun` names the units in the range dialog (default `'pages'`), and `bar`
+ * replaces the bar's own placement (the sheet viewer lays it out inline in its toolbar). */
+export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; title?: string; themeRoot: RefObject<HTMLElement | null>; lead?: ReactElement | null; noun?: 'pages' | 'sheets'; bar?: CSSProperties }): RemotePrint {
+  const noun = o.noun ?? 'pages'
   // A resume may replace the manifest (caps and can.print): re-render and re-read.
   const [, setManifestRev] = useState(0)
   useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
@@ -153,7 +156,7 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   )
   const running = progress !== undefined
   const ui = allowed || notice || o.lead ? (
-    <div data-ov-remote-chrome="" style={BAR}>
+    <div data-ov-remote-chrome="" style={o.bar ?? BAR}>
       {o.lead}
       {allowed ? <button type="button" data-ov-print-button="" ref={printBtn} disabled={running} onClick={start} style={BUTTON}>Print</button> : null}
       {running ? (
@@ -164,12 +167,12 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
       ) : null}
       {notice ? <span role="alert" data-ov-print-notice="" style={{ ...SURFACE, overflowWrap: 'anywhere' }}>{notice}</span> : null}
       {range && allowed ? (
-        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Print pages" data-ov-remote-chrome="" onKeyDown={onDialogKey}
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Print ${noun}`} data-ov-remote-chrome="" onKeyDown={onDialogKey}
           style={{ ...SURFACE, position: 'absolute', top: '100%', left: 0, marginTop: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 220, zIndex: 7, boxShadow: 'var(--ov-shadow-popover, 0 4px 12px rgba(0,0,0,.2))' }}>
-          <strong>Print pages</strong>
+          <strong>Print {noun}</strong>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>{numberInput('From', 'from')}{numberInput('To', 'to')}</div>
-          {caps?.maxPages != null ? <div>Up to {caps.maxPages} pages per print.</div> : null}
-          {caps?.maxSessionPages != null ? <div>Up to {caps.maxSessionPages} pages in this session.</div> : null}
+          {caps?.maxPages != null ? <div>Up to {caps.maxPages} {noun} per print.</div> : null}
+          {caps?.maxSessionPages != null ? <div>Up to {caps.maxSessionPages} {noun} in this session.</div> : null}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" onClick={closeDialog} style={BUTTON}>Cancel</button>
             <button type="button" disabled={!valid} onClick={submit} style={BUTTON}>Print</button>

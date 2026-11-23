@@ -7,6 +7,7 @@ import { chmodSync, closeSync, existsSync, openSync, statSync } from 'node:fs'
 import type { AuditRowInput } from './audit'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 import type { MarkSpec } from './render'
+import type { SheetClock } from './sheet/clock'
 
 /** §9.3: rows are kept 90 days, then deleted. */
 export const AUDIT_RETENTION_SEC = 90 * 24 * 3600
@@ -19,6 +20,15 @@ export interface StoredRow extends AuditRowInput {
 }
 /** One `(unitIndex, scale)` delivered to a sid; `refSha256` is the canonical PNG the mark was applied to. */
 export interface DeliveryRecord { sid: string; unitIndex: number; scale: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
+/**
+ * Stage 4a (S4 §6.5, F24): one sheet tile delivered to a sid. `sheetId` is the wire id (R12, the decimal index among
+ * the visible sheets); `zoomStep` indexes `SHEET_ZOOM_STEPS`; `(col, row)` is the tile on the global 512 device-px grid.
+ * `palette` is part of the key because it changes the tile's bytes. `refSha256` is the canonical PNG the mark was
+ * applied to. Deduplicated like `DeliveryRecord`.
+ */
+export interface TileDeliveryRecord { sid: string; sheetId: string; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: 'light' | 'dark'; col: number; row: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
+/** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7: the identity view in 4a), with the session clock. Write-once. */
+export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: [] }; clock: SheetClock; at: number }
 /** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated. */
 export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
 /** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */
@@ -59,6 +69,9 @@ CREATE INDEX IF NOT EXISTS rows_doc ON rows (doc_ref);
 CREATE INDEX IF NOT EXISTS rows_msg ON rows (key_generation, msg40);
 CREATE TABLE IF NOT EXISTS deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, scale REAL NOT NULL, status TEXT NOT NULL, reason TEXT, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, unit_index, scale, ref_sha256, status));
 CREATE INDEX IF NOT EXISTS deliveries_unit ON deliveries (unit_index);
+CREATE TABLE IF NOT EXISTS tile_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, zoom_step INTEGER NOT NULL, dpr INTEGER NOT NULL, palette TEXT NOT NULL, col INTEGER NOT NULL, row INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen, zoom_step, dpr, palette, col, row, ref_sha256, status));
+CREATE INDEX IF NOT EXISTS tile_deliveries_tile ON tile_deliveries (sheet_id, zoom_step, dpr, palette, col, row);
+CREATE TABLE IF NOT EXISTS sheet_views (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, spec TEXT NOT NULL, clock TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen));
 CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
 CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
@@ -86,6 +99,8 @@ const mediaDelivery = (r: MediaCols): MediaDeliveryRecord => ({
   ...(r.reason !== null ? { reason: r.reason } : {}), at: r.at,
   ...(r.ffmpeg_version !== null ? { ffmpegVersion: r.ffmpeg_version } : {}), ...(r.encode_params_sha !== null ? { encodeParamsSha: r.encode_params_sha } : {}), ...(r.cache_state !== null ? { cacheState: r.cache_state } : {}),
 })
+type TileCols = { sid: string; sheet_id: string; view_gen: number; zoom_step: number; dpr: 1 | 2; palette: 'light' | 'dark'; col: number; row: number; status: 'l1' | 'unmarked'; reason: string | null; ref_sha256: string; at: number }
+const tileDelivery = (d: TileCols): TileDeliveryRecord => ({ sid: d.sid, sheetId: d.sheet_id, viewGen: d.view_gen, zoomStep: d.zoom_step, dpr: d.dpr, palette: d.palette, col: d.col, row: d.row, status: d.status, ...(d.reason !== null ? { reason: d.reason } : {}), refSha256: d.ref_sha256, at: d.at })
 const delivery = (d: DeliveryCols): DeliveryRecord => ({ sid: d.sid, unitIndex: d.unit_index, scale: d.scale, status: d.status, ...(d.reason !== null ? { reason: d.reason } : {}), refSha256: d.ref_sha256, at: d.at })
 
 /** Clears group/other permission bits (umask-independent); never adds a bit. */
@@ -154,6 +169,33 @@ export class AuditStore {
   candidates(docRef: string, unitIndex: number): Array<{ sid: string; row: StoredRow; delivery: DeliveryRecord }> {
     return this.db.query<DeliveryCols & { row: string }, [string, number]>('SELECT d.*, r.row FROM deliveries d JOIN rows r ON r.sid = d.sid WHERE r.doc_ref = ? AND d.unit_index = ? ORDER BY d.rowid')
       .all(docRef, unitIndex).map((x) => ({ sid: x.sid, row: JSON.parse(x.row) as StoredRow, delivery: delivery(x) }))
+  }
+  /** Idempotent on `(sid, sheetId, viewGen, zoomStep, dpr, palette, col, row, refSha256, status)`; throws for a sid with no row. */
+  putTileDelivery(d: TileDeliveryRecord): void {
+    this.writable()
+    this.db.query('INSERT OR IGNORE INTO tile_deliveries (sid, sheet_id, view_gen, zoom_step, dpr, palette, col, row, status, reason, ref_sha256, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(d.sid, d.sheetId, d.viewGen, d.zoomStep, d.dpr, d.palette, d.col, d.row, d.status, d.reason ?? null, d.refSha256, d.at)
+  }
+  tileDeliveries(sid: string): TileDeliveryRecord[] {
+    return this.db.query<TileCols, [string]>('SELECT * FROM tile_deliveries WHERE sid = ? ORDER BY rowid').all(sid).map(tileDelivery)
+  }
+  /** Write-once on `(sid, sheetId, viewGen)` (a repeat is ignored); throws for a sid with no row. */
+  putSheetView(r: SheetViewRecord): void {
+    this.writable()
+    this.db.query('INSERT OR IGNORE INTO sheet_views (sid, sheet_id, view_gen, spec, clock, at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(r.sid, r.sheetId, r.viewGen, JSON.stringify(r.spec), JSON.stringify(r.clock), r.at)
+  }
+  sheetView(sid: string, sheetId: string, viewGen: number): SheetViewRecord | undefined {
+    const r = this.db.query<{ sid: string; sheet_id: string; view_gen: number; spec: string; clock: string; at: number }, [string, string, number]>('SELECT * FROM sheet_views WHERE sid = ? AND sheet_id = ? AND view_gen = ?').get(sid, sheetId, viewGen)
+    return r ? { sid: r.sid, sheetId: r.sheet_id, viewGen: r.view_gen, spec: JSON.parse(r.spec) as SheetViewRecord['spec'], clock: JSON.parse(r.clock) as SheetClock, at: r.at } : undefined
+  }
+  /** Every delivery, any status, of `docRef`'s sheet `sheetId` at `(zoomStep, dpr, palette)` whose tile lies in the
+   * inclusive `window` (`tileRangeFor`'s `c0..c1` × `r0..r1`), with its row. `palette` defaults to `'light'` (F24). */
+  tileCandidates(docRef: string, sheetId: string, zoomStep: number, dpr: 1 | 2, window: { c0: number; c1: number; r0: number; r1: number }, palette: 'light' | 'dark' = 'light'): Array<{ sid: string; row: StoredRow; delivery: TileDeliveryRecord }> {
+    return this.db.query<TileCols & { rowjson: string }, [string, string, number, number, string, number, number, number, number]>(
+      'SELECT d.*, r.row AS rowjson FROM tile_deliveries d JOIN rows r ON r.sid = d.sid WHERE r.doc_ref = ? AND d.sheet_id = ? AND d.zoom_step = ? AND d.dpr = ? AND d.palette = ? AND d.col BETWEEN ? AND ? AND d.row BETWEEN ? AND ? ORDER BY d.rowid')
+      .all(docRef, sheetId, zoomStep, dpr, palette, window.c0, window.c1, window.r0, window.r1)
+      .map((x) => ({ sid: x.sid, row: JSON.parse(x.rowjson) as StoredRow, delivery: tileDelivery(x) }))
   }
   /** Appends one copy/a11y record (repeats are kept); throws for a sid with no row. */
   putCopy(r: CopyRecord): void {
@@ -257,12 +299,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked), show sends, media deliveries and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, tile deliveries, sheet views, copies, prints, notes images (audited and marked), show sends, media deliveries and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'media_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'tile_deliveries', 'sheet_views', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'media_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

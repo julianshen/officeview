@@ -179,11 +179,9 @@ export async function openRemoteWorkbook(client: ViewerClient, docId: string, bl
   return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots } : {}), ...(formatting ? { formatting } : {}) }
 }
 
-export function isRemoteWorkbook(source: WorkbookSource | undefined): source is RemoteWorkbook {
-  return source instanceof RemoteWorkbook
-}
-
 export class RemoteWorkbook implements WorkbookSource {
+  /** Stage 4a (S4 §6.1): the viewer's source discriminant (`sheetSourceOf`, components/xlsx/viewerSource.ts). */
+  readonly kind = 'paged' as const
   queryNotice?: string
   private noticeScope?: string
   private readonly latestQueries = new Map<string, string>()

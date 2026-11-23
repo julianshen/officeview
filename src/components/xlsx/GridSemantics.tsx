@@ -69,6 +69,10 @@ export interface GridSemanticsProps {
   /** A cell control's keyboard route from the focused grid (Ruling S3-J): Alt+↓ opens, Alt+→ expands, Alt+← collapses
    * the active cell's control. True when the cell has such a control (the key is then the grid's). */
   onCellControl?: (at: SourceCell, action: 'open' | 'expand' | 'collapse', grid: HTMLElement) => boolean
+  /** Stage 4a (a tiles-mode stream, S4 §6.11): the grid carries positions only. Each gridcell has its
+   * `aria-rowindex`/`aria-colindex` and no text or description, and nothing selects (no click, header or keyboard
+   * selection: selection is 4b). Off by default. */
+  positionsOnly?: boolean
 }
 const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
   ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
@@ -277,6 +281,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   })
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
+    if (props.positionsOnly) return
     const grid = gridRef.current
     if (event.key === 'Escape' && props.popup && (grid?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement))) {
       event.preventDefault(); event.stopPropagation()
@@ -339,6 +344,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { gutter, projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
+      if (props.positionsOnly) return
       // A corner-lane button (S13.2) names its column; only strip buttons are re-hit-tested.
       if (event.detail > 0 && !coarse && gridRef.current && event.currentTarget.dataset.headerLane === undefined) {
         const bounds = gridRef.current.getBoundingClientRect()
@@ -366,7 +372,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         return { selection: selected, window: moved, announcement: selected.active ? activeAnnouncement(projection, selected.active) : 'No visible records.' }
       })
     },
-    onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
+    onSelectAll: () => props.positionsOnly ? undefined : publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
   const rowShift = rowFrameShift(-scroll.logicalOrigin.x * scroll.zoom)
   // Stale-value marks of the rendered cells (Ruling S3-AM), collected while the rows render and drawn above them.
@@ -374,7 +380,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
-      aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
+      aria-multiselectable={props.positionsOnly ? undefined : 'true'} aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
       onFocusCapture={event => {
@@ -386,7 +392,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) event.currentTarget.focus() }}
       onDoubleClick={event => event.stopPropagation()}
       onClick={event => {
-        if (event.defaultPrevented || event.detail > 1 || (event.target as Element).closest('[data-officeview-ui]')) return
+        if (props.positionsOnly || event.defaultPrevented || event.detail > 1 || (event.target as Element).closest('[data-officeview-ui]')) return
         const bounds = event.currentTarget.getBoundingClientRect()
         const target = hitTestViewport(scroll, projection, viewport, { x: event.clientX - bounds.left - gutter, y: event.clientY - bounds.top - headerHeight })
         if (!target) return
@@ -432,6 +438,11 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
               if (cellBox.width > 0 && box.height > 0) staleMarks.push(<span key={`${row}:${col}`} data-officeview-ui="stale-mark" aria-hidden="true" title={value.stale}
                 style={{ position: 'absolute', left: cellBox.x + cellBox.width - Math.min(STALE_MARK_PX, cellBox.width), top: box.y, width: Math.min(STALE_MARK_PX, cellBox.width), height: Math.min(STALE_MARK_PX, box.height),
                   background: 'var(--ov-color-accent, #0f6cbd)', clipPath: 'polygon(0 0, 100% 0, 100% 100%)', pointerEvents: 'auto' }} />)
+            }
+            // Positions only (a stream): the cell's place, never its text.
+            if (props.positionsOnly) {
+              return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-rowindex={slot + 2} aria-colindex={col + 2}
+                style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }} />
             }
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).

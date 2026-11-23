@@ -24,7 +24,7 @@ import { useCanvasColors } from '../canvasColors'
  * copy read through the same source; the object path is unchanged.
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
@@ -47,7 +47,7 @@ import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilit
 import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollIntoView, scrollPhysicalTo, setScrollOffset, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
-import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
+import { SHEET_ZOOM_STEPS, dprBucket, keyboardSheetZoom, nearestZoomStep, pinchSheetZoom, wheelSheetZoom, zoomSheetAt } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
@@ -91,12 +91,15 @@ import type { WorkbookSource } from '../../worker/viewerSession'
 import { coarseSelectionRecords, overlayRecords, paintFindOverlay, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
-import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
+import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, createCanvasTile, paneSurfaceBytes, type CanvasTile, type SheetFrame } from './sheetTiles'
+import { createStreamTileSource, type StreamTileSource } from './streamTiles'
+import type { TilePalette } from '../../stream/sheet-wire'
 import { SearchBar, ZoomControls } from '../viewerControls'
 import { MotionRoot, Tick } from '../motion/presets'
 import { themeRootProps, type ThemeMode } from '../theme'
 import { warnIfStylesMissing } from '../styleWarning'
-import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
+import { sheetSourceOf, type ViewerSheetSource } from './viewerSource'
+import { streamSheetGeometry } from '../../xlsx/view/streamGeometry'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { documentWithSparklines, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
 import { sheetWithRegionStyles, sheetWithoutRegionStyles } from '../../worker/viewerRemoteRegionStyles'
@@ -207,6 +210,10 @@ export interface InteractiveSheetDocProps {
   printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray & { refusedImages?: number[] }>
   /** @internal The pivot interaction kinds the menus offer (default: the session's oracle-verified set). */
   pivotVerifiedKinds?: ReadonlySet<PivotDeltaKind>
+  /** @internal Stage 4a (RemoteSheetView): a tiles-mode stream's own chrome. `textUnavailable` is the parent §15
+   * notice, shown once in its own status region; `print` starts the server's print (`RemoteOfficeDoc.print`) from
+   * Ctrl/Cmd+P, and `toolbar` holds its controls. Read only when the source is a stream. */
+  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode }
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -335,7 +342,11 @@ function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
 
 export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): ReactElement {
   const docId = props.source?.store(props.source.sheets[0].sheetId).stamp.docId ?? documentIdOf(props.doc)
-  return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props} />
+  // Stage 4a (S4 §6.11, R6): a stream has no cell data, so no copy and no find; its screen never prints (print is
+  // the server's static units, through `remoteChrome.print`), so the local print path stays off.
+  const streamed = sheetSourceOf(props.source).stream !== null
+  return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props}
+    {...(streamed ? { allowCopy: false, allowPrint: false, showSearch: false } : {})} />
 }
 
 interface SheetEntry {
@@ -368,6 +379,22 @@ interface SheetEntry {
 const FALLBACK_PANE = { width: 640, height: 400 }
 /** Prefetch slice: leaves most of a 16.7 ms frame to input and presentation. */
 const PREFETCH_SLICE_MS = 6
+/** Stage 4a (S4 §6.5): a stream's wheel zoom settles to the nearest step once no wheel event came for this long. */
+const STREAM_ZOOM_SETTLE_MS = 150
+/** A server tile's PNG as a tile surface (a 512² canvas; the bitmap is closed once drawn). */
+async function decodeStreamTile(png: Uint8Array): Promise<CanvasTile> {
+  const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }))
+  try {
+    const tile = createCanvasTile()
+    tile.canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+    return tile
+  } finally { bitmap.close() }
+}
+/** The server palette a stream's tiles are painted in (R12): the theme mode, `system` resolved by the media query. */
+function tilePaletteFor(mode: ThemeMode | undefined): TilePalette {
+  if (mode === 'dark' || mode === 'light') return mode
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
 // Ledger owners must stay unique across remounts with the same remote workbook.
 let copySerial = 0
 
@@ -441,7 +468,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const source = useMemo(() => props.source ?? createObjectWorkbookSource(doc, docId), [doc, docId, props.source])
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
-  const remote = isRemoteWorkbook(source) ? source : null
+  // S4 §6.1 (R16): `remote` is the paged source (kind 'paged') and every paged-only member is reached through it;
+  // `stream` is a tiles-mode stream (kind 'stream', no cell data); `shared` is either, typed to the members both have.
+  const { paged: remote, stream } = sheetSourceOf(source)
+  const shared: ViewerSheetSource | null = remote ?? stream
   useEffect(() => {
     if (!remote) return
     return remote.subscribeSparklineEvictions(sheetId => {
@@ -532,7 +562,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
   // Unsubscribe in the removing commit, before passive source release emits close.
-  useLayoutEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  useLayoutEffect(() => shared?.subscribe(() => setLoadTick(tick => tick + 1)), [shared])
   useEffect(() => {
     if (!remote) return
     return remote.subscribeRegionStyleEvictions(sheetId => {
@@ -812,9 +842,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
   const localViews = useRef(new Map<string, SheetViewInput>()).current
   const viewInput = (sheetId: string): SheetViewInput => {
-    if (remote) {
-      // The worker owns a paged sheet's view; its revision is the worker viewGen.
-      const view = remote.view(sheetId)
+    if (shared) {
+      // The worker owns a paged sheet's view; its revision is the worker viewGen (a stream's: the server's viewGen).
+      const view = shared.view(sheetId)
       return { revision: view.revision, order: view.order, ...(view.visibility ? { visibility: view.visibility } : {}), filter: view.filter, sort: view.sort }
     }
     const local = localViews.get(sheetId), external = views?.[sheetId]
@@ -898,8 +928,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
-    const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
-    const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
+    const structureGen = shared ? shared.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
+    const valueGen = shared ? 0 : source.store(sheetId).stamp.valueGen
     const drawingGen = (remote ? remote.drawings(sheetId).gen : 0) + timelineGeneration
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
     const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.drawingGen === drawingGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
@@ -913,23 +943,24 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // A rebuild for session sizes alone keeps the view buffers it already shows
     // (charged and held). A structure change (a worker layout publication)
     // refreshes the authored-hidden set and the mask derived from it.
-    const sameView = Boolean(previous && previous.revision === input.revision && (remote !== null || sameInput(previous.input, input)))
+    const sameView = Boolean(previous && previous.revision === input.revision && (shared !== null || sameInput(previous.input, input)))
     const sameStructure = sameView && previous!.structureGen === structureGen
     const order = sameView ? previous!.view.order : input.order ?? createIdentityOrder()
-    const baseHidden = sameStructure ? previous!.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
+    const baseHidden = sameStructure ? previous!.view.baseHidden : shared ? shared.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const authored = () => visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     // An adopted worker (filter) mask predates a newer authored-hidden set: the
     // shown mask is that mask AND NOT authored-hidden (it never revives a
     // filtered row; source identities are unchanged).
     const visibility = sameStructure ? previous!.view.visibility
-      : input.visibility ? (remote && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
+      : input.visibility ? (shared && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
         : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
-    const overlay = remote ? undefined : pivotOverlays.get(sheetId)
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
+    const overlay = shared ? undefined : pivotOverlays.get(sheetId)
+    // A stream sheet's geometry is the server's layout alone (no cells, no drawings: they are pixels in the tiles).
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : stream ? streamSheetGeometry(stream.wireLayout(sheetId)) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
-    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
+    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(shared ? null : order, shared && visibility === input.visibility ? null : visibility)
     return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
@@ -949,16 +980,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // while a view holds them: a resident sort/filter's, and the base visibility
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
     // view's adopted buffers are charged by the workbook (adopt).
-    chargeViewBuffers(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
+    chargeViewBuffers(shared ? null : order, shared && visibility === input.visibility ? null : visibility)
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
-    const used = remote?.layout(sheetId).used
+    const used = shared?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : shared ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
-      ...((remote ? remote.layout(sheetId).frozen : sheet.frozen) ? { frozen: remote ? remote.layout(sheetId).frozen : sheet.frozen } : {}),
+      ...((shared ? shared.layout(sheetId).frozen : sheet.frozen) ? { frozen: shared ? shared.layout(sheetId).frozen : sheet.frozen } : {}),
     }
     entries.set(sheetId, entry)
     holds.own(entry)
@@ -1032,19 +1063,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const viewportOf = (g: number): ViewportSize => ({ width: Math.max(1, pane.width - g), height: viewportHeight, ...(scrollInset ? { inset: scrollInset } : {}) })
   const viewport: ViewportSize = useMemo(() => viewportOf(gutter), [pane, headerHeight, gutter, scrollInset]) // eslint-disable-line react-hooks/exhaustive-deps
   // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
-  const nativeDpr = Math.min(useDevicePixelRatio(), 3)
+  const liveDpr = Math.min(useDevicePixelRatio(), 3)
+  // Stage 4a (S4 §6.5): a stream's tiles exist at the dpr buckets {1, 2} only, so its pane surface is laid out at the
+  // bucket and the canvas's CSS size scales the whole pane once (no single tile is ever resampled).
+  const nativeDpr = stream ? dprBucket(liveDpr) : liveDpr
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
   // Live print stores (while a print is prepared/open) are reserved beside the panes.
   const [printReserved, setPrintReserved] = useState(0)
-  const admittedDpr = admitDeviceScale(viewport, nativeDpr, profile, printReserved)
+  const fittedDpr = admitDeviceScale(viewport, nativeDpr, profile, printReserved)
+  // A stream keeps to the buckets: 2 if it fits, else 1, else the resource outcome.
+  const admittedDpr = stream && fittedDpr !== null ? (fittedDpr >= 2 ? 2 : fittedDpr >= 1 ? 1 : null) : fittedDpr
   const dpr = admittedDpr ?? nativeDpr
   const resourceNotice = admittedDpr === null ? 'This view is too large for the display memory budget. Make the viewer smaller.'
     : admittedDpr < nativeDpr ? 'Display resolution reduced to fit the memory budget.' : ''
 
   // ---- scroll window per sheet; zoom is retained per sheet in the session ----
   const windowFor = (sheetId: string, sheetEntry: SheetEntry): ScrollWindow => {
-    const zoom = session.get(sheetId).zoom
+    // A stream's zoom is always one of the steps the server paints at.
+    const zoom = stream ? nearestZoomStep(session.get(sheetId).zoom) : session.get(sheetId).zoom
     const frozen = sheetEntry.frozen ? { frozen: { rows: sheetEntry.frozen.rows, cols: sheetEntry.frozen.cols } } : {}
     let current = windows.get(sheetId)
     if (!current) {
@@ -1063,6 +1100,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   if (entry && windowKey.current !== nextWindowKey) { windowKey.current = nextWindowKey; windowFor(activeSheetId, entry) }
   const scroll = entry ? windows.get(activeSheetId) ?? windowFor(activeSheetId, entry) : null
   const setWindow = (sheetId: string, next: ScrollWindow) => {
+    // A stream's window never leaves the steps (every gesture settles; this is the backstop for any other entry).
+    const sheetEntry = stream && !SHEET_ZOOM_STEPS.includes(next.zoom) ? entries.get(sheetId) : undefined
+    if (sheetEntry) next = setScrollZoom(next, sheetEntry.metrics, viewport, nearestZoomStep(next.zoom), { x: viewport.width / 2, y: viewport.height / 2 })
     windows.set(sheetId, next)
     session.setZoom(sheetId, next.zoom)
     rerender()
@@ -1486,6 +1526,27 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return rendererRef.current = new SheetTileRenderer(profile, surfaceBytes)
   }
   useEffect(() => () => { rendererRef.current?.dispose(); rendererRef.current = null }, [])
+  // Stage 4a (S4 §6.5): the active stream sheet's tile source, created lazily like the renderer (an unmount, or
+  // StrictMode's dev re-mount, disposes it and the next frame starts a fresh one). Arrivals coalesce into one repaint.
+  // Local mode reads no media query and keeps a constant here (it is in the base effect's dependencies).
+  const tilePalette: TilePalette = stream ? tilePaletteFor(props.theme) : 'light'
+  const tilePaletteRef = useRef(tilePalette)
+  tilePaletteRef.current = tilePalette
+  const [streamTick, setStreamTick] = useState(0)
+  const streamTilesRef = useRef<{ stream: NonNullable<typeof stream>; sheetId: string; source: StreamTileSource; stop(): void } | null>(null)
+  const streamTilesFor = (): StreamTileSource | null => {
+    if (!stream || !activeSheetId) return null
+    const current = streamTilesRef.current
+    if (current && current.stream === stream && current.sheetId === activeSheetId) return current.source
+    current?.stop()
+    const sheetId = activeSheetId
+    const source = createStreamTileSource({ sheetId, viewGen: () => stream.identity(sheetId).viewGen, palette: () => tilePaletteRef.current, tiles: stream.tiles(), decode: decodeStreamTile })
+    let raf = 0
+    const off = source.onArrive(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; setStreamTick(tick => tick + 1) }) })
+    streamTilesRef.current = { stream, sheetId, source, stop: () => { off(); if (raf) cancelAnimationFrame(raf); source.dispose() } }
+    return source
+  }
+  useEffect(() => () => { streamTilesRef.current?.stop(); streamTilesRef.current = null }, [])
   const markKey = watermark ? JSON.stringify(watermark) : ''
   const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const biasRef = useRef({ x: 0, y: 0 })
@@ -1532,6 +1593,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // live, open owner instead of a closed one.
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
+    const streamTiles = streamTilesFor()
+    if (stream && streamTiles) {
+      // A stream frame (S4 §6.5): the server's tiles under the server's identity (valueGen and fontGen fixed at 0), the
+      // wire palette as the palette key, and nothing that paints a cell locally (no plan, assets, CF or watermark).
+      return {
+        sheet: entry.sheet, geometry: entry.geometry, identity: stream.identity(activeSheetId), colors: palette.colors, paletteKey: tilePalette,
+        origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
+        layoutCache: entry.layoutCache, merges: entry.merges, structureGen: entry.structureGen, ...(scroll.frozen ? { frozen: scroll.frozen } : {}), stream: streamTiles,
+      }
+    }
     let sparklineViews: Map<string, import('../../xlsx/view/renderViewport').SparklineViewState> | undefined
     if (hasResolvedSparklines) {
       sparklineViews = new Map()
@@ -1625,7 +1696,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // has joined that generation's asset lease. Keep host invalidations queued
     // until then; otherwise an unavailable-painter tile would be cached blank.
     const sparklineAssetsReady = !hasActiveWorkerSparklines || assets?.sparklineGen === (activeSparklines?.gen ?? 0)
-    if (!assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady) {
+    // A stream frame needs no local assets, only the sheet's layout (no tile is requested before it is complete).
+    const waiting = stream ? stream.loadState(activeSheetId).completeness !== 'complete' : !assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady
+    if (waiting) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
       // current surfaces (releasing tiles that no longer fit) before any sizing.
@@ -1682,13 +1755,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (paintedGen !== undefined && paintedGen !== drawingGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
-    if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    // A stream's tiles never read the local asset lease (the shell document's), so a new lease leaves them valid.
+    if (!stream && assets && leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     // A CF generation change that keeps the asset lease (clock rollover, text generation) keeps the tile identity too,
     // and CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted display rows), so the
     // whole sheet's tiles repaint. Lease-replacing paths already invalidate the sheet above.
     if (paintedCf.current !== cfLiveKey) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     paintedCf.current = cfLiveKey
-    presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
+    if (assets) presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
@@ -1712,7 +1786,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen, streamTick, tilePalette])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -1959,7 +2033,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return { owner: current.current.identityOf(current.current.activeSheetId), filter: e.view.filter, sort: e.view.sort, records: { ...recordCounts(e.metrics, body), completeness: 'complete' } }
   }
   // Only the active sheet keeps a worker row cache (§12.4).
-  useEffect(() => { remote?.activate(activeSheetId) }, [remote, activeSheetId])
+  // A stream fetches the sheet's layout here (once per activation); it never rejects (failures show through loadState).
+  useEffect(() => { void shared?.activate(activeSheetId) }, [shared, activeSheetId])
   const [controls, setControls] = useState<ViewerControls | null>(null)
   const controlsReady = useRef<Promise<ViewerControls> | null>(null)
   const controlPorts = useRef(new Map<string, ViewerControls>()).current
@@ -1980,14 +2055,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       publish: draft => {
         cancelCopy()
         // A worker-owned view was already adopted from the worker's delta.
-        if (!remote) localViews.set(sheetId, { revision: current.current.identityOf(sheetId).viewGen + 1, ...draft })
+        if (!shared) localViews.set(sheetId, { revision: current.current.identityOf(sheetId).viewGen + 1, ...draft })
         current.current.entryFor(sheetId)
         rerender()
         return snapshot(sheetId)
       },
-      ...(remote ? { styleOf: (index: number) => remote.styleOf(index), remote: {
-        sort: (spec, signal, progress) => remote.sort(remote.identity(sheetId), spec, signal, progress),
-        filter: (spec, keySets, signal, progress) => remote.filter(remote.identity(sheetId), spec, keySets, signal, progress),
+      ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
+      // A stream's sort and filter reject stream-no-cell-data until 4c (sheet-sort / sheet-filter).
+      ...(shared ? { remote: {
+        sort: (spec, signal, progress) => shared.sort(shared.identity(sheetId), spec, signal, progress),
+        filter: (spec, keySets, signal, progress) => shared.filter(shared.identity(sheetId), spec, keySets, signal, progress),
       } } : {}),
     }, abort.signal)
     controlsReady.current = ready
@@ -2612,7 +2689,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [source, live])
   const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
   // A worker-backed sheet is complete only once its import finished (LIFE-03).
-  const loadState = remote?.loadState(activeSheetId)
+  const loadState = shared?.loadState(activeSheetId)
   // Retained font diagnostics (§9.1): bounded and deduplicated by family.
   const pagedDrawingNotices = activeDrawings ? drawingNotices(activeDrawings) : []
   const activeCharts = entry ? sheetCharts(entry.sheet.drawings) : []
@@ -2730,6 +2807,31 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoomTo = (next: ScrollWindow | null) => { if (next && scroll && next !== scroll) setWindow(activeSheetId, next) }
   const scrollRef = useRef({ scroll, entry, viewport, activeSheetId })
   scrollRef.current = { scroll, entry, viewport, activeSheetId }
+  // Stage 4a (S4 §6.5): wheel and pinch zoom on a stream. During the gesture the last presented pane is CSS-scaled
+  // (the window keeps its step zoom, so nothing is requested at an off-step zoom); at its end the live zoom settles to
+  // the nearest step, about the gesture's last anchor.
+  const [gestureTransform, setGestureTransform] = useState<string | null>(null)
+  const streamGesture = useRef<{ base: ScrollWindow; live: ScrollWindow; anchor: { x: number; y: number }; timer?: ReturnType<typeof setTimeout> } | null>(null)
+  const showGesture = (base: ScrollWindow, live: ScrollWindow) => {
+    const s = live.zoom / base.zoom
+    const tx = (base.logicalOrigin.x - live.logicalOrigin.x) * live.zoom, ty = (base.logicalOrigin.y - live.logicalOrigin.y) * live.zoom
+    setGestureTransform(`matrix(${s}, 0, 0, ${s}, ${tx}, ${ty})`)
+  }
+  const settleGesture = () => {
+    const gesture = streamGesture.current
+    if (!gesture) return
+    streamGesture.current = null
+    clearTimeout(gesture.timer)
+    setGestureTransform(null)
+    const { entry: sheetEntry, viewport: size, activeSheetId: sheetId } = scrollRef.current
+    if (!sheetEntry) return
+    setWindow(sheetId, zoomSheetAt(gesture.live, sheetEntry.metrics, size, nearestZoomStep(gesture.live.zoom), gesture.anchor))
+  }
+  const settleGestureRef = useRef(settleGesture)
+  settleGestureRef.current = settleGesture
+  useEffect(() => () => clearTimeout(streamGesture.current?.timer), [])
+  const streamRef = useRef(stream)
+  streamRef.current = stream
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -2740,7 +2842,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (!current || !sheetEntry) return
       const bounds = el.getBoundingClientRect()
       const deltaY = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * size.height : event.deltaY
-      const next = wheelSheetZoom(current, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, { x: event.clientX - bounds.left, y: event.clientY - bounds.top })
+      const anchor = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+      if (streamRef.current) {
+        const gesture = streamGesture.current ?? { base: current, live: current, anchor }
+        const live = wheelSheetZoom(gesture.live, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, anchor)
+        gesture.live = live
+        gesture.anchor = anchor
+        streamGesture.current = gesture
+        showGesture(gesture.base, live)
+        clearTimeout(gesture.timer)
+        gesture.timer = setTimeout(() => settleGestureRef.current(), STREAM_ZOOM_SETTLE_MS)
+        return
+      }
+      const next = wheelSheetZoom(current, sheetEntry.metrics, size, { deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey }, anchor)
       if (next !== current) setWindow(sheetId, next)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -2769,11 +2883,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (pointers.current.size !== 2 || !gesture || !entry) return
     event.preventDefault()
     const now = pinchState()
-    zoomTo(pinchSheetZoom(gesture.start, entry.metrics, viewport, gesture.distance, now.distance, gesture.anchor, now.anchor))
+    const live = pinchSheetZoom(gesture.start, entry.metrics, viewport, gesture.distance, now.distance, gesture.anchor, now.anchor)
+    if (stream) {
+      streamGesture.current = { base: gesture.start, live, anchor: now.anchor }
+      showGesture(gesture.start, live)
+      return
+    }
+    zoomTo(live)
   }
   const onPointerEnd = (event: React.PointerEvent) => {
     pointers.current.delete(event.pointerId)
-    if (pointers.current.size < 2) pinch.current = null
+    if (pointers.current.size < 2) {
+      if (pinch.current && stream) settleGesture()
+      pinch.current = null
+    }
   }
   const zoomBy = (direction: 1 | -1) => { if (entry && scroll) zoomTo(keyboardSheetZoom(scroll, entry.metrics, viewport, direction)) }
   const resetZoom = () => { if (entry && scroll) zoomTo(setScrollZoom(scroll, entry.metrics, viewport, 1, { x: viewport.width / 2, y: viewport.height / 2 })) }
@@ -2781,6 +2904,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onKeyDown = (event: React.KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase()
     if (mod && key === 'f') { event.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return }
+    // A stream prints the server's static units (its start is a no-op when print is not allowed).
+    if (stream && mod && key === 'p') { event.preventDefault(); props.remoteChrome?.print(); return }
     if (key === 'escape' && copyPending) { event.preventDefault(); cancelCopy(); setAnnouncement('Copy cancelled.'); return }
     if (allowCopy && mod && key === 'c' && ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid') || event.target === event.currentTarget)) { event.preventDefault(); void copyGrid(); return }
     if (!allowCopy && mod && key === 'c') { event.preventDefault(); return }
@@ -2943,6 +3068,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [allowPrint, instance])
 
   const onGridChange = (transition: GridTransition) => {
+    // Stage 4a: a stream selects nothing (selection is 4b); only the window may move.
+    if (stream) { if (transition.window !== scroll) setWindow(activeSheetId, transition.window); return }
     cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
@@ -2962,13 +3089,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const state = session.get(activeSheetId)
     const result = navigateSelection(state.selection, entry.metrics, request, entry.view)
     setAnnouncement(result.announcement)
+    // A stream has no cell to inspect (its store rejects every read).
+    if (result.kind === 'hidden' && stream) return
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
     let moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     const nextGutter = gutterOf(entry, moved.window)
     if (nextGutter !== gutter) moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     cancelCopy()
-    session.setSelection(activeSheetId, result.selection)
+    // A stream's Go To scrolls only: it selects nothing (4b).
+    if (!stream) session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
   }
   // ---- view-only row/column resizing (spec §5.6) ----
@@ -3135,7 +3265,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // toolbar; floating, they covered visible cells on a phone.
   const dockZoom = touchControls || pane.width < NARROW_PANE_PX
   const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
-  const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
+  // The canvases' CSS size is the one CSS scale of the pane (a stream at a fractional dpr: the bucket surface onto CSS
+  // px); a stream zoom gesture in progress adds its transform to that same one layer.
+  const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none', ...(gestureTransform ? { transform: gestureTransform, transformOrigin: '0 0' } : {}) }
   // Coarse pointer: 44px targets (spec §9.3) shown icon-only; the label stays in
   // the accessible name through an sr-only span, so names are unchanged.
   const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:justify-center ov:gap-1 ov:coarse:min-h-11 ov:coarse:min-w-11 ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
@@ -3166,10 +3298,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
-          <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
-            <Icon icon={Copy} name="copy" size={14} />
-            <span className={toolbarLabel}>Copy selection</span>
-          </button>
+          {!stream && (
+            <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
+              <Icon icon={Copy} name="copy" size={14} />
+              <span className={toolbarLabel}>Copy selection</span>
+            </button>
+          )}
           {copyPending && (
             <button type="button" className={toolbarBtn} onClick={cancelCopy}>
               Cancel copy
@@ -3181,10 +3315,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               <span className={toolbarLabel}>Print</span>
             </button>
           )}
-          <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
-            <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
-            <span className={toolbarLabel}>Reset sizes</span>
-          </button>
+          {/* A stream's sizes are the server's (a local resize would misalign its tiles; sheet-resize is 4b). */}
+          {!stream && (
+            <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
+              <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
+              <span className={toolbarLabel}>Reset sizes</span>
+            </button>
+          )}
+          {stream ? props.remoteChrome?.toolbar : null}
           {(activePivots ? activePivots.length > 0 && activePivots.some(def => !def.disableFieldList) : Boolean(remote && remote.layout(activeSheetId).hasPivotDisplay)) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
             if (fieldListPivot !== null) { setFieldListPivot(null); requestAnimationFrame(() => fieldListInvoker?.focus()) }
             else if (pivotController) void pivotController.showFieldList(activeIndex, selectedFieldListPivot, event.currentTarget)
@@ -3211,13 +3349,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           </div>
         )}
         </div>
+        {/* The parent §15 notice, once (S4 §6.11): a stream's grid has positions only. */}
+        {stream && props.remoteChrome ? <div role="status" data-officeview-notice="" className="ov:bg-chrome ov:text-muted ov:text-xs ov:px-3">{props.remoteChrome.textUnavailable}</div> : null}
         <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, minWidth: 0 }}>
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
-              onResize={resizeLine}
-              onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
+              {...(stream ? { positionsOnly: true } : {
+                onResize: resizeLine,
+                onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
+              })} pendingSortColumn={sortPending?.col ?? null} onNotice={setAnnouncement}
               popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
               cellControls={scroll && ((pivotUi && pivotController && activePivots?.length) || (pivotUi && slicerController && activeSlicerDrawings.length) || (pivotUi && timelineController && activeTimelineDrawings.length)) ? <>
@@ -3282,7 +3424,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
                 return true
               } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
-              cellPresentation={at => {
+              cellPresentation={stream ? undefined : at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
                 // The grid-facing text carries the reviewed CF descriptor so the

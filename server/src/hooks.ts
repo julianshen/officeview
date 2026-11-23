@@ -25,6 +25,10 @@ export interface AuthDecision {
     /** Speaker notes in Presenter View (Stage 3c), presenter role only. On by
      * default; anything but `undefined` or `true` turns it off (fail closed, R3). */
     notes?: boolean
+    /** Stage 4a (R9): the IANA zone of the session clock (TODAY() and date rules on tiles). Absent: the server's
+     * `sheetTimeZone`. A zone `Intl` rejects closes the open `policy-refused`. Held on the session entry, never in
+     * `EffectivePolicy`; a resume that resolves to another zone closes `auth-failed`. */
+    timeZone?: string
   }
 }
 export type Authorize = (req: AuthRequest) => Promise<AuthDecision | null>

@@ -27,15 +27,18 @@ import { decodeShowMessage, MEDIA_ID, SHOW_PLAN_LIMITS } from '../show-plan'
 import type { AllocationOwner, Lease } from '../../slideshow/types'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
+import type { StreamSheetLayout } from '../sheet-wire'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { MediaSendLog } from './media-pacing'
 import { UNIT_FIRST_CAP, UNIT_RESEND_CAP, UNIT_SPAN_MS, UnitSendLog, type UnitBudgetView } from './unit-budget'
+import { SheetChannel, type DecodedTile, type TilesRequest, type TilesResult } from './sheet-channel'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 export type { PrintedPage } from './print-wire'
+export type { DecodedTile, TilesRequest, TilesResult } from './sheet-channel'
 
 export type StreamClient = Pick<WebSocket, 'send' | 'close' | 'readyState' | 'addEventListener' | 'removeEventListener'> & { binaryType: BinaryType }
 export type StreamClientFactory = (source: StreamSource) => StreamClient
@@ -72,6 +75,8 @@ export interface SessionOptions {
   now?: () => number
   /** Tightens a print job's held-blob ceiling (tests); it never rises past PRINT_JOB_MAX_BLOB_BYTES. */
   printMaxBlobBytes?: number
+  /** Stage 4a (S4 §6.10): HELLO capabilities (`sheet-tiles@1`). Sent only when non-empty; a resume sends the same list. */
+  features?: readonly string[]
 }
 export interface PrintOptions { signal?: AbortSignal; onProgress?(done: number, total: number): void }
 
@@ -91,6 +96,8 @@ export const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.SHOW_PLAN]: [8 << 20, 32 << 20],
   // MEDIA_CHUNK (piece 5, D14): stored, so its decoded cap equals its encoded cap. No request expects one yet.
   [Kind.MEDIA_CHUNK]: [4 << 20, 4 << 20],
+  // XLSX_TILE (Stage 4a): one 512² tile per message, ≤ 8 MiB encoded / 64 MiB decoded.
+  [Kind.XLSX_TILE]: [8 << 20, 64 << 20],
 }
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */
@@ -382,6 +389,18 @@ export class StreamSession {
   /** Unit and show requests waiting for log room, oldest first (each still in `units` / `shows`). */
   private readonly waiting = new Set<UnitReq | ShowReq>()
   private drainTimer?: ReturnType<typeof setTimeout>
+  /** Stage 4a: `sheet-layout` and `tiles` requests (a tiles-mode XLSX session). */
+  private readonly sheet = new SheetChannel({
+    manifest: () => this.manifest,
+    token: () => this.token,
+    allocId: () => this.allocId(),
+    canSend: () => this.state === 'open' && !!this.sock && this.sock.readyState === 1,
+    send: (m) => this.send(m),
+    dropReassembly: (reqId) => this.reasm?.drop(reqId),
+    onSent: () => this.ensureSweeper(),
+    now: () => this.now(),
+    inReassembly: (reqId) => !!this.reasm?.has(reqId),
+  })
   /** Piece 5: `media-request`s by their current reqId, and those waiting for a pacing slot (oldest first). */
   private readonly mediaReqs = new Map<number, MediaReq>()
   private readonly mediaWaiting = new Set<MediaReq>()
@@ -438,7 +457,7 @@ export class StreamSession {
   stats() {
     return {
       inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size,
-      printing: !!this.printJob, notesPending: this.notesReqs.size, showPending: this.shows.size, mediaPending: this.mediaReqs.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
+      printing: !!this.printJob, sheetPending: this.sheet.pending, tilesDropped: this.sheet.dropped, notesPending: this.notesReqs.size, showPending: this.shows.size, mediaPending: this.mediaReqs.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
       /** Encoded bytes held in partial reassembly. */
       reassemblyBytes: this.reasm.bufferedBytes,
     }
@@ -837,6 +856,32 @@ export class StreamSession {
   }
 
   /** Idempotent: closes the socket once (1000), rejects everything pending. */
+  /**
+   * Stage 4a (S4 §6.4): the paint-facing layout of one visible sheet of a tiles-mode session, every part checked
+   * (each ≤ 64 KiB, at most 64) and decoded by `decodeSheetLayout`, for the sheet asked. A refusal rejects with its
+   * code (`layout-too-large`, `rate-limited`, …; a stale-token one is re-sent once); a malformed answer or another
+   * sheet's rejects `policy-refused`; a units-mode session rejects `unsupported-op` without sending. A resume
+   * re-requests it under the new token. Abort rejects with its reason.
+   */
+  async sheetLayout(sheetId: string, signal?: AbortSignal): Promise<StreamSheetLayout> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    return this.sheet.sheetLayout(sheetId, signal)
+  }
+
+  /**
+   * Stage 4a (S4 §6.5): one batch of at most 64 distinct tiles of a tiles-mode session. `onTile` receives each
+   * checked tile once (see sheet-channel.ts for what is dropped); the promise resolves at `tiles-done` with every
+   * coordinate not delivered in `refused` (a whole-request refusal refuses them all under its code), and
+   * `retryAfterMs` whenever one is `rate-limited` (the server's, clamped to TILE_RETRY_MAX_MS, else
+   * TILE_RETRY_FALLBACK_MS). Abort sends `sheet-cancel` and resolves `{refused: [], cancelled: true}` at once. A
+   * resume re-sends exactly the pending coordinates once under the new token. A malformed request rejects
+   * `policy-refused`, a units-mode session `unsupported-op`, both without sending; a session end rejects.
+   */
+  async tiles(req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    return this.sheet.tiles(req, onTile, signal)
+  }
+
   close(): void { this.end(undefined, 1000) }
 
   // ── internals ──────────────────────────────────────────────────────────
@@ -1403,6 +1448,8 @@ export class StreamSession {
         : kind === Kind.SHOW_PLAN ? this.showAdmits(reqId)
         // MEDIA_CHUNK only ever for a live, started media request short of its declared chunks and bytes.
         : kind === Kind.MEDIA_CHUNK ? this.mediaAdmits(reqId)
+        // XLSX_TILE only ever for a live, sent tile batch with tiles still pending.
+        : kind === Kind.XLSX_TILE ? this.sheet.expectsTile(reqId)
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       // A show message's declared total is held to its request's encoded allowance (the grant's encoded
       // part) as well as the kind cap, before any fragment of it is copied.
@@ -1415,6 +1462,8 @@ export class StreamSession {
         : k === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.bodyCap ?? 0
         : k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.bodyCap ?? 0
         : k === Kind.MEDIA_CHUNK ? this.mediaLeft(this.liveMedia(reqId))
+        // A tile is held to the kind cap (its body is checked against 512² before anyone decodes it).
+        : k === Kind.XLSX_TILE ? (this.sheet.expectsTile(reqId) ? Infinity : 0)
         : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
@@ -1433,7 +1482,9 @@ export class StreamSession {
       sock.addEventListener('open', () => {
         if (!live()) return
         this.helloReqId = this.allocId()
-        this.send({ reqId: this.helloReqId, type: 'hello', client: 'officeview/1.0', recVersions: [1], ...extra })
+        // S4 §6.10: `features` only when the host opted in, on the first HELLO and on every resume.
+        const features = this.o.features?.length ? { features: [...this.o.features] } : {}
+        this.send({ reqId: this.helloReqId, type: 'hello', client: 'officeview/1.0', recVersions: [1], ...extra, ...features })
       })
       sock.addEventListener('message', (e) => { if (live()) void this.onMessage((e as MessageEvent).data) })
       sock.addEventListener('close', (e) => { if (live()) this.onClose((e as CloseEvent).code) })
@@ -1468,7 +1519,7 @@ export class StreamSession {
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
     if (size > FRAGMENT_CAP) return this.end(new StreamSessionError('oversized-frame'), 4007, 'oversized-frame')
     // R29: any fragment for a unit send is evidence the server received it (also for an aborted request).
-    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) { const id = new DataView(data).getUint32(6, true); this.unitAnswered(id); this.mediaAnswered(id) }
+    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) { const id = new DataView(data).getUint32(6, true); this.unitAnswered(id); this.mediaAnswered(id); this.sheet.touch(id) }
     const gen = this.gen
     this.inbox = this.inbox.then(async () => {
       if (gen !== this.gen) return
@@ -1498,6 +1549,8 @@ export class StreamSession {
       this.token = m.token
       return
     }
+    // Stage 4a: a live `sheet-layout` or `tiles` request's answer.
+    if (this.sheet.onText(m, data)) return
     const job = this.livePrint(m.reqId)
     if (job) return this.onPrintText(job, m, data)
     const notes = this.liveNotes(m.reqId)
@@ -1537,6 +1590,8 @@ export class StreamSession {
       const media = this.liveMedia(res.reqId)
       // Its grant is held from the send (ruling 4): a rejection is never an admission shortfall.
       if (media) return media.resolve({ refused: 'policy-refused' })
+      // A rejected tile message is dropped: the batch goes on (its tiles-done refuses what never arrived).
+      if (res.reqId !== undefined && this.sheet.expectsTile(res.reqId)) return
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)
@@ -1563,6 +1618,8 @@ export class StreamSession {
       const media = this.liveMedia(res.reqId)
       return media && this.onMediaFrame(media, res.payload)
     }
+    // Checked (and dropped when it is not a pending tile of its batch) by the channel.
+    if (res.kind === Kind.XLSX_TILE) return this.sheet.onTileFrame(res.reqId, res.payload)
     const req = this.units.get(res.reqId)
     if (!req) return
     try {
@@ -1635,6 +1692,8 @@ export class StreamSession {
     if (this.mediaDrainTimer) { clearTimeout(this.mediaDrainTimer); this.mediaDrainTimer = undefined }
     for (const req of [...this.mediaReqs.values()]) req.resolve({ refused: 'session-rotated' })
     for (const req of [...this.mediaShows.values()]) if (req.sent) req.resolve({ refused: 'session-rotated' })
+    // Review Focus 1: tile batches and layouts in flight wait for the resume, which re-sends what is still pending.
+    this.sheet.onDrop()
     this.scheduleResume()
   }
 
@@ -1650,7 +1709,9 @@ export class StreamSession {
     let m: Manifest
     try { m = await this.connect({ resume: { sid: prior.session.sid, resumeProof: this.token } }) } catch { return }
     if (this.state !== 'resuming') return
-    if (m.docRef !== prior.docRef || m.layoutFingerprint !== prior.layoutFingerprint || m.session.sid !== prior.session.sid || m.units.count !== prior.units.count) {
+    if (m.docRef !== prior.docRef || m.layoutFingerprint !== prior.layoutFingerprint || m.session.sid !== prior.session.sid || m.units.count !== prior.units.count
+      // Stage 4a: the sheet mode and its sheet list are fixed for the sid.
+      || m.sheetMode !== prior.sheetMode || JSON.stringify(m.sheets ?? null) !== JSON.stringify(prior.sheets ?? null)) {
       return this.end(new StreamSessionError('layout-changed'), 1000)
     }
     this.manifest = m
@@ -1675,6 +1736,8 @@ export class StreamSession {
     for (const req of [...this.shows.values()]) if (!req.sent) this.issueShow(req)
     // A media-show asked for while resuming goes out now (it starts the new socket's media queue).
     for (const req of [...this.mediaShows.values()]) if (!req.sent) this.issueMediaShow(req)
+    // Tile batches re-send exactly their pending coordinates; layouts are re-requested.
+    this.sheet.onResumed()
   }
 
   private ensureSweeper() {
@@ -1704,7 +1767,9 @@ export class StreamSession {
       for (const req of [...this.mediaReqs.values()]) {
         if (req.sent && req.start && !req.complete && now >= req.deadline && !this.reasm.has(req.reqId)) req.resolve({ refused: 'policy-refused' })
       }
-      if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && !this.mediaReqs.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+      // Stage 4a: a tile batch or layout with nothing arriving for SHEET_REPLY_MS expires (sheet-channel.ts).
+      this.sheet.sweep(now)
+      if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && !this.mediaReqs.size && !this.sheet.pending && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }
 
@@ -1728,6 +1793,7 @@ export class StreamSession {
     for (const req of [...this.shows.values()]) req.fail(err)
     for (const req of [...this.mediaReqs.values()]) req.fail(err)
     for (const req of [...this.mediaShows.values()]) req.resolve({ refused: error?.code ?? 'closed' })
+    this.sheet.end(err)
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)

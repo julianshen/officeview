@@ -103,6 +103,22 @@ export interface SheetAssetsOptions extends PaintOptions {
   /** The document whose chart context receives transferred models (default `doc`; a viewer passes its own document
    * so successive composed sheet documents share one chart facet). */
   chartOwner?: object
+  /** Stage 4a (R9): an injected CF clock. The preparation then reads no wall clock and no ambient zone: `TODAY()` and
+   * date rules see `epochNowMs` in `timeZone` (see `cfClockOptions`). Absent: the wall clock, as before. */
+  cfClock?: CfClock
+}
+/** A fixed CF instant and the zone it is read in. */
+export interface CfClock { readonly epochNowMs: number; readonly timeZone: string }
+type CfEvaluation = import('../../xlsx/cf/formula').CfDocumentEvaluation
+/**
+ * The three clock inputs of `prepareCfPaint` for an injected clock, kept in agreement (F2): `now` (the evaluation's one
+ * clock sample), the evaluation's `timeZone`, and a `dateContext` naming that same zone, date system and instant, so
+ * `cfAlignClock` keeps the formula evaluation rather than dropping it (`cf-evaluation-context-missing`).
+ */
+export function cfClockOptions(document: CfEvaluation, clock: CfClock): { evaluation: CfEvaluation; now: () => number; dateContext: { dateSystem: '1900' | '1904'; timeZone: string; epochNowMs: number } } {
+  const epochNowMs = clock.epochNowMs
+  const evaluation: CfEvaluation = Object.freeze({ ...document, timeZone: clock.timeZone })
+  return { evaluation, now: () => epochNowMs, dateContext: Object.freeze({ dateSystem: evaluation.dateSystem, timeZone: clock.timeZone, epochNowMs }) }
 }
 /**
  * The viewer's live main-thread ledger as a chart parent budget (spec 6.4): chart paint charges are admitted against
@@ -258,7 +274,9 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
       if (sheet?.conditionalFormatting) {
         const cf = await ensureConditionalFormatting([sheet])
-        conditionalFormatting = await cf?.prepareCfPaint(sheet, { store: options.cfStore, ...(options.cfWorkbook ? { workbook: options.cfWorkbook } : {}), documentSheets: doc.sheets, memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', evaluation: cf.cfDocumentEvaluationOf(doc), paintRects: options.cfPaintRects, viewport: options.cfViewport })
+        const evaluation = cf && cf.cfDocumentEvaluationOf(doc)
+        const clocked = evaluation && options.cfClock ? cfClockOptions(evaluation, options.cfClock) : undefined
+        conditionalFormatting = await cf?.prepareCfPaint(sheet, { store: options.cfStore, ...(options.cfWorkbook ? { workbook: options.cfWorkbook } : {}), documentSheets: doc.sheets, memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', evaluation, ...(clocked ?? {}), paintRects: options.cfPaintRects, viewport: options.cfViewport })
       }
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.

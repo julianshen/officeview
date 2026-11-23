@@ -27,7 +27,7 @@ import { CODEC_ID } from './mark/params'
 import { encodeEstimate } from './mark/mark-raster'
 import { deriveBasisKey } from './mark/basis'
 import { LeaseFull, ScratchLease } from './scratch'
-import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
+import { createRenderCache, DocumentLedger, renderKey, viewStateHash, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
 import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
@@ -39,11 +39,17 @@ import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
-import { IpRates, SessionRates } from './rate'
+import { IpRates, SessionRates, type RateOverrides } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type MediaUnitRefs, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
 import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
+import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
+import { sheetClockAt, type SheetClock } from './sheet/clock'
+import { encodeSheetLayout, encodeTileBody, LayoutTooLarge, MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
+import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
+import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -51,7 +57,7 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted' | 'unsupported-op' | 'stale-view' | 'layout-too-large'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
 /**
@@ -75,9 +81,11 @@ export const trackWindowBytes = (frames: ReadonlyArray<{ w: number; h: number }>
 
 /** The most click steps a plan carries (D3): a track's step is below it, a Morph's `fromStep` at most it. */
 const SHOW_PLAN_LIMITS_STEPS = 64
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8, MEDIA_CHUNK: 9 } as const
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, XLSX_TILE: 5, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8, MEDIA_CHUNK: 9 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
+/** R6: the ops an XLSX tiles session refuses `unsupported-op`. */
+const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 'copy', 'a11y'])
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -120,6 +128,15 @@ export interface StreamServerOptions {
    */
   /** TEST-ONLY: awaited inside a media delivery, after the file is opened and checked, and after each chunk read. */
   mediaTestHooks?: { afterOpen?(): void | Promise<void>; afterRead?(chunk: number): void | Promise<void> }
+  /** Stage 4a (R9): the session clock's zone when the decision's `policy.timeZone` is absent. Default `'UTC'`; a zone
+   * `Intl` rejects throws at construction. */
+  sheetTimeZone?: string
+  /** TEST and measure only (R3): a `'message'` or `'tile'` override replaces that class's windows, its burst included. */
+  rates?: RateOverrides
+  /** TEST and measure only (R3, T8): per delivered tile, `t0` is the instant its batch passed validation, the token
+   * and the `'tile'` rate check, and `t1` the instant its last fragment was passed to `sendBinary` (both
+   * `performance.now()`). Unset, no clock is read. */
+  onTileTiming?(t: { t0: number; t1: number; zoomStep: number; dpr: number }): void
   media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
 }
 
@@ -147,6 +164,9 @@ interface MediaSlot {
   plans: Map<number, Map<string, PlanMediaRecord['refused']>>
 }
 
+/** Stage 4a: a sid's tile state (`sessionDoc`). Resume and teardown stop every batch. */
+interface TileState { batches: Map<number, TileBatch>; slots: TileSlots; views: Set<string> }
+
 interface Conn {
   ip: string
   origin: string
@@ -167,12 +187,16 @@ type WS = ServerWebSocket<Conn>
 /** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
 /** `anim` (D5): shown units with timing, a transition or both; `morph` (Task 7): those entered by Morph. */
 /** `media` (piece 5, D19): shown units whose plan ships an audio record or a transition sound. */
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; media: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; media: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number; /** XLSX: the projected (visible) sheet names in tab order (Stage 4a). */ sheets?: readonly string[] }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
 export function createStreamServer(o: StreamServerOptions) {
   const now = o.now ?? Date.now
+  const sheetTimeZone = o.sheetTimeZone ?? 'UTC'
+  sheetClockAt(0, sheetTimeZone)
+  /** R9: the zone a decision resolves to (validated by `sheetClockAt`). */
+  const zoneOf = (d: AuthDecision): unknown => d.policy?.timeZone ?? sheetTimeZone
   const nowSec = () => Math.floor(now() / 1000)
   const ttl = o.tokenTtlSec ?? 300, lead = o.renewLeadSec ?? 5
   const readyMs = o.readyMs ?? 2000, helloMs = o.helloMs ?? 5000, graceMs = o.detachGraceMs ?? 30_000
@@ -192,11 +216,16 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
-  const renderCache = createRenderCache<RenderedUnit>()
+  /** Units and (Stage 4a) canonical sheet tiles, under one 512 MiB ceiling; a tile key never equals a unit key (its `tile` field is hashed). */
+  const renderCache = createRenderCache<RenderedUnit | RenderedTile>()
+  /** Stage 4a (F8): sheet extents by `docRef|contentPolicyId|fingerprint|sheetIndex|day|timeZone`, from the sheet's
+   * layout (no cell data). Bounded; the oldest entry goes first. */
+  const extents = new Map<string, Promise<SheetExtent>>()
+  const EXTENTS_MAX = 1024
   /** sid → §14 scratch lease (≤ 2 Layer-1 encodes in flight). */
   const leases = new Map<string, ScratchLease>()
   const forensicStats = { marked: 0, unmarked: 0, carriers: [] as number[], leased: 0 }
@@ -226,7 +255,7 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.SHOW_PLAN]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP, [KIND.MEDIA_CHUNK]: 4 << 20 }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.XLSX_TILE]: 8 << 20, [KIND.SHOW_PLAN]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP, [KIND.MEDIA_CHUNK]: 4 << 20 }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
@@ -311,15 +340,22 @@ export function createStreamServer(o: StreamServerOptions) {
   async function openSession(ws: WS, hello: Record<string, unknown>, reqId: number) {
     const req: AuthRequest = { headers: ws.data.headers, ip: ws.data.ip, url: new URL(ws.data.url), ...(typeof hello.token === 'string' ? { token: hello.token } : {}) }
     const resume = hello.resume as { sid?: unknown; resumeProof?: unknown } | undefined
-    if (resume !== undefined) return resumeSession(ws, req, resume, reqId)
+    // validHello has checked it.
+    const features = parseFeatures(hello.features) as readonly string[]
+    if (resume !== undefined) return resumeSession(ws, req, resume, reqId, features)
     const decision = await o.authorize(req)
     if (gone(ws)) return
     if (!decision) return close(ws, 'auth-failed')
     const resolved = await o.resolveDocument(req, decision)
     if (gone(ws)) return
     if (!resolved) return close(ws, 'auth-failed')
-    if (!admit(resolved.bytes).ok) return close(ws, 'unsupported-format')
+    const admitted = admit(resolved.bytes)
+    if (!admitted.ok) return close(ws, 'unsupported-format')
     const policy = effectivePolicy(decision)
+    // R9: the session clock, before anything is charged or issued; an invalid zone refuses the open.
+    let clock: SheetClock
+    try { clock = sheetClockAt(now(), zoneOf(decision) as string) } catch { return close(ws, 'policy-refused') }
+    const requestedMode = sheetModeOf(admitted.format, features)
     const docRef = await docRefOf(o.keys.kDoc, resolved.bytes)
     if (gone(ws)) return
     // Charge the document BEFORE parsing; one that cannot fit is refused at admission.
@@ -328,10 +364,14 @@ export function createStreamServer(o: StreamServerOptions) {
     let committed = false
     try {
       let opened
-      try { opened = await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
+      try { opened = admitted.format === 'xlsx' ? await o.pool.open(docRef, resolved.bytes, policy.contentPolicy, { sheetMode: requestedMode }) : await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
         return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
       }
       if (gone(ws)) return
+      // Fix round 1: a workbook a tiles manifest cannot list (over 256 sheets, or a name over 31 characters) is served
+      // in units mode; its paintables build on first units use (R5).
+      const sheets = opened.sheets ?? []
+      const sheetMode: SheetMode = requestedMode === 'tiles' && (sheets.length > MAX_SHEETS || sheets.some((n) => n.length > SHEET_NAME_CHARS)) ? 'units' : requestedMode
       let forensic: Issued | undefined
       if (policy.forensicMark) {
         try { forensic = audit.issue(o.keys.kMsg, o.keys.keyGeneration) } catch (e) {
@@ -346,10 +386,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision), sheetMode })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, clock, tiles: { batches: new Map(), slots: new TileSlots(o.pool.admission.caps.perSessionOutstanding), views: new Set() }, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -363,7 +403,7 @@ export function createStreamServer(o: StreamServerOptions) {
    * itself grants (`resumeGranted`). Validation and supersession are bound to
    * the jti generation observed before any await, so of two racing resumes
    * only one can commit. */
-  async function resumeSession(ws: WS, req: AuthRequest, resume: { sid?: unknown; resumeProof?: unknown }, reqId: number) {
+  async function resumeSession(ws: WS, req: AuthRequest, resume: { sid?: unknown; resumeProof?: unknown }, reqId: number, features: readonly string[]) {
     if (typeof resume.sid !== 'string' || typeof resume.resumeProof !== 'string') return close(ws, 'auth-failed')
     const s = table.get(resume.sid), sd = sessionDoc.get(resume.sid)
     if (!s || !sd) return close(ws, 'auth-failed')
@@ -376,6 +416,8 @@ export function createStreamServer(o: StreamServerOptions) {
     // R3: copy, textA11y, the print caps (Stage 3b P4) and notes (Stage 3c) may change on resume; every other field, role included, is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
+      // Stage 4a: the same features (so the same sheet mode) and the same clock zone (R9); the day is kept.
+      && JSON.stringify(features) === JSON.stringify(sd.features) && zoneOf(d) === sd.clock.timeZone
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
     if (gone(ws)) return
@@ -391,6 +433,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (old !== ws) endMedia(sd)
     // A job on the old socket cannot continue on the new one.
     if (sd.print) { sd.print.stopped = true; sd.print.wake?.() }
+    stopTiles(sd)
     const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
@@ -403,6 +446,9 @@ export function createStreamServer(o: StreamServerOptions) {
     scheduleRenew(ws, s.sid, token.exp)
   }
 
+  /** Stage 4a: no tile of the sid's batches starts after this (resume, teardown); tiles in flight are sent only while their socket owns the sid. */
+  function stopTiles(sd: { tiles: TileState }) { for (const b of sd.tiles.batches.values()) b.stopped = true }
+
   function teardown(sid: string) {
     const r = reapers.get(sid); if (r) { clearTimeout(r); reapers.delete(sid) }
     table.close(sid)
@@ -413,6 +459,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
     if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
+    if (sd) stopTiles(sd)
     endMedia(sd)
     if (sd) releaseDoc(sd.doc.docRef)
   }
@@ -441,6 +488,12 @@ export function createStreamServer(o: StreamServerOptions) {
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
+      // Stage 4a: tiles mode only; a units-mode manifest is Stage 3's, key for key.
+      ...(sd.sheetMode === 'tiles' ? {
+        sheetMode: 'tiles' as const,
+        sheets: (sd.doc.sheets ?? []).map((name, i) => ({ sheetId: String(i), name })),
+        tiles: { px: TILE_PX, zoomSteps: [...TILE_ZOOM_STEPS], dprs: [...TILE_DPRS], palettes: [...TILE_PALETTES], maxBatch: TILE_BATCH_MAX },
+      } : {}),
     }
     ws.data.phase = 'manifest'
     sendFrames(ws, [frame(KIND.MANIFEST, reqId, encodeManifest(m))!])
@@ -510,7 +563,7 @@ export function createStreamServer(o: StreamServerOptions) {
   async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[], signal?: AbortSignal): Promise<RenderedUnit | RefusalCode> {
     const p = sd.policy, mark = markOf(p, sd.decision)
     const key = renderKey(keyFields(sd.doc, mark, unitIndex, scale, projection, missing))
-    const hit = renderCache.get(key)
+    const hit = renderCache.get(key) as RenderedUnit | undefined
     if (hit) return hit
     const size = sd.doc.units[unitIndex]!, estimate = size.w * size.h * 4 * scale ** 2 * 2
     try {
@@ -660,6 +713,174 @@ export function createStreamServer(o: StreamServerOptions) {
       send: (m) => send(ws, m),
       refuse: (code, nums) => refuse(ws, reqId, code, nums),
     })
+  }
+
+  /**
+   * Stage 4a (S4 §6.4, R14): `sheet-layout {reqId, token, sheetId}` on an XLSX tiles session (units mode refuses it
+   * `unsupported-op` before this). In order: the token (`textOp`); `sheetId` the canonical decimal index of a visible
+   * sheet, else `policy-refused`; the `'unit'` rate, charged once per request (its later parts charge nothing; S4
+   * §6.8); the fingerprint and the document ledger (as `onUnit`); the build on the docRef's worker (F23); the encode
+   * (an R14 cap ⇒ `layout-too-large`); then every part, while the session lives.
+   */
+  async function onSheetLayout(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const sheets = sd.doc.sheets ?? []
+    const id = msg.sheetId
+    if (typeof id !== 'string' || !/^(0|[1-9][0-9]{0,8})$/.test(id) || Number(id) >= sheets.length) return refuse(ws, reqId, 'policy-refused')
+    const rate = ws.data.rates.check('unit', now())
+    if (rate === 'close') return close(ws, 'rate-limited')
+    if (rate === 'refuse') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    let parts: object[]
+    try {
+      const layout = await o.pool.sheetLayout(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: Number(id), clock: sd.clock }, undefined, ws.data.gone.signal)
+      if (!alive()) return
+      rememberExtent(extentKey(sd, Number(id)), layout)
+      parts = encodeSheetLayout(layout)
+    } catch (e) {
+      if (!alive()) return
+      if (e instanceof LayoutTooLarge || (e instanceof RenderFailed && e.refusal === 'layout-too-large')) return refuse(ws, reqId, 'layout-too-large')
+      return refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
+    for (const p of parts) send(ws, { reqId, ...p })
+  }
+
+  /** Stage 4a (F8): the extent cache key (the layout is the servable snapshot's, keyed like it by the session clock). */
+  const extentKey = (sd: { doc: DocState; clock: SheetClock }, sheetIndex: number) => `${sd.doc.docRef}|${sd.doc.contentPolicyId}|${sd.doc.fingerprint}|${sheetIndex}|${sd.clock.day}|${sd.clock.timeZone}`
+  function extentOf(layout: StreamSheetLayout): SheetExtent {
+    const m = streamSheetGeometry(layout).metrics
+    return { colsCss: m.cols.totalCss(), rowsCss: m.rows.totalCss() }
+  }
+  function putExtent(key: string, p: Promise<SheetExtent>) {
+    extents.delete(key); extents.set(key, p)
+    while (extents.size > EXTENTS_MAX) extents.delete(extents.keys().next().value!)
+    p.catch(() => { if (extents.get(key) === p) extents.delete(key) })
+  }
+  /** A `sheet-layout` answer gives the sheet's extent for free (the client asks for it before any tile). */
+  function rememberExtent(key: string, layout: StreamSheetLayout) { if (!extents.has(key)) putExtent(key, Promise.resolve(extentOf(layout))) }
+  /** The sheet's whole domain in CSS px, built from its layout on the docRef's worker (the same axes `sheet-layout`
+   * gives the client, so the tile grid agrees), once per key. Rejects when the layout cannot be built. The job takes
+   * no socket's abort signal: other sids may await the same promise. */
+  function sheetExtent(sid: string, sd: { doc: DocState; policy: EffectivePolicy; clock: SheetClock }, sheetIndex: number): Promise<SheetExtent> {
+    const key = extentKey(sd, sheetIndex)
+    let p = extents.get(key)
+    if (!p) putExtent(key, p = o.pool.sheetLayout(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex, clock: sd.clock }).then(extentOf))
+    return p
+  }
+
+  /**
+   * Stage 4a (S4 §6.5, R4): `tiles {reqId, token, sheetId, viewGen, zoomStep, dpr, palette, tiles}` on an XLSX tiles
+   * session. The batch is registered on arrival, before any await, so a `sheet-cancel` right behind it finds it.
+   */
+  async function onTiles(ws: WS, msg: Record<string, unknown>) {
+    const sid0 = ws.data.sid, sd0 = sid0 ? sessionDoc.get(sid0) : undefined
+    const reqId = msg.reqId
+    if (ws.data.phase !== 'stream' || !sid0 || !sd0 || !owns(ws, sid0) || !isU32(reqId) || reqId === 0) return refuse(ws, reqId, 'policy-refused')
+    // A reqId already in progress on the sid would make its replies ambiguous.
+    if (sd0.tiles.batches.has(reqId)) return refuse(ws, reqId, 'policy-refused')
+    const batch: TileBatch = { reqId, stopped: false }
+    sd0.tiles.batches.set(reqId, batch)
+    try { await tilesOp(ws, msg, sd0, batch) } finally { if (sd0.tiles.batches.get(reqId) === batch) sd0.tiles.batches.delete(reqId) }
+  }
+  /**
+   * In order, each failure answering one whole-request `refused` that charges nothing: the shape (`tilesArgs`:
+   * `policy-refused`, or `stale-view` for another `viewGen`); the token (`textOp`); the fingerprint (else close
+   * `layout-changed`) and the document ledger; every coordinate on the sheet's grid (F8: `tileLimit` of its extent).
+   * Then the `'tile'` rate per tile (R4: the rest are refused `rate-limited` in `tiles-done`, with `retryAfterMs`); the
+   * `sheet_views` row, once per `(sid, sheetId, viewGen)`; each admitted tile (`runTiles`, at most
+   * `perSessionOutstanding` in flight per sid): the canonical tile (cache, else `pool.tile`), Layer-1 on its own
+   * basis (`tileBasisLabel`), the frame, the `tile_deliveries` row, the send; then `tiles-done`. A batch stopped
+   * before the rate charge (a `sheet-cancel` during validation) charges and sends nothing but `tiles-done`.
+   */
+  async function tilesOp(ws: WS, msg: Record<string, unknown>, sd0: { doc: DocState }, batch: TileBatch) {
+    const reqId = batch.reqId
+    const args = tilesArgs(msg, (sd0.doc.sheets ?? []).length)
+    if (typeof args === 'string') return refuse(ws, reqId, args)
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { s, sd } = a
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const alive = () => textAlive(ws, s.sid, sd)()
+    let extent: SheetExtent
+    // A sheet whose layout cannot be built (over an R14 cap, a diagnostic geometry) has no grid to bound tiles on.
+    try { extent = await sheetExtent(s.sid, sd, args.sheetIndex) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    if (!alive()) return
+    if (!tilesInGrid(args, extent)) return refuse(ws, reqId, 'policy-refused')
+    const done = (refused: Array<TileCoord & { code: TileRefusalCode }>, retryAfterMs: number) => {
+      if (alive()) send(ws, { reqId, type: 'tiles-done', refused, ...(retryAfterMs > 0 ? { retryAfterMs } : {}), ...(batch.stopped ? { cancelled: true } : {}) })
+    }
+    if (batch.stopped) return done([], 0)
+    const { admitted, retryAfterMs } = ws.data.rates.takeTiles(args.tiles.length, now())
+    const timing = o.onTileTiming, t0 = timing ? performance.now() : 0
+    const run = args.tiles.slice(0, admitted)
+    const limited = args.tiles.slice(admitted).map((t) => ({ col: t.col, row: t.row, code: 'rate-limited' as const }))
+    // R7: the view and clock this sid's tiles of the sheet are drawn under, durable before its first tile.
+    const viewKey = `${args.sheetId}|${args.viewGen}`
+    if (run.length && !sd.tiles.views.has(viewKey)) {
+      try { audit.recordSheetView({ sid: s.sid, sheetId: args.sheetId, viewGen: args.viewGen, spec: { sort: null, filters: [], sizes: [] }, clock: { day: sd.clock.day, timeZone: sd.clock.timeZone } }) } catch { return refuse(ws, reqId, 'policy-refused') }
+      sd.tiles.views.add(viewKey)
+    }
+    const refused = await runTiles({
+      batch, tiles: run, slots: sd.tiles.slots, alive,
+      deliver: (t) => deliverTile(alive, s.sid, sd, args, t, reqId, ws.data.gone.signal),
+      send: (frames) => { sendFrames(ws, frames); if (timing) timing({ t0, t1: performance.now(), zoomStep: args.zoomStep, dpr: args.dpr }) },
+    })
+    done([...refused, ...limited], limited.length ? retryAfterMs : 0)
+  }
+
+  /** The canonical-tier key of one tile (S4 §6.5): the §9.3 fields with `policyDetails.viewStateHash` (the identity
+   * view and the session clock), `scaleBucket` = dpr, `unitId` = sheetIndex, and the `tile` field. Never the sid. */
+  function tileKeyFields(doc: DocState, mark: MarkSpec, clock: SheetClock, a: TilesArgs, t: TileCoord): RenderKeyFields {
+    const unit = keyFields(doc, mark, a.sheetIndex, a.dpr, 'final-raster')
+    return { ...unit, policyDetails: { projection: doc.contentPolicyId, viewStateHash: viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock }) }, tile: { sheetIndex: a.sheetIndex, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row } }
+  }
+  /** One tile for a session: the canonical tile (the render cache, else the pool, then cached), Layer-1 over it on
+   * the tile's own basis, the frame, then the durable `tile_deliveries` row (forensic sessions, as units). In that
+   * order, so a tile over its frame cap leaves no row. `undefined`: the caller died meanwhile (send nothing). */
+  async function deliverTile(alive: () => boolean, sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; clock: SheetClock; forensic?: Issued }, a: TilesArgs, t: TileCoord, reqId: number, signal: AbortSignal): Promise<Uint8Array[][] | TileRefusalCode | undefined> {
+    // A long batch can outlive the parse: every tile re-charges it.
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
+    const mark = markOf(sd.policy, sd.decision)
+    const key = renderKey(tileKeyFields(sd.doc, mark, sd.clock, a, t))
+    let tile = renderCache.get(key) as RenderedTile | undefined
+    if (!tile) {
+      try { tile = await o.pool.tile(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, mark, clock: sd.clock }, TILE_BYTES_ESTIMATE, signal) } catch (e) { return !alive() ? undefined : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
+      // Fail closed: only the tile asked for (F24: its palette too) is cached or sent.
+      if (tile.w !== TILE_PX || tile.h !== TILE_PX || tile.palette !== a.palette) return 'policy-refused'
+      renderCache.put(key, tile, tile.png.length)
+    }
+    if (!alive()) return undefined
+    const canonical = tile.png
+    let png = canonical, unmarked: string | undefined
+    if (sd.forensic) {
+      const m = await markUnit(sid, sd, tileBasisLabel(a.sheetId, a.zoomStep, a.dpr, t.col, t.row), { png: canonical, w: tile.w, h: tile.h }, signal)
+      if (!alive()) return undefined
+      if (typeof m === 'string') return m === 'rate-limited' ? 'rate-limited' : 'policy-refused'
+      png = m.unit.png; unmarked = m.unmarked
+    }
+    let body: Uint8Array
+    try { body = encodeTileBody({ sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, col: t.col, row: t.row, png, w: tile.w, h: tile.h }) } catch { return 'policy-refused' }
+    const f = frame(KIND.XLSX_TILE, reqId, body)
+    if (!f) return 'policy-refused'
+    // Durable before the tile goes out (never a delivered mark without a record); a failed write refuses it.
+    if (sd.forensic) {
+      try { audit.recordTileDelivery({ sid, sheetId: a.sheetId, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return 'policy-refused' }
+    }
+    return [f]
+  }
+
+  /** Stage 4a (R12): `sheet-cancel {reqId, target}`: no tile of batch `target` starts after this; its `tiles-done`
+   * carries `cancelled: true`. An unknown target is ignored, and nothing answers the cancel itself. */
+  function onSheetCancel(ws: WS, msg: Record<string, unknown>) {
+    const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid) || !isU32(msg.target)) return
+    const b = sd.tiles.batches.get(msg.target)
+    if (b) b.stopped = true
   }
 
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
@@ -1176,7 +1397,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** §9.4 steps 4–5 for one session: Layer-1 over the canonical raster under
    * the scratch lease, on the basis keyed by `label` (a unit's `${i}@${scale}`,
    * or `notesBasisLabel`). Unmarkable units ship canonical bytes with a reason. */
-  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U, signal?: AbortSignal): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
+  async function markUnit<U extends { png: Uint8Array; w: number; h: number }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U, signal?: AbortSignal): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
     let release: () => void
     try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
     try {
@@ -1218,6 +1439,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!Array.isArray(m.recVersions) || m.recVersions.length === 0 || m.recVersions.length > 16 || !m.recVersions.every((v) => Number.isInteger(v) && v >= 0 && v <= 255)) return false
     if (m.token !== undefined && (typeof m.token !== 'string' || m.token.length > 512)) return false
     if (m.resume !== undefined && (typeof m.resume !== 'object' || m.resume === null)) return false
+    if (parseFeatures(m.features) === 'invalid') return false
     return true
   }
 
@@ -1243,6 +1465,16 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'relax' || 'policy' in m || 'projection' in m || 'contentPolicy' in m) return close(ws, 'policy-refused')
     if (ws.data.phase === 'opening') return refuse(ws, m.reqId, 'policy-refused')
     if (m.type === 'ready') return onReady(ws, m)
+    // Stage 4a (R6): an XLSX tiles session serves no unit or Stage 3 text op (each would render units); print works.
+    const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
+    if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
+    // The tile ops (never served in units mode): `sheet-layout` (Task 6), `tiles` and `sheet-cancel` (Task 9).
+    if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') {
+      if (mode !== 'tiles') return refuse(ws, m.reqId, 'unsupported-op')
+      if (m.type === 'sheet-layout') return onSheetLayout(ws, m)
+      if (m.type === 'tiles') return onTiles(ws, m)
+      return onSheetCancel(ws, m)
+    }
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
@@ -1272,7 +1504,7 @@ export function createStreamServer(o: StreamServerOptions) {
       const ip = srv.requestIP(req)?.address ?? 'unknown'
       const gate = ipRates.admit(ip, now())
       if (gate !== 'ok') return new Response('Too Many Requests', { status: 429 })
-      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set(), gone: new AbortController() }
+      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(o.rates), timers: new Set(), missingFaces: [], drainWaiters: new Set(), gone: new AbortController() }
       if (srv.upgrade(req, { data })) return undefined
       ipRates.release(ip)
       return new Response('Upgrade failed', { status: 400 })
@@ -1325,13 +1557,15 @@ export function createStreamServer(o: StreamServerOptions) {
     audit,
     /** The sid's hidden slide units (tests). */
     hiddenOf: (sid: string) => sessionDoc.get(sid)?.doc.hidden,
+    /** TEST-ONLY: the sid's session clock (Stage 4a, R9). */
+    sheetClockOf: (sid: string) => sessionDoc.get(sid)?.clock,
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */
     canonicalOf: (sid: string, unitIndex: number, scale: number) => {
       const sd = sessionDoc.get(sid)
       if (!sd) return undefined
-      const hit = renderCache.get(renderKey(keyFields(sd.doc, markOf(sd.policy, sd.decision), unitIndex, scale, 'final-raster')))
+      const hit = renderCache.get(renderKey(keyFields(sd.doc, markOf(sd.policy, sd.decision), unitIndex, scale, 'final-raster'))) as RenderedUnit | undefined
       return hit?.kind === 'raster' ? hit.png : undefined
     },
     table,

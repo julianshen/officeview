@@ -8,6 +8,8 @@
  * per-session marking through a scratch lease are Stage 2.
  */
 import { createHash } from 'node:crypto'
+import type { TilePalette } from '../../src/stream/sheet-wire'
+import type { SheetClock } from './sheet/clock'
 
 export const RENDER_CACHE_BYTES = 512 * 1024 * 1024
 export const DOCUMENT_CACHE_BYTES = 1024 * 1024 * 1024
@@ -23,10 +25,13 @@ export interface RenderKeyFields {
   projectionMode: 'final-raster' | 'commands'
   /** §6.4 projection id, XLSX viewStateHash, notes namespace — Stage 1: the
    * content-projection id and, for commands, the missing-face set. */
-  policyDetails: { projection: string; missingFaces?: string[] }
+  policyDetails: { projection: string; missingFaces?: string[]; /** Stage 4a (S4 §6.5): an XLSX tile's `viewStateHash`. */ viewStateHash?: string }
   unitId: number
+  /** Stage 4a (S4 §6.5): an XLSX tile (`scaleBucket` = its dpr, `unitId` = its sheetIndex). Absent, it is not hashed,
+   * so unit keys keep their hashes. */
+  tile?: { sheetIndex: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; col: number; row: number }
 }
-const ORDER: Array<keyof RenderKeyFields> = ['docRef', 'contentPolicyId', 'layoutFingerprint', 'recorderVersion', 'scaleBucket', 'markSettings', 'projectionMode', 'policyDetails', 'unitId']
+const ORDER: Array<keyof RenderKeyFields> = ['docRef', 'contentPolicyId', 'layoutFingerprint', 'recorderVersion', 'scaleBucket', 'markSettings', 'projectionMode', 'policyDetails', 'unitId', 'tile']
 
 function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
@@ -34,11 +39,20 @@ function canonical(v: unknown): string {
   return JSON.stringify(v)
 }
 
-/** The single §9.3 key form: canonical JSON of the fields in spec order, SHA-256 hex. */
+/** The single §9.3 key form: canonical JSON of the fields in spec order, SHA-256 hex. An absent `tile` is not
+ * hashed, so unit keys keep their hashes (a unit's `policyDetails` never carries `viewStateHash`). */
 export function renderKey(f: RenderKeyFields): string {
   const h = createHash('sha256')
-  for (const k of ORDER) h.update(`${k}=${canonical(f[k])}\n`)
+  for (const k of ORDER) if (k !== 'tile' || f.tile !== undefined) h.update(`${k}=${canonical(f[k])}\n`)
   return h.digest('hex')
+}
+
+/** Stage 4a (S4 §6.3, §6.5): the view a sheet tile is drawn under — the identity view in 4a — with the session clock. */
+export interface SheetViewState { sort: null; filters: []; sizes: []; authorHiddenTier: 'none'; clock: SheetClock }
+/** The SHA-256 hex of the canonical JSON of `v` (only its listed fields): `policyDetails.viewStateHash` of a tile key. */
+export function viewStateHash(v: SheetViewState): string {
+  const view = { sort: v.sort, filters: v.filters, sizes: v.sizes, authorHiddenTier: v.authorHiddenTier, clock: { day: v.clock.day, timeZone: v.clock.timeZone } }
+  return createHash('sha256').update(canonical(view)).digest('hex')
 }
 
 interface Entry<V> { value: V; bytes: number; pins: number }

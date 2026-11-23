@@ -1,12 +1,14 @@
 /** Render worker (§9.2): one DocumentHost per Bun Worker; one job at a time. */
 import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
-import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
+import { DocumentHost, PaintablesUnbuilt, RenderRefusal, type MarkSpec, type NotesJob, type Projection, type SheetMode } from '../render'
 import type { FfmpegInfo } from '../media/ffmpeg'
 import type { ProbeKillRequest, ProbeRunReply, ProbeRunRequest } from '../media/probe-host'
 import type { ProbeRunner, ProbeRunResult } from '../media/probe'
 import type { ShowPlanJob } from '../show/build'
 import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
+import type { SheetClock } from '../sheet/clock'
+import type { TileJob } from '../sheet/tile'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -24,7 +26,7 @@ export type WorkerRequest =
   /** Piece 5 (D21): the projected part written 0600 into `dir` (the media dir) as `name` (the pool's choice, so it can
    * delete the file if no reply comes); the caller adopts it. */
   | { type: 'media-part'; id: number; docKey: string; partPath: string; dir: string; name?: string }
-  | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full'; servedCacheBytes?: number }
+  | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full'; servedCacheBytes?: number; /** Stage 4a (R5): absent = `'units'`. */ sheetMode?: SheetMode }
   | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
   | { type: 'drop'; id: number; docKey: string }
   /** Stage 3c notes job: plan or draw unit i's notes image. */
@@ -41,6 +43,10 @@ export type WorkerRequest =
   | { type: 'show-morph'; id: number; docKey: string; job: MorphJob; grant?: number; hangMs?: number; crash?: boolean }
   /** Piece 4 D7: a show-plan layer's per-session Layer-1 (the page basis cropped to its rest). */
   | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
+  /** Stage 4a (F23): one sheet's `sheet-layout` (from its servable snapshot under the session clock). */
+  | { type: 'layout'; id: number; docKey: string; sheetIndex: number; clock: SheetClock }
+  /** Stage 4a (S4 §6.5): one 512² sheet tile (canonical, pre-forensic) from its servable snapshot. */
+  | { type: 'tile'; id: number; docKey: string; job: TileJob; hangMs?: number; crash?: boolean }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -68,6 +74,15 @@ function probeAnswered(r: ProbeRunReply): void {
   probes.delete(r.id)
   if (r.ok) p.ok(r.result); else p.fail(new Error(`probe: ${r.error}`))
 }
+/** A units path (R5): run it; if the entry's paintables are not built yet (a tiles-mode open), build them once and
+ * run again. The job's own checks run first, so a refused job never builds. */
+async function unitsPath<T>(docKey: string, run: () => T): Promise<T> {
+  try { return run() } catch (e) {
+    if (!(e instanceof PaintablesUnbuilt)) throw e
+    await host.ensurePaintables(docKey)
+    return run()
+  }
+}
 const stats = (): WorkerStats => ({ parses: host.parses, pages: host.pages, docs: host.docCount, probes: host.mediaProbes })
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
@@ -84,11 +99,13 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     }
     else if (m.type === 'media-refs') result = await host.mediaRefs(m.docKey, m.unit)
     else if (m.type === 'media-part') result = await host.mediaPart(m.docKey, m.partPath, m.dir, m.name)
-    else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy) }
+    else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy, m.sheetMode ? { sheetMode: m.sheetMode } : {}) }
     else if (m.type === 'drop') { host.drop(m.docKey); result = null }
     // A prepare without a grant is refused (grant 0) — the pool always sends one.
-    else if (m.type === 'text') result = host.text(m.docKey, m.job, m.grant ?? 0)
+    else if (m.type === 'text') result = await unitsPath(m.docKey, () => host.text(m.docKey, m.job, m.grant ?? 0))
     else if (m.type === 'notes') result = await host.notes(m.docKey, m)
+    // Before the final `else`: an unlisted type would fall through to `render`.
+    else if (m.type === 'layout') result = await host.sheetLayout(m.docKey, m.sheetIndex, m.clock)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }
@@ -99,7 +116,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         : m.type === 'show-plan' ? await host.showPlan(m.docKey, m.job, m.grant)
         : m.type === 'show-track' ? await host.showTrack(m.docKey, m.job, m.grant)
         : m.type === 'show-morph' ? await host.showMorph(m.docKey, m.job, m.grant)
-        : host.render(m.docKey, m)
+        : m.type === 'tile' ? await host.renderTile(m.docKey, m.job)
+        : await unitsPath(m.docKey, () => host.render(m.docKey, m))
     }
     const transfer: ArrayBuffer[] = []
     const r = result as { png?: Uint8Array; ops?: Uint8Array } | null

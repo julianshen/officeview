@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { Reassembler } from '../../src/stream/frame'
 import { decodeUnit } from '../../src/stream/unit'
 import { validateManifest, type Manifest } from '../../src/stream/manifest'
+import { decodeTileBody } from '../../src/stream/sheet-wire'
 import { deriveKeys } from '../src/keys'
 import type { AuthDecision, Authorize, ResolveDocument } from '../src/hooks'
 import { Pool } from '../src/pool'
@@ -76,7 +77,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
 }
 
 export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
-const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 6: [8 << 20, 32 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20], 9: [4 << 20, 4 << 20] }
+const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 5: [8 << 20, 64 << 20], 6: [8 << 20, 32 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20], 9: [4 << 20, 4 << 20] }
 
 export class Client {
   ws: WebSocket
@@ -234,5 +235,33 @@ export class Client {
     }
   }
   private mediaSeq = 0
+  /**
+   * Stage 4a Task 6: sends `sheet-layout` and collects its reqId: every `sheet-layout` part (with its UTF-8 size as
+   * received) up to the one with `last: true`, or any other answer (`refused`) as `end`.
+   */
+  async sheetLayout(reqId: number, sheetId: unknown, o: { token?: string; ms?: number } = {}) {
+    this.send({ reqId, type: 'sheet-layout', token: o.token ?? this.manifest!.session.token, sheetId })
+    const parts: Array<{ text: Record<string, any>; bytes: number }> = []
+    for (;;) {
+      const m = await this.next((m) => 'text' in m && m.text.reqId === reqId, o.ms) as { text: Record<string, any>; bytes: number }
+      if (m.text.type !== 'sheet-layout') return { parts, end: m.text }
+      parts.push(m)
+      if (m.text.last === true) return { parts }
+    }
+  }
+  /**
+   * Stage 4a Task 9: sends `tiles` (`req` is the request without `reqId`, `type` and, unless given, `token`) and
+   * collects its reqId: every kind-5 body, decoded (`decodeTileBody`), up to the closing text (`tiles-done` or a
+   * whole-request `refused`) as `end`. `send: false` only collects (the caller sent it).
+   */
+  async tiles(reqId: number, req: Record<string, unknown>, o: { ms?: number; send?: boolean } = {}) {
+    if (o.send !== false) this.send({ reqId, type: 'tiles', token: this.manifest!.session.token, ...req })
+    const tiles: Array<ReturnType<typeof decodeTileBody>> = []
+    for (;;) {
+      const m = await this.next((m) => ('text' in m && m.text.reqId === reqId) || ('binary' in m && m.binary.reqId === reqId), o.ms)
+      if ('binary' in m) { if (m.binary.kind !== 5) throw new Error(`unexpected kind ${m.binary.kind} on tiles`); tiles.push(decodeTileBody(m.binary.payload)); continue }
+      return { tiles, end: m.text }
+    }
+  }
   close() { this.ws.close() }
 }

@@ -5,7 +5,7 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type MediaDeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type ShowDeliveryRecord, type StoredRow } from './audit-store'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type MediaDeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type SheetViewRecord, type ShowDeliveryRecord, type StoredRow, type TileDeliveryRecord } from './audit-store'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
@@ -41,6 +41,9 @@ export interface AuditRow {
   notesShown: { images: number; chars: number }
   /** Show sends recorded for this sid (piece 4): charged sends, assets sent, and assets shipped without Layer-1. */
   showSent: { sends: number; assets: number; unmarked: number }
+  /** Stage 4a: the sid's sheet mode, fixed at open (`'tiles'` only for an XLSX client that sent `sheet-tiles@1`). A row
+   * stored before Stage 4a has none (units). */
+  sheetMode?: 'units' | 'tiles'
 }
 /** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. `media`
  * (piece 5): whether the sid is served media in shows (`can.media`). */
@@ -93,6 +96,16 @@ export class AuditTable {
   recordDelivery(d: Omit<DeliveryRecord, 'at'>): void {
     if (!this.store.getRow(d.sid)) throw new Error(`no audit row for ${d.sid}`)
     this.store.putDelivery({ ...d, at: Math.floor(Date.now() / 1000) })
+  }
+  /** A sheet tile is about to go to `sid`: durable before the send (F24: its palette is part of the record). Throws for an unknown or expired sid. */
+  recordTileDelivery(r: Omit<TileDeliveryRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putTileDelivery({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
+  /** The sheet view (identity in 4a) and clock `sid`'s tiles of `(sheetId, viewGen)` are drawn under: durable before the first tile; a repeat is ignored. Throws for an unknown or expired sid. */
+  recordSheetView(r: Omit<SheetViewRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putSheetView({ ...r, at: Math.floor(Date.now() / 1000) })
   }
   /** One copy (or counted a11y answer) is about to go to `sid`: durable before the send. Throws for an unknown or expired sid. */
   recordCopy(r: Omit<CopyRecord, 'at'>): void {

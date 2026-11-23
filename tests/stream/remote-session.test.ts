@@ -326,3 +326,24 @@ describe('StreamSession unit onSend (R16)', () => {
     expect(onSend).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('StreamSession HELLO features (Stage 4a Task 11)', () => {
+  async function helloOf(o: { features?: readonly string[]; token?: string }) {
+    const sock = new FakeSocket()
+    const p = StreamSession.open({ kind: 'stream', url: 'wss://x/stream', ...(o.token ? { token: o.token } : {}) }, { client: () => sock as never, faces: async () => [], ...(o.features ? { features: o.features } : {}) })
+    void p.catch(() => {})
+    sock.open(); await settle()
+    const hello = sock.sent.find((x) => x.type === 'hello')!
+    sock.frame(1, hello.reqId, encodeManifest({ ...exampleManifest(), recorder: { ...exampleManifest().recorder, requiredFaces: [] }, session: { ...exampleManifest().session, token: tokenFor('j1') } }))
+    ;(await p).close()
+    return hello
+  }
+  it("default HELLO is Stage 3's", async () => {
+    expect(Object.keys(await helloOf({})).sort()).toEqual(['client', 'recVersions', 'reqId', 'type'])
+    expect(Object.keys(await helloOf({ token: 't.o.k' })).sort()).toEqual(['client', 'recVersions', 'reqId', 'token', 'type'])
+    expect(Object.keys(await helloOf({ features: [] })).sort()).toEqual(['client', 'recVersions', 'reqId', 'type'])
+  })
+  it('opt-in HELLO carries the feature', async () => {
+    expect((await helloOf({ features: ['sheet-tiles@1'] })).features).toEqual(['sheet-tiles@1'])
+  })
+})

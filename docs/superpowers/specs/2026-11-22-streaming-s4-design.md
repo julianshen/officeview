@@ -1037,3 +1037,116 @@ none of them.
   - the tile p95 is measured at the server;
   - a 4a host opts in before 4b;
   - `officeview/core` consumers get the tile protocol client only.
+
+#### As built (4a)
+
+Stage 4a was built on `feature/streaming-s4a` (2de7ae4a..a8aa1a8d and the
+validation commit after it), to the plan
+`docs/superpowers/plans/2026-11-22-streaming-s4a.md` and its rulings R1–R16.
+Validation, numbers and gates: `docs/validation/streaming-s4a.md`. The
+parent and S3 amendments of §10 that 4a implements are written into those
+specs, dated 2026-11-23. The calls below are the ones a reader of this
+design needs.
+
+- **Owner ruling, 2026-11-23: a marked blank pane never names a wrong
+  session.** Blank tiles stay marked, because the white cells carry the
+  mark and the gridlines let a capture register. A blank pane is attributed
+  to the right session or abstains, never to another (Task 1 measured 30/30
+  to the right session, 0 wrong; d366d96c, b1eab2a8). This replaces "flat
+  tiles may abstain" in §10 item 6 and "abstains honestly on a blank one"
+  in the §9 4a line.
+- **R3, the p95 protocol.** t0 is the instant a tile passes validation,
+  the token check and the `'tile'` rate check; t1 is when its last fragment
+  is passed to `sendBinary`. One tile per request, serially; zoom 1 at
+  dpr 1 and dpr 2; warm document cache, cold render cache; `visibleMark:
+  'fixed'` with forensic marking on; the `'message'` and `'tile'` rates
+  raised by a test-and-measure-only option. Measured with
+  `scripts/stream-s4/tile-p95.ts`, through the test-and-measure-only
+  `StreamServerOptions.onTileTiming`, which reads no clock when unset.
+- **R6, Stage 3 text ops in tiles mode.** `unit`, `search`, `select`,
+  `copy` and `a11y` on an XLSX tiles session are refused `unsupported-op`;
+  `print` works. `can.*` stays the policy's claim, and the 4a client mounts
+  no find or copy.
+- **R9, the session clock.** `(day, timeZone)`: the decision's
+  `policy.timeZone` (checked with `Intl`), else the server's
+  `sheetTimeZone` (default `'UTC'`); an invalid zone closes
+  `policy-refused`. `day` is the date of the server's `now()` at open in
+  that zone. It is fixed for the sid, across resume and midnight, and a
+  resume that resolves to another zone closes `auth-failed`. It is the CF
+  `dateContext` (12:00 local on `day`) and the evaluation zone.
+- **R10, tracing a pane capture.** The investigator names the tile window
+  `{sheetId, zoom, dpr, c0..c1, r0..r1}` (and palette). `traceTiles`
+  rebuilds each tile from `sheet_views` and the stored clock, composites a
+  window reference with each tile's own basis offset by its origin, and
+  registers the capture against it. The candidates are the sids with a
+  marked `tile_deliveries` row in the window (b1eab2a8). Finding the window
+  automatically is a follow-up.
+- **R12, the wire-visible small calls.**
+  - zoom travels as `zoomStep`, an index 0..10 into `SHEET_ZOOM_STEPS`,
+    never a float;
+  - the wire `sheetId` is the decimal index in the projected sheets in tab
+    order, and the payload's `sheetIndex` is the same number. Under
+    `visible-only` hidden sheets are stripped first; under `'full'` they
+    stay, as in local mode (Task 4 revised ruling). The workbook's own
+    `sheetId` attribute is never sent;
+  - `light` and `dark` are fixed server palettes from the default theme
+    tokens; only the pending colours reach a tile, and host canvas tokens
+    do not;
+  - the per-session `timeZone` is the one from the decision (R9);
+  - new refusal codes `unsupported-op`, `stale-view` and
+    `layout-too-large`; a malformed request is refused `policy-refused`.
+- **R8 as built: the spill is measured, not the whole run** (d4ece036,
+  0b583d55). R8's conservative whole-run spill blanked short labels beside
+  floating shapes, a visible regression from local mode. A text cell's
+  spill rect now reaches only as far as its text measurably overflows,
+  measured with the tile renderer's own cell layout on the alignment's
+  sides, plus the antialiasing margin and a quarter em, capped by the empty
+  run. On a CF sheet the cell is measured in its base font plus bold and
+  italic. **The whole run is still taken** for: no canvas backend; rotated
+  or stacked text; a layout that throws; a sheet with region styles; a CF
+  sheet whose CF set or a rule is unresolved, or whose rule writes an
+  unknown set, a font size or name, or a number format, or is an icon set.
+  Follow-up: spill room is measured on the authored geometry, while tiles
+  paint the blanked one (no leak).
+- **Coverage blanking (Task 5 ruling, 36cb848e).** Blanking stops covered
+  cells from painting; it does not make their values underivable (visible
+  formulas' saved values and charts can show them). The CF and formula
+  evaluation view of every sheet reads the blanked sheets, and a sparkline
+  located in a covered cell is dropped. A sparkline in an uncovered cell
+  that plots covered values is accepted.
+- **B1, which predates 4a (open, for the owner).** In units mode an XLSX
+  unit over 8192 px gives a manifest the client rejects, so the workbook
+  does not open. Tiles mode advertises that unit as the static refusal
+  unit, so its manifest validates and its print refuses (5d6fc8d7). Units
+  mode is unchanged.
+- **B2: a pane's state is layout** (6a554adf). `<pane state="frozen">` (and
+  `frozenSplit`, `split`) is no longer read as an unowned visibility flag,
+  so frozen-pane workbooks open under `visible-only`. This also changes
+  units mode, from a refusal to an open.
+- **The visible mark scales with zoom·dpr.** It lives in sheet space, so it
+  is small at 0.25 and large at 4×, and seams stay continuous (eeae85cd).
+- **The worker-recycle stall.** Every tile counts one page toward the
+  pool's 256-page recycle, so about 1 tile in 256 waits about 0.9 s behind
+  a re-open and snapshot rebuild. The p95 holds; it stays as a follow-up
+  (lighter recycle weighting for tiles, or a pre-warm).
+- **Client pacing and failure** (f414af01, c4d5a79b, cff71e5d, c445018a): at
+  most 2 batches of at most 64 tiles in flight; a pacer of 8 per 1 s and
+  80 per 10 s under the server's message budget; a `rate-limited` tile is
+  retried after `retryAfterMs`, 1,000 ms when absent, capped at 10 s; a
+  sheet request with nothing heard for 5 s fails (tiles refused, layout
+  rejected); a transient failure of a visible tile is retried after the
+  1 s cooldown, at most 3 times in a row, and a permanent refusal is not
+  retried.
+- **Tiles fall back to units per document** when the projected sheets
+  break the client's manifest bounds: more than 256 sheets, or a sheet
+  name over 31 characters (5aa80083).
+- **F27.** "Every existing suite passes unmodified" covers the local and
+  viewer suites. The edits 4a made to `tests/stream/*` are append-only:
+  new cases, no existing assertion changed (`git diff --numstat` shows 0
+  deletions).
+
+**Left to 4b and 4c** (of §10): item 1's merge-covered purge in
+`projectXlsx` and the undrawn-cell blanking (`;;;`, CF `showValue="0"`);
+item 2 (the analytic rule as the sole rule for answers, the ink oracle);
+item 4's `'sheet'` class; item 6's sort-order and fit limits; item 11 (typed
+conditions refused on protected streams).

@@ -25,6 +25,9 @@ export type StreamErrorCode =
   | 'still' | 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'morph-fallback'
   /** Client refusal (piece 4): admission had no room for a show message in flight; transient and local, never a server rate pause. */
   | 'admission'
+  /** Stage 4a tile-op refusals: the op is not served in this sheet mode, the view generation is not the sheet's, or
+   * the sheet's layout is over an R14 cap. */
+  | 'unsupported-op' | 'stale-view' | 'layout-too-large'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'

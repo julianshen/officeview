@@ -42,6 +42,8 @@ export interface StreamOptions {
   streamFonts?: { baseUrl: string }
   /** Load notices and unit diagnostics of a stream session. */
   onStreamNotice?: (notice: StreamNotice) => void
+  /** Stage 4a (S4 §6.10): `'tiles'` opts an XLSX stream session into server-painted sheet tiles. Off by default. */
+  streamSheets?: 'tiles'
 }
 
 /**
@@ -120,7 +122,7 @@ export function useOfficeFile(
     // §6.3: the mode is the branch. A stream source (or a promise of one) opens
     // a session through the lazy remote chunk and never reaches a byte reader.
     const openRemote = (src: StreamSource) => import('../stream/remote/open').then((m) => m.openRemoteDocument(src, {
-      signal: controller.signal, client: streamRef.current.streamClient, fonts: streamRef.current.streamFonts,
+      signal: controller.signal, client: streamRef.current.streamClient, fonts: streamRef.current.streamFonts, streamSheets: streamRef.current.streamSheets,
       onNotice: (n) => { if (!cancelled) streamRef.current.onStreamNotice?.(n) },
     }))
     const load = (src: ByteSource | StreamSource): Promise<AnyDoc | RemoteOfficeDoc> => isStreamSource(src) ? openRemote(src) : loadLocal(src)
@@ -218,6 +220,7 @@ export const OfficeFile = forwardRef(function OfficeFile({
   streamClient,
   streamFonts,
   onStreamNotice,
+  streamSheets,
   ...rest
 }: OfficeFileProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
@@ -256,6 +259,7 @@ export const OfficeFile = forwardRef(function OfficeFile({
     ...(streamClient ? { streamClient } : {}),
     ...(streamFonts ? { streamFonts } : {}),
     ...(onStreamNotice ? { onStreamNotice } : {}),
+    ...(streamSheets ? { streamSheets } : {}),
   })
   useEffect(() => { Promise.resolve(data).then((s) => { if (!isStreamSource(s)) name(s, null, true) }, () => {}) }, [data])
   const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
