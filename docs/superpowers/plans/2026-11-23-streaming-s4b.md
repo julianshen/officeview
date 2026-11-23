@@ -8,7 +8,7 @@
 - **Server.** One accessor, `sheetTextView`, turns a sheet snapshot plus the session's sizes into the only sheet any text answer may read. Covered, undrawn and merge-tail cells are blank in it, and so is every cell of an unknown-coverage sheet.
   - The pool worker runs the **local engines** over it: `WorkbookFind`, `serializeSelection`, `formatCellPresentation` and `autoFitSize`. Parity with local mode therefore holds by construction, and the tests check it against fixtures with the withheld cells physically deleted.
   - Sizes become per-session view state (`viewGen`, `viewStateHash`), so tiles, layout and the tracer stop assuming the identity view.
-- **Client.** A new capability `sheet-view@1` gates every 4b behaviour, so a 4b client facing a 4a server keeps 4a's read-only viewer. `StreamWorkbook` gains find, copy, a11y, fit and resize over the session. `InteractiveSheetDoc` keeps its own selection and keyboard code on streams: they are geometry-only.
+- **Client.** A new capability `sheet-view@1` selects tiles mode with every 4b behaviour. A 4a server ignores it and answers units mode, so Stage 3 search and copy keep working there. `StreamWorkbook` gains find, copy, a11y, fit and resize over the session. `InteractiveSheetDoc` keeps its own selection and keyboard code on streams: they are geometry-only.
 
 **Tech Stack:** TypeScript. Server: Bun (`server/`, `bun test`, `bun:sqlite`, pool `Worker`s, the server canvas backend). Client: React (`src/components/xlsx`, `src/components/remote`), vitest, the Playwright `stream` project.
 
@@ -59,7 +59,7 @@
   - `'text'` (60/min, refuse-only) covers `sheet-find`, `sheet-copy` and `sheet-a11y` (refused off-mode requests included).
   - New `'sheet'` (parent §14: 30 ops/min, 1 in flight, refuse-only, never toward the 4008 window) covers `sheet-fit` and `sheet-resize`. 4c completes the class.
 - **Units mode and local mode unchanged:**
-  - a session without `sheet-view@1` gets 4a's manifest key for key;
+  - a session with neither `sheet-view@1` nor `sheet-tiles@1` gets Stage 3's manifest; one with `sheet-tiles@1` only gets 4a's, key for key;
   - `server/test/xlsx-units-baseline.test.ts` and the Stage 3 text and print suites pass unedited;
   - every `tests/**` local and viewer suite passes unmodified.
 - **`tests/stream/**` edits are append-only.** New cases only; no existing assertion changes. `git diff --numstat 1e2fbf4d -- tests/stream` must show 0 deletions.
@@ -95,15 +95,22 @@
 ## Plan calls (spec silences and conflicts, decided here; Task 15 writes the wire-visible ones into the specs)
 
 - **P1. A 4b capability.** The spec does not say what a 4b client does against a 4a server, which refuses every `sheet-*` text op.
-  - Plan call: the HELLO gains the feature `sheet-view@1`. The manifest carries `sheetView: 1` only in tiles mode when the HELLO carried both features.
-  - Without the feature, the server refuses `sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit` and `sheet-resize` `unsupported-op`, and the client keeps 4a's viewer. A 4a server ignores the unknown feature (4a R12).
-  - **Why:** a fail-closed client against an old server, and 4a's assertions stay valid unedited.
+  - Plan call: a new HELLO feature `sheet-view@1`.
+    - A 4b server answers an XLSX in tiles mode iff the features hold `sheet-tiles@1` or `sheet-view@1`. The manifest carries `sheetView: 1` iff they hold `sheet-view@1`.
+    - The default 4b client sends `['sheet-view@1']` only. A 4a server ignores it (4a R12) and answers **units** mode, with full Stage 3 search, copy and a11y.
+    - A host that passes `streamSheets: 'tiles'` sends both features and gets tiles, with or without `sheetView`.
+    - Without `sheetView`, the server refuses `sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit` and `sheet-resize` `unsupported-op`, and the client shows 4a's viewer.
+  - **Why:** a default client in a mixed deployment never loses Stage 3 text (the reason for §6.10's 4a opt-in), and 4a's tests stay valid unedited.
 - **P2. `sheetTextView` is the one text accessor** (S4 §6.2, §6.7).
   - Plan call: no text op reads `SheetSnapshot.sheet` directly. Under `unknown` coverage, `servableSheet` keeps the authored sheet (`server/src/sheet/snapshot.ts:83–90`), so a direct read would leak exactly that case.
   - **Why:** one proof point.
 - **P3. Merge tails are blanked in answers only** (Open item 1). Tiles and `projectXlsx` are untouched.
 - **P4. Undrawn cells.**
-  - **Number format.** A cell whose formatted display text is `''` while its value is non-empty is blank; this is what `;;;` produces.
+  - **Number format.** A cell is blank when its formatted display text is `''` while its value is non-empty; this is what `;;;` produces. The display text is formatted under the **CF-effective style**, so a CF rule that writes `;;;` counts too.
+  - **The CF text scope.** It comes from `prepareCfTextScope` (`src/xlsx/cf/text.ts:375`, React-free; the local viewer reaches it through `InteractiveSheetDoc.tsx:1173`).
+    - It is prepared once per text view, over each CF rule's sqref ∩ the used range, with the session clock: `dateContext {dateSystem, timeZone: clock.timeZone, epochNowMs: clockEpochMs(clock)}` and `now: () => clockEpochMs(clock)`, as the tile's `cfClock` is.
+    - It is held on the `TextView` and is the `prepareScope`/`textOf` scope of every op (find, copy, a11y, fit).
+    - When the sheet has CF rules and the scope is unavailable (refused, budget or throw), every cell of every CF sqref is blank (fail closed).
   - **CF.** A cell is blank when the snapshot's CF batch gives `barAt(r,c)?.showValue === false` or `iconAt(r,c)?.showValue === false`. When the sheet has a `showValue="0"` rule and its CF batch is unavailable, every cell of that rule's sqref is blank.
   - Plan call: `hidesTextAt` is not used, because it depends on host and scale (`src/xlsx/cf/render.ts:39–41`).
   - **Why:** analytic, scale-free and fail-closed.
@@ -139,8 +146,18 @@
   - **Why:** a full list in every reply would pass 64 KiB at 4,096 entries per axis.
 - **P12. Refusals.**
   - **Order:** `stale-view` for an old `viewGen`; `hidden-target` for a collapsed row or column (local: "is hidden; it cannot be resized", `InteractiveSheetDoc.tsx:3123`); `coverage-unknown` under `visible-only` on an unknown-coverage sheet; `view-state-limit`. None advances `viewGen`.
-  - **The `view-state-limit` caps:** at most 2 sheets with non-identity view state per sid (S4 §6.3's suggestion); at most `MAX_SESSION_SIZES` = 4,096 per axis per sheet (the local cap); at most 16 MiB of view state per process, at `SESSION_SIZE_ENTRY_BYTES` = 128 B per entry.
-  - Charging the document-cache admission waits for 4c, whose 8 MiB bands need it.
+  - **The `view-state-limit` caps:** at most `MAX_SESSION_SIZES` = 4,096 per axis per sheet (the local cap), and at most 16 MiB of view state per process, at `SESSION_SIZE_ENTRY_BYTES` = 128 B per entry.
+  - Plan call: S4 §6.3's "two non-identity sheets per sid" is sized for 8 MiB sort bands, so it counts sort and filter state only (4c). Sizes are capped per axis instead, so a viewer may resize on any number of tabs.
+  - Charging the document-cache admission (§6.3 says "required") waits for 4c, whose bands need it. 4b's view state is at most 1 MiB per sheet.
+- **P12a. Client pacing for `'sheet'` and `'text'`.**
+  - One `sheet-resize` is in flight per viewer. Key-repeat steps made meanwhile fold into one pending target size (the latest wins), which is sent when the reply lands.
+  - A fit is two ops (`sheet-fit`, then `sheet-resize`).
+  - The find query is sent 250 ms after the last keystroke, and a newer one supersedes it.
+  - **Announcements:**
+    - `rate-limited`: 'Too many requests. Try again shortly.' (S3 item 10);
+    - `view-state-limit`: the local "{name} was not resized: this sheet already has the maximum number of resized {columns|rows}. Reset sizes to start over.";
+    - `coverage-unknown`: "{name} can't be resized in this viewing mode.";
+    - `hidden-target`: the local "{name} is hidden; it cannot be resized.".
 - **P13. Lost replies.**
   - On resume, `sheet-find` and `sheet-fit` are re-issued; `sheet-copy`, `sheet-a11y` and `sheet-resize` reject `session-rotated` and are never re-issued (S3 item 11).
   - After a rejected resize the client re-fetches `sheet-layout` for the authoritative `viewGen` and sizes.
@@ -162,8 +179,13 @@
 
    Pinned in Tasks 7 and 11.
 3. **A covered cell far off the viewport, never tiled.** Expected: find, copy, a11y and fit treat it as blank from any scroll history, including after a resize that uncovers its neighbour. Pinned in Tasks 1 and 14.
-4. **A select-all copy on a million-row sheet.** Expected: one answer, or `copy-too-large {limit: 4194304}`; never a truncated copy, and no 4008 close. Pinned in Task 7.
-5. **A 4b client against a 4a server, and a 4a client against a 4b server.** Expected: tiles mode with 4a behaviour (no Find, Copy or selection on the first; an unchanged manifest on the second). Pinned in Tasks 3 and 13.
+4. **A select-all copy on a million-row sheet.** Expected: the local answer in one copy (the fixture is about 8k cells), never truncated, and no 4008 close. Over 4 MiB, the answer is `copy-too-large {limit: 4194304}`. Pinned in Task 7.
+5. **Mixed versions.**
+   - A default 4b client against a 4a server gets units mode with Stage 3 text.
+   - An opted-in 4b client against a 4a server gets tiles with 4a behaviour.
+   - A 4a client against a 4b server gets an unchanged manifest.
+
+   Pinned in Tasks 3 and 13.
 
 **Not in 4b** (4c): sort, filter, `filter-values`, `range-detect`, C1, step 6's key use, typed-condition refusal, `pivot-refused`, `sheet_ops`, and the rest of `'sheet'`.
 
@@ -184,23 +206,26 @@
   - `SessionSizes` (`src/xlsx/view/axisSizes.ts`).
 - Produces:
   ```ts
-  export interface TextView { sheetIndex: number; sheet: XlsxSheet; geometry: SheetGeometryResult; blankAll: boolean; withheld: number }
-  export function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, sizes: SessionSizes): TextView
+  export interface TextView { sheetIndex: number; sheet: XlsxSheet; geometry: SheetGeometryResult; blankAll: boolean; withheld: number; scope: EffectiveFormatScope | undefined; release(): void }
+  export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, sizes: SessionSizes, o: { workbook: XlsxDocument; clock: SheetClock; budget: FormatBudget }): Promise<TextView>
   export function textDocument(base: XlsxDocument, views: ReadonlyMap<number, TextView>): XlsxDocument   // the sheets replaced by their views
   ```
   - Under `'full'`, `sheet === projected` and `withheld === 0`.
   - Under `visible-only` with unknown coverage, `blankAll` is true and every cell is a value-less copy that keeps its style.
-  - Otherwise the view is `snap.sheet` with P3, P4 and P5 blanking applied, and `geometry` is built with `sizes`.
+  - Otherwise the view is `snap.sheet` with P3, P4 and P5 blanking applied, `geometry` is built with `sizes`, and `scope` is P4's CF text scope.
+  - A view needs the full `SheetSnapshot`, because P4 reads its CF batch (`barAt`/`iconAt`). The host builds views from cached snapshots (Task 5).
 - Fixtures appended to `sheet-fixtures.ts`:
   - `offViewportCovered()`: `OFFVIEW-Z5000` at Z5000 under an unfilled rect, and an uncovered `OFFVIEW-A1`;
   - `slidUnderAnchor()`: a `oneCellAnchor` 150×20 px shape at B1 and `SLID-E1` in E1. Shrinking B to 8 px covers E1;
   - `mergeTail()`: A1:C1 merged, with `MERGE-A1` and `TAIL-B1`;
   - `hiddenFormat()`: B2 `HIDDENFMT` formatted `;;;`;
   - `cfHiddenValue()`: a data bar with `showValue="0"` on B1:B4, numbers in B1:B3 and `CFTEXT-B4` in B4;
+  - `cfHiddenFormat()`: B1:B3 hold 4, 7 and 9, with a CF `cellIs > 5` rule whose dxf writes `numFmt ";;;"`. B2 and B3 paint nothing; B1 paints `4`;
+  - `absoluteOverB2()`: an `absoluteAnchor` unfilled rect over B2, which holds `ABS-B2`. Widening column A to 300 px slides B2 out from under it;
   - `textGrid()`: 2 sheets of 30×8 mixed text, numbers, `#,##0.0` and dates. It has `needle`/`NEEDLE` in 6 cells, hidden row 7, hidden column F, merge A5:C6, frozen 1×1, and an image over D20 that covers `NEEDLE-D20`.
 
 - [ ] **Step 1: Write the failing tests** (`}, 30_000)` on each).
-  - `"engines import under Bun"`: `createObjectWorkbookSource` (`src/xlsx/view/source.ts:975`), `WorkbookFind` (`find.ts:248`), `serializeSelection` (`copy.ts:176`) and `formatCellPresentation` all run once on `textGrid` under `bun test`. If one cannot, STOP and report.
+  - `"engines import under Bun"`: `createObjectWorkbookSource` (`src/xlsx/view/source.ts:975`), `WorkbookFind` (`find.ts:248`), `serializeSelection` (`copy.ts:176`), `prepareCfTextScope` (`cf/text.ts:375`) and `formatCellPresentation` all run once on `textGrid` under `bun test`. If one cannot, STOP and report.
   - `"covered cells are blank in the view"`:
     - `unfilledShapeOverText`: B2 has no value;
     - `rotatedBox`: every cell whose grid rect meets `x 40..60, y 30..50` has no value;
@@ -211,7 +236,10 @@
     - `TAIL-B1` is gone and `MERGE-A1` stays;
     - `HIDDENFMT` is gone;
     - B1:B3 of `cfHiddenValue` are blank and `CFTEXT-B4` stays (P4 precision);
-    - with the CF batch stubbed unavailable, B1:B4 are all blank.
+    - with the CF batch stubbed unavailable, B1:B4 are all blank;
+    - `cfHiddenFormat`: B2 and B3 are blank and B1 keeps `4`; with the CF scope stubbed unavailable, B1:B3 are all blank;
+    - the scope's clock is the session's: `prepareCfTextScope` (spied) receives `epochNowMs === clockEpochMs(clock)`.
+  - `"covered stays covered in answers"`: on `absoluteOverB2` with `cols {0: 300}`, B2 is still blank, both in the view and in the snapshot's tile sheet.
   - `"full is the identity"`: under `'full'`, `sheet === projected` for each fixture above.
 - [ ] **Step 2: Run** `cd server && bun test test/sheet-text-view.test.ts`. Expected: FAIL (no module).
 - [ ] **Step 3: Implement** `text-view.ts`. P3, P4 and P5 blank by `blankCell` semantics: value removed, style kept. Whether the CF batch is unavailable is read from the snapshot's assets (`RenderSheetAssets` CF batch absent or `undefined`).
@@ -242,7 +270,16 @@
     - `decodeFindHits(m): Array<{ sheetIndex: number; row: number; col: number; hidden?: 'filter' }>`;
     - `decodeA11yCells(m): Array<{ row: number; col: number; text: string }>`;
     - `decodeFitResult(m): number`;
-    - `decodeSheetView(m): { sheetId: string; viewGen: number; change: { axis: 'row' | 'col'; index: number; size: number } | { reset: true } }`.
+    - `decodeSheetView(m): SheetViewChange`.
+  - the shared types:
+    ```ts
+    export interface SheetFindHit { sheetIndex: number; row: number; col: number; hidden?: 'filter' }
+    export interface SheetFindAnswer { hits: SheetFindHit[]; total: number; truncated: boolean }
+    export interface Box { x: number; y: number; width: number; height: number }
+    export interface SheetFitRequest { sheetId: string; viewGen: number; axis: 'row' | 'col'; index: number; pane: Box; regions?: Box[] }
+    export type SheetResizeRequest = { sheetId: string; viewGen: number } & ({ axis: 'row' | 'col'; index: number; size: number } | { reset: true })
+    export interface SheetViewChange { sheetId: string; viewGen: number; change: { axis: 'row' | 'col'; index: number; size: number } | { reset: true } }
+    ```
   - `StreamSheetLayout` gains `sessionRows: Array<[number, number]>` and `sessionCols: Array<[number, number]>`, chunked under `LAYOUT_LIMITS.intervals`. A 4a server's layout has neither, and decoding gives `[]`.
 
 - [ ] **Step 1: Write the failing tests** (append):
@@ -276,11 +313,13 @@
 - Modify:
   - `server/src/ws.ts`: `TILES_REFUSED` at `:88`, the manifest at `:492`, the dispatch at `:1469–1476`, `RefusalCode` at `:60`;
   - `server/src/rate.ts`: `RateClass` at `:41`, `SessionRates`;
+  - `server/src/sheet/mode.ts:24`: `sheetModeOf`;
   - `src/stream/manifest.ts`: `sheetView?: 1`.
 - Test: create `server/test/sheet-view-handshake.test.ts`; modify `tests/stream/manifest.test.ts` (append)
 
 **Interfaces:**
 - Produces:
+  - `sheetModeOf` (`server/src/sheet/mode.ts:24`) gives `'tiles'` for an XLSX when `features` include `sheet-tiles@1` or `sheet-view@1` (P1).
   - `sessionDoc` entries gain `sheetView: boolean`, which is true iff tiles mode and `features` include `sheet-view@1`. It is fixed per sid, and resume already compares `features`.
   - The manifest gains `sheetView: 1` only when that holds.
   - `SessionRates.check('sheet', now)` at 30 per 60 s, plus `SessionRates.sheetBusy: boolean`, the one-in-flight flag, set and cleared by the op.
@@ -293,7 +332,7 @@
   - `"sheet-view@1 adds sheetView to a tiles manifest only"`:
     - `['sheet-tiles@1', 'sheet-view@1']` on XLSX gives `sheetView === 1`;
     - `['sheet-tiles@1']` gives the 4a tiles manifest with `'sheetView' in m === false`;
-    - `['sheet-view@1']` alone gives units mode with no `sheetView`;
+    - `['sheet-view@1']` alone gives tiles mode with `sheetView === 1` (P1);
     - a DOCX gets no new keys.
   - `"the 4b ops need the feature"`: with `['sheet-tiles@1']`, each of the five ops is refused `unsupported-op`, and so is each in units mode.
   - `"resume keeps the feature"`: a `sheet-view` sid resumed without `sheet-view@1` closes `CLOSE['auth-failed']`.
@@ -304,7 +343,7 @@
 - [ ] **Step 5: Run green:** the same commands, then `cd server && bun test test/sheet-handshake.test.ts test/xlsx-units-baseline.test.ts` (unchanged).
 - [ ] **Step 6: Commit.**
   ```bash
-  git commit -m "feat(stream-s4b): sheet-view@1 capability, sheet rate class, 4b refusal codes" -- server/src/ws.ts server/src/rate.ts src/stream/manifest.ts server/test/sheet-view-handshake.test.ts tests/stream/manifest.test.ts
+  git commit -m "feat(stream-s4b): sheet-view@1 capability, sheet rate class, 4b refusal codes" -- server/src/ws.ts server/src/rate.ts server/src/sheet/mode.ts src/stream/manifest.ts server/test/sheet-view-handshake.test.ts tests/stream/manifest.test.ts
   ```
 
 ### Task 4: Session view state, `sheet-resize`, and sized tiles
@@ -319,7 +358,8 @@
   - `server/src/sheet/layout.ts`: `sessionRows`/`sessionCols` and the current `viewGen`;
   - `server/src/ws.ts`: `onSheetLayout`, `tilesOp`, `extentKey`, `tileKeyFields` at `:836`, the `sheet_views` row and the new `onSheetResize`;
   - `server/src/audit-store.ts:31`: `SheetViewRecord.spec.sizes`;
-  - `server/src/detect/trace.ts:206`: `traceTiles` rebuilds each tile with its delivery's `viewGen` spec.
+  - `server/src/detect/trace.ts:206`: `traceTiles` rebuilds each tile with its delivery's `viewGen` spec;
+  - `src/xlsx/view/streamGeometry.ts:17`: `streamSheetGeometry(l)` merges `l.sessionRows`/`l.sessionCols` with `mergeAxisOverrides`, exactly as `buildSheetGeometry` merges session sizes. The layout is the one source of sizes, and the server's `extentOf` (ws.ts) reads it too.
 - Test: create `server/test/sheet-resize.test.ts`; modify `server/test/trace-tiles.test.ts` (append)
 
 **Interfaces:**
@@ -335,6 +375,8 @@
     dispose(): void                                   // returns its bytes to the ledger
   }
   export class ViewStateLedger { constructor(readonly maxBytes = 16 * 1024 * 1024) }
+  export function sessionSizesOf(w: WireSizes): SessionSizes
+  export function wireSizesOf(s: SessionSizes): WireSizes          // canonical order
   ```
   - `sessionDoc` entries hold `views: SessionViews`. It survives resume and is disposed at teardown.
   - `viewStateHash` takes `sizes: WireSizes`, so the identity view hashes exactly as in 4a (a golden pins it).
@@ -356,8 +398,10 @@
     - `viewGen 5` (`stale-view`);
     - a hidden row of `xlsx-hidden-rows` under `'full'` (`hidden-target`);
     - `unresolvedAnchor` under visible-only (`coverage-unknown`);
-    - a third sheet resized on a 3-sheet book (`view-state-limit`);
-    - 4,097 distinct column indices (`view-state-limit` on the last).
+    - 4,097 distinct column indices (`view-state-limit` on the last);
+    - with `new ViewStateLedger(1024)` injected, the 9th entry in the process (`view-state-limit`).
+  - `"three tabs may be resized"`: resizes on sheets 0, 1 and 2 of a 3-sheet book all succeed (P12).
+  - `"client geometry equals the server's under sizes"`: for `grid500x100` with `{cols {1: 8, 3: 200}, rows {4: 60}}`, `streamSheetGeometry(layout).metrics.cols.start(j)` and `rows.start(i)` equal `buildSheetGeometry(sheet, {sizes})`'s for `j` in [0, 1, 2, 3, 4, 16383] and `i` in [0, 4, 5, 499, 1048575].
   - `"the sheet class refuses at 31"`: 30 resizes in a minute pass, the 31st is refused `rate-limited`, and a second resize sent while one is in flight is refused `rate-limited`.
   - `"sized tiles"`:
     - after a resize, `tiles` at `viewGen 0` gives `stale-view`;
@@ -373,7 +417,7 @@
 - [ ] **Step 4: Run green:** the same files, then `cd server && bun test` (report the count).
 - [ ] **Step 5: Commit.**
   ```bash
-  git commit -m "feat(stream-s4b): per-session sizes — sheet-resize, view-state caps, sized tiles, tracer" -- server/src/sheet/view-state.ts server/src/cache.ts server/src/sheet/tiles-op.ts server/src/sheet/tile.ts server/src/render.ts server/src/sheet/layout.ts server/src/ws.ts server/src/audit-store.ts server/src/detect/trace.ts server/test/sheet-resize.test.ts server/test/trace-tiles.test.ts server/test/cache.test.ts
+  git commit -m "feat(stream-s4b): per-session sizes — sheet-resize, view-state caps, sized tiles, tracer" -- src/xlsx/view/streamGeometry.ts server/src/sheet/view-state.ts server/src/cache.ts server/src/sheet/tiles-op.ts server/src/sheet/tile.ts server/src/render.ts server/src/sheet/layout.ts server/src/ws.ts server/src/audit-store.ts server/src/detect/trace.ts server/test/sheet-resize.test.ts server/test/trace-tiles.test.ts server/test/cache.test.ts
   ```
 
 ### Task 5: The `sheet-text` pool job and `sheet-fit`
@@ -394,12 +438,12 @@
   - The job type:
     ```ts
     export type SheetTextJob =
-      | { op: 'find'; query: string; matchCase: boolean; sheets: number[]; sizes: Record<number, WireSizes> }
+      | { op: 'find'; query: string; matchCase: boolean; sheetIndex: number; sizes: WireSizes; limit: number }
       | { op: 'copy'; sheetIndex: number; selection: WireSelection; sizes: WireSizes; maxBytes: number }
       | { op: 'a11y'; sheetIndex: number; rows: Array<[number, number]>; cols: [number, number]; sizes: WireSizes }
       | { op: 'fit'; sheetIndex: number; axis: 'row' | 'col'; index: number; pane: Box; regions: Box[]; sizes: WireSizes }
     export type SheetTextReply =
-      | { op: 'find'; hits: Array<[number, number, number]>; total: number; truncated: boolean }
+      | { op: 'find'; hits: Array<[number, number]>; more: boolean }   // [row, col] in local order; more: hits past `limit`
       | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; bytes: number }
       | { op: 'a11y'; cells: Array<[number, number, string]> }
       | { op: 'fit'; size: number }
@@ -407,7 +451,7 @@
   - `DocumentHost.sheetText(docKey, clock, job): Promise<SheetTextReply>` builds the text views it needs (Task 1) and caches them per `(sheetIndex, clock, sha256(sizes))`, keeping at most 16 per document and releasing on `drop`.
   - `Pool.sheetText(sid, job & {docRef, contentPolicy, clock}, bytesEstimate, signal)`, with the same affinity and admission as `sheetLayout`.
   - `onSheetFit`, in order: the token, `fitArgs`, `'sheet'` rate and busy, `stale-view`, `hidden-target`, then the job.
-    - The fit result is `autoFitSize(kind, index, {geometry: view.geometry, sheet: view.sheet, pane, regions, knownRows: limit => view.sheet.rows.slice(0, limit).map(r => r.index), measure})`, with `createFitMeasure` on the server backend.
+    - The fit result is `autoFitSize(kind, index, {geometry: view.geometry, sheet: view.sheet, pane, regions, knownRows: limit => view.sheet.rows.slice(0, limit).map(r => r.index), measure})`, with `createFitMeasure` on the server backend. Cell text is measured under `view.scope`'s effective style, as the local resident fit does.
     - The answer is `sheet-fit-result {size}`. Fit never changes view state.
 
 - [ ] **Step 1: Write the failing tests** (`}, 30_000)`):
@@ -431,9 +475,10 @@
 - Test: create `server/test/sheet-find.test.ts`
 
 **Interfaces:**
-- Consumes: `textDocument` (Task 1), `createObjectWorkbookSource`, and `WorkbookFind` pulled page by page (`FIND_PAGE_HITS`) until complete or 5,000 hits.
+- Consumes: `textDocument` (Task 1), `createObjectWorkbookSource`, and `WorkbookFind` pulled page by page (`FIND_PAGE_HITS`) until complete or the job's `limit`.
+- **Batched by sheet, as `runSearch` batches units** (`ops.ts:109`, `SEARCH_BATCH_UNITS`). The ws side sends one `find` job per sheet in workbook order, with `limit` = 5,000 minus the hits so far. Between jobs it re-checks ownership, the stream phase and the session entry, and re-touches the document ledger. Concatenating per-sheet answers gives `WorkbookFind`'s workbook order, which the parity test checks.
 - Produces:
-  - Find input: the identity order, `visibility` from the view's axes, `isColumnVisible: col => size > 0`, and `textOf` = `cellDisplayText` with the style, as `InteractiveSheetDoc.tsx:1842–1850` builds it locally.
+  - Find input: the identity order, `visibility` from the view's axes, and `isColumnVisible: col => size > 0`. `textOf` is `cellDisplayText` under `view.scope?.effectiveStyle(row, col, base) ?? base`, and `prepareScope` returns `view.scope`, as `InteractiveSheetDoc.tsx:1839–1857` builds them locally.
   - `onSheetFind`, in order: the token, `findArgs`, `'text'` rate, fingerprint, ledger, the job, then the chunks (`sheet-find-result` ≤ 48 KiB each, then `sheet-find-done`).
   - Hits never carry text. One find runs per sid: a newer one supersedes it, as `supersede` does (`ops.ts:92`).
 
@@ -445,10 +490,13 @@
     - `OFFVIEW-Z5000` (`OFFVIEW-A1` is);
     - `TAIL-B1`;
     - `HIDDENFMT`;
+    - `cfHiddenFormat`'s `7` and `9` (`4` is found);
     - any text on `unresolvedAnchor`.
 
     After a `cols {1: 8}` resize on `slidUnderAnchor`, `SLID-E1` is not found; before it, it is.
   - `"full finds as local"`: under `'full'`, `COVERED-B2` is found.
+  - `"CF-effective display text"`: on a CF fixture whose rule writes `0.0`, the find for `7.0` hits as local find does on the same fixture with the scope.
+  - `"batched by sheet"`: on a 3-sheet `textGrid`, `pool.sheetText` is called once per sheet. A socket closed after the first job leads to no second job.
   - `"no text on the wire"`: no message of a find for `needle` contains `needle` (case-insensitive) outside the echoed request.
   - `"limits"`: 6,000 matching cells give 5,000 hits and `truncated: true`; 257 units give `policy-refused`; the 61st `'text'` op in a minute gives `rate-limited`, with no 4008.
   - `"search works without copy"`: `copy: false` answers.
@@ -470,7 +518,7 @@
 - Test: create `server/test/sheet-copy.test.ts`
 
 **Interfaces:**
-- Consumes: `serializeSelection` with the view's store, the identity order, row visibility from the view's axes and column visibility from zero widths, as `InteractiveSheetDoc.tsx:2611–2641` builds them. `format` is `cellDisplayText`, and `prepareScope` uses the resident CF scope.
+- Consumes: `serializeSelection` with the view's store, the identity order, row visibility from the view's axes and column visibility from zero widths, as `InteractiveSheetDoc.tsx:2611–2659` builds them. `format` is `cellDisplayText` under `scope?.effectiveStyle(...)`, and `prepareScope` returns `view.scope` (P4).
 - Produces:
   - `export function runSheetCopy(c: SheetCopyContext): Promise<void>`. It queues on `TextSlot.copyQueue` and follows the P8 order.
   - `CopyRecord` gains `sheetId?: string` and `rect?: {r0, c0, r1, c1}`. `putCopy` writes them, and the migration is a guarded `ALTER TABLE copies ADD COLUMN`.
@@ -487,7 +535,12 @@
     - A focused a11y read after that is refused `copy-quota-exhausted` (shared counter).
   - `"copy off"`: `copy: false` is refused `text-unavailable`.
   - `"audit"`: `store.copies(sid)` has `{kind: 'copy', paragraphs: 3, sheetId: '0', rect: {r0, c0, r1, c1}}` and no text column. A database created before the change opens and is migrated.
-  - `"select-all on a million rows"` (Review Focus 4): on `millionRows`, select-all answers in one copy or is refused `copy-too-large {limit: 4194304}`, never truncated, and the socket stays open.
+  - `"select-all on a million rows"` (Review Focus 4): on `millionRows` with `copy: 'full'`:
+    - the test first asserts the precondition that local `serializeSelection` of the fixture is ≤ 4 MiB;
+    - the select-all copy then equals it in one answer, and the socket stays open.
+
+    A 5 MiB-text fixture gives `copy-too-large {limit: 4194304, requested: <bytes>}`.
+  - `"cfHiddenFormat copies as painted"`: B1:B3 copy as `'4\n\n'`, as local does with the scope.
   - `"hostile selections"`: each P7 violation is refused `policy-refused` and charges no paragraphs.
 - [ ] **Step 2: Run** `cd server && bun test test/sheet-copy.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -504,11 +557,11 @@
 - Test: create `server/test/sheet-a11y.test.ts`
 
 **Interfaces:**
-- Produces: `runSheetA11y(c)` on the sid's `copyQueue`. Its order follows `a11yTurn` (`ops.ts:436`), with P10's modes. `'text'` is charged first, off sessions included. The answer is `sheet-a11y-result` chunks, and the audit row is `{kind: 'a11y', sheetId, rect}`.
+- Produces: `runSheetA11y(c)` on the sid's `copyQueue`. Its order follows `a11yTurn` (`ops.ts:436`), with P10's modes. The text is `formatCellPresentation(view.sheet, cell, budget, false, cf)` with `cf` from `view.scope` (P4). `'text'` is charged first, off sessions included. The answer is `sheet-a11y-result` chunks, and the audit row is `{kind: 'a11y', sheetId, rect}`.
 
 - [ ] **Step 1: Write the failing tests** (`}, 30_000)`):
   - `"unit mode serves the window, uncounted"`: with `copy: 'full'`, the window A1:H30 of `textGrid` gives, for each cell, the text `formatCellPresentation` gives on the deleted fixture. There is one `a11y` audit row and `copiedParagraphs` is unchanged.
-  - `"withheld cells have no text"`: no entry for `COVERED-B2`, a covered `ROT` cell, `OFFVIEW-Z5000` (window Z4990:Z5010), `TAIL-B1`, or any `unresolvedAnchor` cell.
+  - `"withheld cells have no text"`: no entry for `COVERED-B2`, a covered `ROT` cell, `OFFVIEW-Z5000` (window Z4990:Z5010), `TAIL-B1`, `cfHiddenFormat`'s B2 and B3, or any `unresolvedAnchor` cell.
   - `"focused counts 1 per non-empty cell"`: with `copy: {maxParagraphs: 3, maxSessionParagraphs: 2}` (focused):
     - a 2×1 window gives `policy-refused`;
     - B1 succeeds (count 1), an empty cell succeeds (count 0), and B3 succeeds (count 2);
@@ -531,25 +584,36 @@
   - `src/stream/remote/text-wire.ts:13–38`, `:117`: the sheet request and answer types;
   - `src/stream/remote/session.ts:505`: resume policy per P13;
   - `src/stream/remote/remote-doc.ts:57`: `RemoteSheets.view?`;
-  - `src/components/xlsx/streamWorkbook.ts`: sizes, viewGen and the text methods;
-  - `src/xlsx/view/streamGeometry.ts:17`: `streamSheetGeometry(l, sizes?)`.
+  - `src/components/xlsx/streamWorkbook.ts`: sizes, viewGen and the text methods.
 - Test: create `tests/stream/remote-sheet-text.test.ts`, `tests/xlsx-stream-text.test.ts`
 
 **Interfaces:**
 - Produces:
-  - `RemoteSheets.view?: { find(q: { query: string; matchCase?: boolean }, signal?): Promise<{ hits: …; total: number; truncated: boolean }>; copy(sheetId: string, viewGen: number, sel: WireSelection): Promise<string>; a11y(sheetId: string, viewGen: number, rows: Array<[number, number]>, cols: [number, number]): Promise<Array<{ row: number; col: number; text: string }>>; fit(req): Promise<number>; resize(req): Promise<SheetViewChange> }`. It is present iff `manifest.sheetView === 1`. A refusal rejects `StreamSessionError` with its code and `limit`/`requested`.
+  - `RemoteSheets.view`, present iff `manifest.sheetView === 1`, with the Task 2 types:
+    ```ts
+    view?: {
+      find(q: { query: string; matchCase?: boolean }, signal?: AbortSignal): Promise<SheetFindAnswer>
+      copy(sheetId: string, viewGen: number, sel: WireSelection): Promise<string>
+      a11y(sheetId: string, viewGen: number, rows: Array<[number, number]>, cols: [number, number]): Promise<Array<{ row: number; col: number; text: string }>>
+      fit(req: SheetFitRequest): Promise<number>
+      resize(req: SheetResizeRequest): Promise<SheetViewChange>
+    }
+    ```
+    A refusal rejects `StreamSessionError` with its code and `limit`/`requested`.
   - In `streamText.ts`:
     - `export function wireSelection(s: GridSelection): WireSelection | 'too-large'`, through `rowSetIntervals`;
     - `export function streamFindSession(view, owner: WorkbookOwner, sheetIds: string[], query: SearchQuery): FindSession`, which pages the answer at `FIND_PAGE_HITS` as `FindHit`s with `text: ''`, `start: 0`, `end: 0` and `displaySlot` from the order.
   - `StreamWorkbook` gains:
     - `sizes(sheetId): SessionSizes`;
     - `applyView(sheetId, change: SheetViewChange): void`, which sets `viewGen` and the sizes and notifies;
-    - `findSession(owner, query, options): FindSession`;
-    - `copy(sheetId, selection): Promise<string>`;
-    - `a11y(...)`, `fit(...)`, `resize(...)`;
+    - `findSession(owner: WorkbookOwner, query: SearchQuery, options: FindOptions): FindSession`;
+    - `copy(sheetId: string, selection: GridSelection): Promise<string>`, which rejects `StreamSessionError('copy-too-large')` with no `limit` when `wireSelection` gives `'too-large'`;
+    - `a11y(sheetId: string, rows: Array<[number, number]>, cols: [number, number]): Promise<Array<{ row: number; col: number; text: string }>>`;
+    - `fit(req: Omit<SheetFitRequest, 'viewGen'>): Promise<number>`;
+    - `resize(req: Omit<SheetResizeRequest, 'viewGen'>): Promise<SheetViewChange>`;
     - `textOps: boolean`, true iff `view` is present.
 
-    `wireLayout(sheetId)` now carries `sessionRows`/`sessionCols`, and `streamSheetGeometry(l, sizes)` merges them with `mergeAxisOverrides`, exactly as `buildSheetGeometry` merges session sizes.
+    Each method fills in the sheet's current `viewGen`. `applyView` updates the held `wireLayout`'s `sessionRows`/`sessionCols`, so `streamSheetGeometry` (Task 4) is the one geometry path.
 
 - [ ] **Step 1: Write the failing tests:**
   - (`tests/stream/remote-sheet-text.test.ts`, fake socket):
@@ -559,7 +623,7 @@
     - `"refusals carry limit and requested"`: `copy-too-large {limit: 3, requested: 4}` rejects with them;
     - `"hostile answers drop the request"`: a hit with row −1, an a11y cell outside the requested window, or a `sheet-view` for another sheet rejects `policy-refused`, and the session stays open.
   - (`tests/xlsx-stream-text.test.ts`):
-    - `"sized stream geometry equals the server's"`: for `textGrid` with `{cols {1: 8, 3: 200}, rows {4: 60}}`, `streamSheetGeometry(layout, sizes).metrics.cols.start(j)` and `rows.start(i)` equal `buildSheetGeometry(sheet, {sizes})`'s for `j` in [0, 1, 2, 3, 4, 16383] and `i` in [0, 4, 5, 29, 1048575];
+    - `"applyView moves the geometry"`: after `applyView({sheetId: '0', viewGen: 1, change: {axis: 'col', index: 1, size: 8}})`, the entry's `cols.size(1) === 8`, and `identity('0').viewGen === 1`;
     - `"wireSelection"`: a bitset part becomes intervals; 257 ranges give `'too-large'`;
     - `"stream find pages without text"`: 450 hits give 3 pages (200, 200, 50), and every `text === ''`.
 - [ ] **Step 2: Run** `bunx vitest run tests/stream/remote-sheet-text.test.ts tests/xlsx-stream-text.test.ts`. Expected: FAIL.
@@ -567,7 +631,7 @@
 - [ ] **Step 4: Run green:** `bunx vitest run tests/stream tests/xlsx-stream-workbook.test.ts`, and `bun run gates:core` (report the delta).
 - [ ] **Step 5: Commit.**
   ```bash
-  git commit -m "feat(stream-s4b): client sheet text ops, session sizes and viewGen on StreamWorkbook" -- src/components/xlsx/streamText.ts src/stream/remote/text-wire.ts src/stream/remote/session.ts src/stream/remote/remote-doc.ts src/components/xlsx/streamWorkbook.ts src/xlsx/view/streamGeometry.ts tests/stream/remote-sheet-text.test.ts tests/xlsx-stream-text.test.ts
+  git commit -m "feat(stream-s4b): client sheet text ops, session sizes and viewGen on StreamWorkbook" -- src/components/xlsx/streamText.ts src/stream/remote/text-wire.ts src/stream/remote/session.ts src/stream/remote/remote-doc.ts src/components/xlsx/streamWorkbook.ts tests/stream/remote-sheet-text.test.ts tests/xlsx-stream-text.test.ts
   ```
 
 ### Task 10: Viewer: selection, keyboard, resize and fit, find and copy on streams
@@ -585,7 +649,7 @@
   - **The `positionsOnly` split.** It now means "gridcells carry no text" only. A new `selectable?: boolean` prop (default `true`) gates click, header, keyboard and select-all selection. 4a's stream passes `selectable: false`.
   - **The 4b stream**, when `textOps` is set:
     - selection, keyboard, Go To and find navigation run the local code unchanged;
-    - `resizeLine` on a stream goes to `fit`, then `resize`, then `applyView`, then `publishEntry`, keeping the local announcement strings; "Reset sizes" sends `reset: true`;
+    - `resizeLine` on a stream goes to `fit`, then `resize`, then `applyView`, then `publishEntry`, keeping the local announcement strings and P12a's pacing and refusal strings; "Reset sizes" sends `reset: true`;
     - Copy and Ctrl+C go to `copy(sheetId, selection)`, then `copyText`, with the S3 item 10 strings;
     - `FindController.createSession` is `stream.findSession`, and `goToHit` selects the cell, with no hit text rects;
     - a hit with `hidden: 'filter'` announces "This match is in a row hidden by the filter." and opens no inspection (P15).
@@ -599,7 +663,10 @@
 
     The `onSelection` sequences deep-equal, and so do the `aria-activedescendant` values.
   - **`"selection parity: mouse"`:** click C3, Shift+click E8, Ctrl+click G2, a column-header click on B, a Shift+header click on D, a row-header click on 10 and a drag C3→E5. The sequences deep-equal.
-  - **`"resize routes to the server"`:** Alt+Shift+ArrowRight on column B calls `resize({axis: 'col', index: 1, size: 72, viewGen: 0})`. After the fake `sheet-view`, the tiles are requested at `viewGen 1` and the status says 'Column B width 72 pixels. View only; the file is unchanged.' Alt+Shift+Enter calls `fit`, then `resize` with the fitted size.
+  - **`"resize routes to the server"`:** Alt+Shift+ArrowRight on column B calls `view.resize({sheetId: '0', viewGen: 0, axis: 'col', index: 1, size: 72})`. After the fake `sheet-view`, the tiles are requested at `viewGen 1` and the status says 'Column B width 72 pixels. View only; the file is unchanged.' Alt+Shift+Enter calls `fit`, then `resize` with the fitted size.
+  - **`"key-repeat folds into one pending resize"`:** five Alt+Shift+ArrowRight presses while the first is in flight lead to exactly 2 `resize` calls, the second with `size: 104`. A `rate-limited` refusal shows 'Too many requests. Try again shortly.'
+  - **`"find waits for typing to stop"`:** typing 'needle' over 100 ms makes one `view.find` call, 250 ms after the last key.
+  - **`"copy off disables Copy and Ctrl+C"`** (Review Focus 2): with `can.copy: false`, Copy is absent and Ctrl+C makes no `copy` call. After an `onManifestChange` to copy off mid-session, the same holds.
   - **`"no local text index"`:** with `WorkbookFind` and `copySelection` spied (`vi.mock`), a find for 'needle' and a Copy each make 0 calls, and `stream.view.find` and `copy` are called once each.
   - **`"copy refusals speak S3's strings"`:** `copy-too-large {limit: 3}` shows 'Selection too large to copy (limit: 3 paragraphs).', and `copy-quota-exhausted {limit: 5}` shows 'Copy limit for this session reached (5 paragraphs).'
   - **`"4a streams are unchanged"`:** without `sheetView`, a click and arrows select nothing, and there is no Find or Copy. (4a's own cases in `remote-sheet-view.test.tsx` also pass unedited.)
@@ -665,11 +732,15 @@
 - Test: modify `tests/stream/remote-sheet.test.ts` (append), `tests/browser/stream-sheet.spec.ts` (append)
 
 **Interfaces:**
-- Produces: `streamSheets?: 'tiles' | 'units'`, default `'tiles'`. `'tiles'` sends `features: ['sheet-tiles@1', 'sheet-view@1']`, and `'units'` sends no `features`, as Stage 3 did. `StreamSession.open` with no `features` stays Stage 3's HELLO (`remote-session.test.ts:341` unchanged).
+- Produces: `streamSheets?: 'tiles' | 'units'`.
+  - Unset (the default) sends `features: ['sheet-view@1']`: tiles with 4b on a 4b server, and units on a 4a server (P1).
+  - `'tiles'` sends `['sheet-tiles@1', 'sheet-view@1']`.
+  - `'units'` sends no `features`, as Stage 3 did. `StreamSession.open` with no `features` stays Stage 3's HELLO (`remote-session.test.ts:341` unchanged).
 
 - [ ] **Step 1: Write the failing tests:**
   - (append to `remote-sheet.test.ts`):
-    - `"openRemoteDocument asks for tiles and sheet-view by default"`;
+    - `"openRemoteDocument sends sheet-view@1 by default"`: `features` deep-equals `['sheet-view@1']`;
+    - `"explicit tiles sends both features"`;
     - `"streamSheets: 'units' sends Stage 3's HELLO"`: the keys are exactly `['client', 'recVersions', 'reqId', 'type']`.
   - (append to `stream-sheet.spec.ts`, against the default client):
     - `"drag selects a range"`;
@@ -681,7 +752,8 @@
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green:**
   - the same commands;
-  - the unmodified Stage 3 browser stream specs, which still pass: their XLSX text cases, if any, go through `streamSheets: 'units'`. If an existing spec needs an edit to pass, STOP and report;
+  - unmodified: `bunx vitest run tests/stream tests/office-file-stream.test.tsx tests/officeview-streaming.test.tsx`;
+  - the unmodified Stage 3 browser stream specs. If any existing test or spec needs an edit to pass under the new default, STOP and report, without editing it;
   - `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer`, unmodified.
 - [ ] **Step 5: Commit.**
   ```bash
@@ -696,11 +768,12 @@
 **Interfaces:**
 - Produces: `bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d`, whose new legs are:
   - **(e)** the 4a client (`1e2fbf4d`'s `StreamSession`, `features: ['sheet-tiles@1']`) against the current server: the 4a client's `validateManifest` accepts the manifest, `'sheetView' in raw === false`, and one tile decodes;
-  - **(f)** the current default client against the 4a server: tiles mode, `doc.sheets.view === undefined`, and the 4a server accepted the HELLO;
+  - **(f)** the current default client against the 4a server: units mode (no `sheetMode`), and a Stage 3 search hit and copy arrive;
+  - **(f′)** the current client with `streamSheets: 'tiles'` against the 4a server: tiles mode, `doc.sheets.view === undefined`, and one tile decodes;
   - **(g)** the current client with `streamSheets: 'units'` against the current server: units, and a Stage 3 copy works.
 
 - [ ] **Step 1: Add the legs**, with a second detached worktree for `--base4a`.
-- [ ] **Step 2: Run** the command. Expected: seven PASS lines, and `git worktree list` unchanged after.
+- [ ] **Step 2: Run** the command. Expected: eight PASS lines, and `git worktree list` unchanged after.
 - [ ] **Step 3: Commit.**
   ```bash
   git commit -m "test(stream-s4b): compatibility legs — 4a client × 4b server, 4b client × 4a server" -- scripts/stream-s4/compat-matrix.ts
@@ -722,9 +795,9 @@
   - a fit of every used column.
 
   Run it for `sentinels()`, every XLSX hidden fixture, and the Task 1 withholding fixtures. Then check:
-  - `"no sentinel or withheld text in any text answer"`: no decoded message contains `SENTINEL_F`, `SENTINEL_N`, `1234.5678`, `=LEN`, any `marker`, a hidden sheet's name, `COVERED-B2`, a covered `ROT-` text, `OFFVIEW-Z5000`, `TAIL-B1` or `HIDDENFMT`. `SLID-E1` is absent after the shrink.
+  - `"no sentinel or withheld text in any text answer"`: no decoded message contains `SENTINEL_F`, `SENTINEL_N`, `1234.5678`, `=LEN`, any `marker`, a hidden sheet's name, `COVERED-B2`, a covered `ROT-` text, `OFFVIEW-Z5000`, `TAIL-B1`, `HIDDENFMT` or `ABS-B2`. `SLID-E1` is absent after the shrink, and `cfHiddenFormat`'s `7` and `9` never occur in a text answer.
   - `"find answers carry positions only"`: every `sheet-find-result` has only the keys `reqId`, `type` and `hits`, and its hits are number tuples.
-- [ ] **Step 2: Write the withholding battery** (S4 §9 4b) as one table-driven test over `{offViewportCovered, rotatedBox, unresolvedAnchor}` × `{find, copy, a11y}`. Each case asserts the withheld set is empty in the answer, from three scroll histories:
+- [ ] **Step 2: Write the withholding battery** (S4 §9 4b) as one table-driven test over `{offViewportCovered, rotatedBox, unresolvedAnchor, cfHiddenFormat, absoluteOverB2 resized}` × `{find, copy, a11y}`. Each case asserts the withheld set is empty in the answer, from three scroll histories:
   - no tiles fetched;
   - every tile fetched;
   - only the tiles that hold the cell fetched.
@@ -767,7 +840,12 @@
     - §14: the `'sheet'` class (fit, resize) and the 4b ops under `'text'`;
     - §19: item 6's fit limit ("fit reveals a width bound of servable text").
   - **S4 §10 item 1, if the owner confirms Open item 1:** merge tails are blanked in answers, not in `projectXlsx`.
-  - **Spec gaps:** `wholeCell`, the find `cursor`, `hidden: 'filter'` before 4c, the client freeze choice, and fit's missing pane.
+  - **Spec gaps and deviations:**
+    - `wholeCell`, the find `cursor`, `hidden: 'filter'` before 4c, the client freeze choice and fit's missing pane;
+    - `sheet-a11y`'s `rect`, which became `rows`/`cols`;
+    - the notice condition (S4 §6.11 against S3 item 10);
+    - §6.3's admission, deferred to 4c, and its two-sheet cap applied to sort and filter only;
+    - P1's mixed-version behaviour.
 - [ ] **Step 3: Write `docs/validation/streaming-s4b.md`:**
   - each S4 §9 4b "done when" line with the test that proves it;
   - the gate table, the size-gate delta, the compatibility output and the p95 record;
