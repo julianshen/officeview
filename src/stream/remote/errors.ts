@@ -28,6 +28,9 @@ export type StreamErrorCode =
   /** Stage 4a tile-op refusals: the op is not served in this sheet mode, the view generation is not the sheet's, or
    * the sheet's layout is over an R14 cap. */
   | 'unsupported-op' | 'stale-view' | 'layout-too-large'
+  /** Stage 4b sheet-op refusals (P12): the row or column is collapsed, the sheet's coverage is unknown under
+   * `visible-only`, or the session's view state is at its cap. */
+  | 'hidden-target' | 'coverage-unknown' | 'view-state-limit'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'

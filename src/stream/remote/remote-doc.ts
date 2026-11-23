@@ -11,7 +11,7 @@ import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
 import type { MediaDelivery, MediaRoom, MediaShowAnswer, NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
-import type { StreamSheetLayout } from '../sheet-wire'
+import type { SheetFindAnswer, SheetFindHit, SheetFitRequest, SheetResizeRequest, SheetViewChange, StreamSheetLayout, WireSelection } from '../sheet-wire'
 import type { DecodedTile, TilesRequest, TilesResult } from './sheet-channel'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
@@ -58,6 +58,29 @@ export interface RemoteSheets {
   readonly list: ReadonlyArray<{ sheetId: string; name: string }>
   layout(sheetId: string, signal?: AbortSignal): Promise<StreamSheetLayout>
   tiles(req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult>
+  /** Stage 4b (P1): present iff `manifest.sheetView === 1`. */
+  readonly view?: RemoteSheetOps
+}
+
+/**
+ * Stage 4b (S4 §6.7; P6, P7, P9–P13): a `sheet-view@1` session's sheet ops, every answer checked against its request.
+ * A refusal rejects `StreamSessionError` with its code (and `limit`/`requested` when stated); a malformed or hostile
+ * answer rejects that request `policy-refused` and the session goes on. Copy and a11y reject `text-unavailable`
+ * without sending while the manifest's `can.copy` / `can.textA11y` is off (read at call time: a resume may change it).
+ * On resume, find and fit are re-issued; copy, a11y and resize reject `session-rotated` (P13).
+ */
+export interface RemoteSheetOps {
+  /** Workbook-wide find: positions only, at most 5,000; `truncated` says more existed. A newer find rejects an older
+   * pending one `closed`. */
+  find(q: { query: string; matchCase?: boolean }, signal?: AbortSignal): Promise<SheetFindAnswer>
+  /** The selection's display text as TSV (one empty field per withheld cell), never truncated. */
+  copy(sheetId: string, viewGen: number, sel: WireSelection): Promise<string>
+  /** The servable non-empty cells of the window (source rows), ≤ 2,000 cells asked. */
+  a11y(sheetId: string, viewGen: number, rows: Array<[number, number]>, cols: [number, number]): Promise<Array<{ row: number; col: number; text: string }>>
+  /** The auto-fit size of a row or column (it changes nothing; a resize applies it). */
+  fit(req: SheetFitRequest): Promise<number>
+  /** Resizes (or resets) and resolves with the applied change and the sheet's new viewGen. */
+  resize(req: SheetResizeRequest): Promise<SheetViewChange>
 }
 
 export interface RemoteOfficeDoc {
@@ -242,6 +265,46 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     close() { if (closed) return; closed = true; session.close() },
     ended: session.ended ?? new Promise(() => {}),
   }
+  /** Stage 4b: the sheet ops over `session.text` (the session checks every answer against its request). */
+  function sheetOps(): RemoteSheetOps {
+    const ask = (r: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal) =>
+      closed ? Promise.reject(new StreamSessionError('closed')) : session.text(r, on, signal)
+    return Object.freeze({
+      async find(q, signal) {
+        if (!can().search) return textUnavailable()
+        let hits: SheetFindHit[] = [], done = { total: 0, truncated: false }
+        await ask({ type: 'sheet-find', query: q.query, ...(q.matchCase !== undefined ? { matchCase: q.matchCase } : {}) }, (x) => {
+          // A re-issued find (after a resume) starts over: what came before is void.
+          if (x.type === 'restart') hits = []
+          else if (x.type === 'sheet-find-result') for (const h of x.hits) hits.push(h)
+          else if (x.type === 'sheet-find-done') done = { total: x.total, truncated: x.truncated }
+        }, signal)
+        return { hits, total: done.total, truncated: done.truncated }
+      },
+      async copy(sheetId, viewGen, selection) {
+        if (!can().copy) return textUnavailable()
+        const parts: string[] = []
+        await ask({ type: 'sheet-copy', sheetId, viewGen, selection }, (x) => { if (x.type === 'copy-result') parts.push(x.text) })
+        return parts.join('')
+      },
+      async a11y(sheetId, viewGen, rows, cols) {
+        if (!can().textA11y) return textUnavailable()
+        const out: Array<{ row: number; col: number; text: string }> = []
+        await ask({ type: 'sheet-a11y', sheetId, viewGen, rows, cols }, (x) => { if (x.type === 'sheet-a11y-result') for (const c of x.cells) out.push(c) })
+        return out
+      },
+      async fit(req) {
+        let size: number | undefined
+        await ask({ ...req, type: 'sheet-fit' }, (x) => { if (x.type === 'sheet-fit-result') size = x.size })
+        return size!
+      },
+      async resize(req) {
+        let change: SheetViewChange | undefined
+        await ask({ ...req, type: 'sheet-resize' }, (x) => { if (x.type === 'sheet-view') change = x.view })
+        return change!
+      },
+    } satisfies RemoteSheetOps)
+  }
   // Stage 4a: tiles mode is fixed for the sid (a resume that changes it ends the session), so it is read once.
   const m = session.manifest
   if (m.sheetMode === 'tiles' && m.sheets && session.sheetLayout && session.tiles) {
@@ -251,6 +314,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       list,
       layout: (sheetId, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.sheetLayout(sheetId, signal),
       tiles: (req, onTile, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.tiles(req, onTile, signal),
+      ...(m.sheetView === 1 ? { view: sheetOps() } : {}),
     }
   }
   // A terminal end invalidates every pending paint: nothing commits pixels after it.

@@ -7,6 +7,11 @@
  * viewer reads, and every content method rejects the typed `stream-no-cell-data`. That rejection is a guard that makes
  * an unrouted feature visible in tests, not the security boundary (the client has no data to leak).
  *
+ * Stage 4b (P11–P13): the sheet's session sizes and `viewGen` live in the held wire layout (`sessionRows`/`sessionCols`),
+ * so `streamSheetGeometry` and `geometry()` read one value. `applyView` moves it forward (never back); a rejected
+ * resize, or a `stale-view` copy, a11y or fit, re-fetches `sheet-layout` for the authoritative view. The text methods
+ * (find, copy, a11y, fit, resize) go to the session's `RemoteSheets.view`; nothing here indexes or serializes text.
+ *
  * Widened, never subclassed (R16): this class implements `ViewerSheetSource` only, so a paged-only member of
  * `RemoteWorkbook` cannot be reached on a stream by inheritance.
  */
@@ -18,13 +23,18 @@ import type { XlsxDocument, XlsxMergeRange } from '../../xlsx/types'
 import type { SheetGeometry } from '../../worker/viewerSession'
 import type { RemoteCommit, RemoteSheetView } from '../../worker/viewerRemoteSource'
 import type { RemoteOfficeDoc } from '../../stream/remote/remote-doc'
-import type { StreamSheetLayout } from '../../stream/sheet-wire'
+import { StreamSessionError } from '../../stream/remote/errors'
+import type { SheetFitRequest, SheetResizeArgs, SheetViewChange, StreamSheetLayout } from '../../stream/sheet-wire'
+import type { FindOptions } from '../../xlsx/view/find'
+import type { GridSelection, SearchQuery, WorkbookOwner } from '../../xlsx/view/contracts'
 import { createAxisMetrics } from '../../xlsx/view/axes'
+import { mergeAxisOverrides, NO_SESSION_SIZES, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { MAX_COLS, MAX_ROWS, type SourceCell, type SourceRect } from '../../xlsx/view/coordinates'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { createIntervalSet } from '../../xlsx/view/visibility'
 import { SHEET_DEFAULT_COL_CSS, SHEET_DEFAULT_ROW_CSS } from '../../xlsx/view/viewport'
 import type { ViewerSheetSource } from './viewerSource'
+import { streamFindSession, wireSelection, type StreamFindSession } from './streamText'
 
 type RemoteSheets = NonNullable<RemoteOfficeDoc['sheets']>
 
@@ -91,6 +101,10 @@ interface SheetState {
   structure: { gen: number; merges: readonly XlsxMergeRange[]; sourceMerges: readonly XlsxMergeRange[] }
   view: RemoteSheetView
   geometry?: SheetGeometry
+  /** `wire`'s session sizes as maps (rebuilt when `wire` changes). */
+  sizes?: SessionSizes
+  /** The latest `refresh` of this sheet (an older one's answer is dropped). */
+  refreshing?: object
   loaded: boolean
   failure?: { code: string; message: string }
   inFlight?: Promise<void>
@@ -149,16 +163,125 @@ export class StreamWorkbook implements ViewerSheetSource {
     return run
   }
   private adopt(state: SheetState, wire: StreamSheetLayout): void {
+    // A layout asked for before a resize landed may arrive after it: never roll the view back. A first layout that
+    // old is replaced by a fresh one.
+    if (wire.viewGen < state.wire.viewGen) { if (!state.loaded) void this.refresh(state.wire.sheetId); return }
     state.wire = wire
     state.layout = viewerLayout(wire)
     const merges = wire.merges.map((r): XlsxMergeRange => ({ minRow: r.r0, maxRow: r.r1, minCol: r.c0, maxCol: r.c1 }))
     state.structure.merges = merges
     state.structure.sourceMerges = merges
     state.structure.gen++
-    state.geometry = undefined
-    if (state.view.revision !== wire.viewGen) state.view = { revision: wire.viewGen, order: createIdentityOrder(), filter: null, sort: null }
+    this.viewMoved(state)
     state.loaded = true
     state.failure = undefined
+  }
+  /** The wire's sizes or viewGen changed: derived values are rebuilt on demand. */
+  private viewMoved(state: SheetState): void {
+    state.geometry = undefined
+    state.sizes = undefined
+    if (state.view.revision !== state.wire.viewGen) state.view = { revision: state.wire.viewGen, order: createIdentityOrder(), filter: null, sort: null }
+  }
+  /** A fresh `sheet-layout` (never joined to an activation in flight), adopted unless a newer refresh or view
+   * superseded it. Never rejects; a failure leaves the sheet as it was. */
+  private async refresh(sheetId: string): Promise<void> {
+    const state = this.state(sheetId)
+    if (this.closed) return
+    const token = {}
+    state.refreshing = token
+    const abort = new AbortController()
+    this.aborts.add(abort)
+    try {
+      const wire = await this.remoteSheets.layout(sheetId, abort.signal)
+      if (this.closed || abort.signal.aborted || state.refreshing !== token || wire.viewGen < state.wire.viewGen) return
+      this.adopt(state, wire)
+      this.notify()
+    } catch { /* the sheet keeps the view it has */ } finally {
+      this.aborts.delete(abort)
+      if (state.refreshing === token) state.refreshing = undefined
+    }
+  }
+
+  // ── Stage 4b: session sizes, viewGen and the text ops ────────────────────
+
+  /** The session's sizes of the sheet (stable between changes). */
+  sizes(sheetId: string): SessionSizes {
+    const state = this.state(sheetId)
+    const { sessionRows, sessionCols } = state.wire
+    if (!sessionRows?.length && !sessionCols?.length) return NO_SESSION_SIZES
+    return state.sizes ??= Object.freeze({ rows: new Map(sessionRows ?? []), cols: new Map(sessionCols ?? []) })
+  }
+  /** Applies the server's `sheet-view` answer: the sheet's viewGen and session sizes move, and listeners are notified.
+   * A change older than the held view is ignored (idempotent for the one already applied). */
+  applyView(v: SheetViewChange): void {
+    const state = this.state(v.sheetId)
+    if (v.viewGen < state.wire.viewGen) return
+    const c = v.change
+    let { sessionRows, sessionCols } = state.wire
+    if ('reset' in c) { sessionRows = undefined; sessionCols = undefined }
+    else {
+      const list = (c.axis === 'row' ? sessionRows : sessionCols) ?? []
+      const next = list.filter(([i]) => i !== c.index)
+      next.push([c.index, c.size])
+      next.sort((a, b) => a[0] - b[0])
+      if (c.axis === 'row') sessionRows = next
+      else sessionCols = next
+    }
+    const { sessionRows: _r, sessionCols: _c, ...rest } = state.wire
+    state.wire = Object.freeze({ ...rest, viewGen: v.viewGen, ...(sessionRows?.length ? { sessionRows } : {}), ...(sessionCols?.length ? { sessionCols } : {}) })
+    this.viewMoved(state)
+    this.notify()
+  }
+  /** The session serves find, copy, a11y, fit and resize (`manifest.sheetView === 1`). */
+  get textOps(): boolean { return !!this.remoteSheets.view }
+  private ops(): NonNullable<RemoteSheets['view']> {
+    if (this.closed) throw new StreamSessionError('closed')
+    const view = this.remoteSheets.view
+    if (!view) throw new StreamSessionError('unsupported-op', 'this stream does not serve sheet text')
+    return view
+  }
+  /** F8: a `stale-view` refusal re-fetches the layout (its viewGen and sizes) before the call rejects; never retried. */
+  private async staleRefresh<T>(sheetId: string, run: () => Promise<T>): Promise<T> {
+    try { return await run() } catch (error) {
+      if ((error as { code?: unknown })?.code === 'stale-view') await this.refresh(sheetId)
+      throw error
+    }
+  }
+  /** A workbook find over the server's answer (no local index); pages of `FIND_PAGE_HITS` hits without text. */
+  findSession(owner: WorkbookOwner, query: SearchQuery, options: FindOptions): StreamFindSession {
+    return streamFindSession(this.ops(), owner, this.sheets.map(sheet => sheet.sheetId), query, options.signal)
+  }
+  /** The selection's display text as TSV. A selection over the wire caps rejects `copy-too-large` with no `limit`,
+   * without sending ('Selection too large to copy.'). */
+  async copy(sheetId: string, selection: GridSelection): Promise<string> {
+    const ops = this.ops()
+    const sel = wireSelection(selection)
+    if (sel === 'too-large') throw new StreamSessionError('copy-too-large', 'Selection too large to copy.')
+    return this.staleRefresh(sheetId, () => ops.copy(sheetId, this.state(sheetId).wire.viewGen, sel))
+  }
+  /** A11y text of a window, asked under `viewGen` (the caller files the answer under it; F8). */
+  async a11y(sheetId: string, viewGen: number, rows: Array<[number, number]>, cols: [number, number]): Promise<Array<{ row: number; col: number; text: string }>> {
+    const ops = this.ops()
+    return this.staleRefresh(sheetId, () => ops.a11y(sheetId, viewGen, rows, cols))
+  }
+  async fit(req: Omit<SheetFitRequest, 'viewGen'>): Promise<number> {
+    const ops = this.ops()
+    return this.staleRefresh(req.sheetId, () => ops.fit({ ...req, viewGen: this.state(req.sheetId).wire.viewGen }))
+  }
+  /** Resizes at the current viewGen and applies the answer. Any rejection but `closed` or an abort re-fetches the
+   * layout first (P13: the server may have applied a resize whose answer was lost); it is never retried. */
+  async resize(args: SheetResizeArgs): Promise<SheetViewChange> {
+    const ops = this.ops()
+    let change: SheetViewChange
+    try {
+      change = await ops.resize({ ...args, viewGen: this.state(args.sheetId).wire.viewGen })
+    } catch (error) {
+      const code = (error as { code?: unknown; name?: unknown })?.code
+      if (code !== 'closed' && (error as { name?: unknown })?.name !== 'AbortError') await this.refresh(args.sheetId)
+      throw error
+    }
+    this.applyView(change)
+    return change
   }
 
   /** The sheet's layout as received (or the empty default before it arrives), for `streamSheetGeometry`. */
@@ -181,9 +304,11 @@ export class StreamWorkbook implements ViewerSheetSource {
     const state = this.state(sheetId)
     if (!state.geometry) {
       const l = state.wire, layout = state.layout
+      // The session sizes merge over the authored ones exactly as `streamSheetGeometry` merges them.
+      const sized = (base: StreamSheetLayout['rows'], session: Array<[number, number]> | undefined) => session?.length ? mergeAxisOverrides(base, new Map(session)) : base
       state.geometry = Object.freeze({
-        rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: l.defaults.rowPx, overrides: l.rows, ...(l.collapsedRows.length ? { collapsed: l.collapsedRows } : {}) }),
-        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: l.defaults.colPx, overrides: l.cols, ...(l.collapsedCols.length ? { collapsed: l.collapsedCols } : {}) }),
+        rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: l.defaults.rowPx, overrides: sized(l.rows, l.sessionRows), ...(l.collapsedRows.length ? { collapsed: l.collapsedRows } : {}) }),
+        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: l.defaults.colPx, overrides: sized(l.cols, l.sessionCols), ...(l.collapsedCols.length ? { collapsed: l.collapsedCols } : {}) }),
         rowOverrides: layout.rowOverrides, colOverrides: layout.colOverrides, baseHidden: createIntervalSet(layout.hidden),
         ...(layout.hiddenCols?.length ? { hiddenCols: layout.hiddenCols } : {}),
       })
