@@ -6,11 +6,16 @@
  * present=off sets allowPresent={false} (no Present button in the view; the harness buttons are then refused).
  * Assertions read window.__ovStream (notices, error, the show's diagnostics) and the DOM. The Present and
  * Presenter View buttons call the ref's present() (Stage 3c).
+ * Stage 4a Task 14: `sheets=tiles` sets `streamSheets: 'tiles'` (the client HELLO picks the mode; the server-side
+ * `?sheets=` alone does nothing), and `doc=` may name one of the harness's synthetic workbooks (million-rows,
+ * grid500x100, frozen). A tiles-mode sheet's frame stats are exposed as window.__ovSheetStats: the last frame's
+ * fields, plus `frames` (count) and `basePaintsTotal` (the running sum of `basePaints`).
  */
 import { useMemo, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
 import type { OfficeViewerHandle } from '../components/present'
+import type { SheetFrameStats } from '../components/xlsx/InteractiveSheetDoc'
 import type { StreamNotice } from '../stream/remote/session'
 import '../styles/officeview.css'
 
@@ -25,6 +30,14 @@ const wsPort = q.get('srv') === 'short' ? P + 2 : P
 const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}), ...(q.get('role') ? { role: q.get('role')! } : {}), ...(q.get('notes') ? { notes: q.get('notes')! } : {}), ...(q.get('deck') ? { deck: q.get('deck')! } : {}) })
 const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined, showDiagnostics: [] as Array<{ code: string; message: string }>, mediaEnds: [] as Array<{ slide: number; nodeId: number; t: number; wall: number }>, mediaTrace: false }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
+const sheetsTiles = q.get('sheets') === 'tiles'
+type SheetStats = SheetFrameStats & { frames: number; basePaintsTotal: number }
+let sheetStats: SheetStats | undefined
+/** The viewer's @internal `onFrame` (forwarded by OfficeFile → OfficeDoc → RemoteDocView → RemoteSheetView). */
+const onFrame = (stats: SheetFrameStats) => {
+  sheetStats = { ...stats, frames: (sheetStats?.frames ?? 0) + 1, basePaintsTotal: (sheetStats?.basePaintsTotal ?? 0) + stats.basePaints }
+  ;(window as unknown as { __ovSheetStats: SheetStats }).__ovSheetStats = sheetStats
+}
 // TEST-ONLY `?trace=media` (piece 5 Task 14): each computed media end the remote show's driver records (its node and
 // show-clock time), with the wall time it was first seen. Loads the remote show module only when asked.
 if (q.get('trace') === 'media') {
@@ -57,6 +70,7 @@ function App() {
         style={{ height: '100%' }}
         watermark={{ text: 'HOSTMARK' }}
         {...(q.get('present') === 'off' ? { allowPresent: false } : {})}
+        {...(sheetsTiles ? { streamSheets: 'tiles' as const, ...({ onFrame } as Record<string, unknown>) } : {})}
         {...(q.get('fonts') ? { streamFonts: { baseUrl: `http://127.0.0.1:${P + 1}/fontpack` } } : {})}
         onStreamNotice={(n) => state.notices.push(n)}
         onSlideShowDiagnostic={(d) => state.showDiagnostics.push({ code: d.code, message: d.message })}

@@ -24,7 +24,7 @@ import { useCanvasColors } from '../canvasColors'
  * copy read through the same source; the object path is unchanged.
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
@@ -210,6 +210,10 @@ export interface InteractiveSheetDocProps {
   printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray & { refusedImages?: number[] }>
   /** @internal The pivot interaction kinds the menus offer (default: the session's oracle-verified set). */
   pivotVerifiedKinds?: ReadonlySet<PivotDeltaKind>
+  /** @internal Stage 4a (RemoteSheetView): a tiles-mode stream's own chrome. `textUnavailable` is the parent §15
+   * notice, shown once in its own status region; `print` starts the server's print (`RemoteOfficeDoc.print`) from
+   * Ctrl/Cmd+P, and `toolbar` holds its controls. Read only when the source is a stream. */
+  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode }
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -338,7 +342,11 @@ function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
 
 export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): ReactElement {
   const docId = props.source?.store(props.source.sheets[0].sheetId).stamp.docId ?? documentIdOf(props.doc)
-  return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props} />
+  // Stage 4a (S4 §6.11, R6): a stream has no cell data, so no copy and no find; its screen never prints (print is
+  // the server's static units, through `remoteChrome.print`), so the local print path stays off.
+  const streamed = sheetSourceOf(props.source).stream !== null
+  return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props}
+    {...(streamed ? { allowCopy: false, allowPrint: false, showSearch: false } : {})} />
 }
 
 interface SheetEntry {
@@ -2896,6 +2904,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onKeyDown = (event: React.KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase()
     if (mod && key === 'f') { event.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return }
+    // A stream prints the server's static units (its start is a no-op when print is not allowed).
+    if (stream && mod && key === 'p') { event.preventDefault(); props.remoteChrome?.print(); return }
     if (key === 'escape' && copyPending) { event.preventDefault(); cancelCopy(); setAnnouncement('Copy cancelled.'); return }
     if (allowCopy && mod && key === 'c' && ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid') || event.target === event.currentTarget)) { event.preventDefault(); void copyGrid(); return }
     if (!allowCopy && mod && key === 'c') { event.preventDefault(); return }
@@ -3058,6 +3068,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [allowPrint, instance])
 
   const onGridChange = (transition: GridTransition) => {
+    // Stage 4a: a stream selects nothing (selection is 4b); only the window may move.
+    if (stream) { if (transition.window !== scroll) setWindow(activeSheetId, transition.window); return }
     cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
@@ -3077,13 +3089,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const state = session.get(activeSheetId)
     const result = navigateSelection(state.selection, entry.metrics, request, entry.view)
     setAnnouncement(result.announcement)
+    // A stream has no cell to inspect (its store rejects every read).
+    if (result.kind === 'hidden' && stream) return
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
     let moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     const nextGutter = gutterOf(entry, moved.window)
     if (nextGutter !== gutter) moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     cancelCopy()
-    session.setSelection(activeSheetId, result.selection)
+    // A stream's Go To scrolls only: it selects nothing (4b).
+    if (!stream) session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
   }
   // ---- view-only row/column resizing (spec §5.6) ----
@@ -3283,10 +3298,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
-          <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
-            <Icon icon={Copy} name="copy" size={14} />
-            <span className={toolbarLabel}>Copy selection</span>
-          </button>
+          {!stream && (
+            <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
+              <Icon icon={Copy} name="copy" size={14} />
+              <span className={toolbarLabel}>Copy selection</span>
+            </button>
+          )}
           {copyPending && (
             <button type="button" className={toolbarBtn} onClick={cancelCopy}>
               Cancel copy
@@ -3298,10 +3315,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               <span className={toolbarLabel}>Print</span>
             </button>
           )}
-          <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
-            <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
-            <span className={toolbarLabel}>Reset sizes</span>
-          </button>
+          {/* A stream's sizes are the server's (a local resize would misalign its tiles; sheet-resize is 4b). */}
+          {!stream && (
+            <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
+              <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
+              <span className={toolbarLabel}>Reset sizes</span>
+            </button>
+          )}
+          {stream ? props.remoteChrome?.toolbar : null}
           {(activePivots ? activePivots.length > 0 && activePivots.some(def => !def.disableFieldList) : Boolean(remote && remote.layout(activeSheetId).hasPivotDisplay)) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
             if (fieldListPivot !== null) { setFieldListPivot(null); requestAnimationFrame(() => fieldListInvoker?.focus()) }
             else if (pivotController) void pivotController.showFieldList(activeIndex, selectedFieldListPivot, event.currentTarget)
@@ -3328,13 +3349,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           </div>
         )}
         </div>
+        {/* The parent §15 notice, once (S4 §6.11): a stream's grid has positions only. */}
+        {stream && props.remoteChrome ? <div role="status" data-officeview-notice="" className="ov:bg-chrome ov:text-muted ov:text-xs ov:px-3">{props.remoteChrome.textUnavailable}</div> : null}
         <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, minWidth: 0 }}>
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
-              onResize={resizeLine}
-              onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
+              {...(stream ? { positionsOnly: true } : {
+                onResize: resizeLine,
+                onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
+              })} pendingSortColumn={sortPending?.col ?? null} onNotice={setAnnouncement}
               popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
               cellControls={scroll && ((pivotUi && pivotController && activePivots?.length) || (pivotUi && slicerController && activeSlicerDrawings.length) || (pivotUi && timelineController && activeTimelineDrawings.length)) ? <>
@@ -3399,7 +3424,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
                 return true
               } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
-              cellPresentation={at => {
+              cellPresentation={stream ? undefined : at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
                 // The grid-facing text carries the reviewed CF descriptor so the
