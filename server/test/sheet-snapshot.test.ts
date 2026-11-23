@@ -22,7 +22,7 @@ import { augmentedFixtures } from './fixtures'
 import { rejection } from './fixtures/rejection'
 import {
   cfToday, cfTodayFormula, crossSheetCoveredRef, sparklineUnderShape, CF_TODAY_SERIALS, DATA_BAR_VALUES, rotatedBox, savedFormula, spillUnderShape, SPILL_TEXT,
-  unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor, labelBesideShape, LONG_LABEL,
+  unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor, labelBesideShape, LONG_LABEL, BOLD_REACH_LABEL,
 } from './sheet-fixtures'
 
 const hosts: DocumentHost[] = []
@@ -169,6 +169,30 @@ describe('the servable snapshot (S4 §6.2)', () => {
     expect(known(baseCoverage(sheet, geometry)).covered(1, 0)).toBe(false)
     const previous = installCanvasBackend(undefined)
     try { expect(known(baseCoverage(sheet, geometry)).covered(1, 0)).toBe(true) } finally { installCanvasBackend(previous) }
+  }, 60_000)
+
+  test('measured spill on a CF sheet: fill-only or bold rules let a short label paint (fix round 2)', async () => {
+    for (const cf of ['fill', 'bold'] as const) {
+      const { snap } = await snapshotOf(await labelBesideShape('Q1', { cf }))
+      expect([cf, known(snap.coverage).covered(1, 0), cellAt(snap.sheet, 1, 0)!.value]).toEqual([cf, false, 'Q1'])
+      expect([cf, known(snap.coverage).covered(1, 3)]).toEqual([cf, true])
+    }
+  }, 60_000)
+
+  test('measured spill on a CF sheet: a label that reaches the shape only when bold is blanked', async () => {
+    // Control: without CF the regular text stays clear of the box.
+    const plain = (await snapshotOf(await labelBesideShape(BOLD_REACH_LABEL))).snap
+    expect([known(plain.coverage).covered(1, 0), cellAt(plain.sheet, 1, 0)!.value]).toEqual([false, BOLD_REACH_LABEL])
+    // A CF rule could make it bold (worst case: bold and italic), so it is measured that way, even under a fill-only rule.
+    for (const cf of ['fill', 'bold'] as const) {
+      const { snap } = await snapshotOf(await labelBesideShape(BOLD_REACH_LABEL, { cf }))
+      expect([cf, known(snap.coverage).covered(1, 0), cellAt(snap.sheet, 1, 0)!.value]).toEqual([cf, true, null])
+    }
+  }, 60_000)
+
+  test('measured spill on a CF sheet: a dxf font size keeps the whole-run box', async () => {
+    const { snap } = await snapshotOf(await labelBesideShape('Q1', { cf: 'size' }))
+    expect([known(snap.coverage).covered(1, 0), cellAt(snap.sheet, 1, 0)!.value]).toEqual([true, null])
   }, 60_000)
 
   test('unknown coverage paints as authored', async () => {

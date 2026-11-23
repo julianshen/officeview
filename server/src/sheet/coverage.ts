@@ -8,8 +8,11 @@
  * overflows its cell, laid out by the tile renderer's own cell layout (`createCellLayoutHost`, the same fonts and
  * measurement on the installed canvas backend), on the sides `spillSides` allows, plus `SPILL_SLACK`, capped by the
  * empty-run room. Text that fits never spills. Where the paint cannot be measured here (no canvas backend, rotated or
- * stacked text, a layout that throws, or a sheet whose conditional formats or region styles can restyle or inset the
- * text at paint time), the rect keeps the whole empty run (fail closed).
+ * stacked text, a layout that throws, region styles, or conditional formats that could change the text's metrics or
+ * inset it, see `cfWorstCase`), the rect keeps the whole empty run (fail closed).
+ *
+ * Fix round 2 (ruling): on a sheet with CF, each spilling cell is measured in the widest font a rule could give it, its
+ * base font plus bold and italic (underline, strike, colour, fill and borders change no advance).
  */
 import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../../../src/xlsx/types'
 import type { DrawingContentShape } from '../../../src/drawing/content'
@@ -154,11 +157,33 @@ export function spillSlack(fontSizePt: number | undefined): number {
 /** How far a cell's painted text reaches past its own box on each side (CSS px), or undefined when it cannot be known. */
 export type SpillMeasure = (cell: XlsxCell, width: number, height: number, room: { left: number; right: number }) => { left: number; right: number } | undefined
 
+/** CF writes that change no text advance or position. */
+const METRIC_FREE_WRITES = new Set(['fill', 'font.bold', 'font.italic', 'font.color', 'font.strike', 'font.underline'])
+/**
+ * Fix round 2: whether a sheet's CF lets a cell be measured in its worst-case font (base + bold + italic), `'none'` when
+ * the sheet has no rule, or undefined (fail closed: the whole run) when the CF set is unresolved, or a rule is
+ * unresolved, writes an unknown set (`ALL`), sets a font size or name, sets a number format (which changes the text
+ * itself), or is an icon set (whose icon insets the text at paint time). Bold and italic are added even where no
+ * rule sets them: the ruling's worst case, never narrower than the paint.
+ */
+export function cfWorstCase(sheet: XlsxSheet): 'none' | 'bold-italic' | undefined {
+  const cf = sheet.conditionalFormatting
+  if (!cf) return 'none'
+  if (cf.unresolvedSheet) return undefined
+  if (cf.rules.length === 0) return 'none'
+  for (const rule of cf.rules) {
+    const kind = rule.definition.kind
+    if (kind === 'unresolved' || kind === 'iconSet') return undefined
+    for (const w of rule.writes) if (!METRIC_FREE_WRITES.has(w) && !w.startsWith('border.')) return undefined
+  }
+  return 'bold-italic'
+}
+
 /** The tile renderer's layout of one cell, on the installed canvas backend; undefined when nothing can be measured. */
 function rendererSpillMeasure(sheet: XlsxSheet): SpillMeasure | undefined {
   if (sheetHasRegionStyles(sheet)) return undefined
-  const cf = sheet.conditionalFormatting
-  if (cf && (cf.rules.length > 0 || cf.unresolvedSheet)) return undefined
+  const worst = cfWorstCase(sheet)
+  if (!worst) return undefined
   const backend = installedCanvasBackend()
   if (!backend) return undefined
   let host: ReturnType<typeof createCellLayoutHost>
@@ -169,7 +194,8 @@ function rendererSpillMeasure(sheet: XlsxSheet): SpillMeasure | undefined {
   } catch { return undefined }
   return (cell, width, height, room) => {
     let body: ReturnType<typeof host.layoutBody>
-    try { body = host.layoutBody(cell, width, height, room) } catch { return undefined }
+    const measured: XlsxCell = worst === 'bold-italic' ? { ...cell, style: { numFmtId: 0, ...cell.style, bold: true, italic: true } } : cell
+    try { body = host.layoutBody(measured, width, height, room) } catch { return undefined }
     const t = body.text
     if (!t) return { left: 0, right: 0 }
     if (t.kind === 'plain') return { left: Math.max(0, -t.tx), right: Math.max(0, t.tx + t.width - width) }
