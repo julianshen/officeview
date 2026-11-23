@@ -58799,6 +58799,1660 @@
       }
     },
     {
+      "id": "stage3-bar-all-equal",
+      "stage": 3,
+      "question": "Data bars over all-equal scopes. bar:all-equal-distinct-bounds: two literal num bounds with lo < hi over all-equal data (stage3-bar-geometry H and I drew full bars at hi): the value at hi (B, H), at lo (C, F), interior (D, E, G), under 0/100 and 10/90, and all-negative num -100/-20 (I); readings evaluate / full / degenerate-half / none; non-equal controls J and K under the same bounds predict the same under every reading. Mixed-sign bounds are not asked: an all-equal scope has no zero cell to locate the automatic axis, so the measurer refuses (bar-edge-unstable). The statistical twins of the verified bar:degenerate-equal-values (owner ruling Q2): its own shape as a control (L), explicit leftToRight (M), rightToLeft (N) and 10/90 lengths (O). Paired solid bars, no border, automatic axis.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-all-equal.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage3-bar-all-equal.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:O8",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "B2:B4",
+          "ruleType": "dataBar",
+          "priority": 1,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "B2:B4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "C2:C4",
+          "ruleType": "dataBar",
+          "priority": 2,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "C2:C4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "D2:D4",
+          "ruleType": "dataBar",
+          "priority": 3,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "D2:D4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "E2:E4",
+          "ruleType": "dataBar",
+          "priority": 4,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "E2:E4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "F2:F4",
+          "ruleType": "dataBar",
+          "priority": 5,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "F2:F4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "G2:G4",
+          "ruleType": "dataBar",
+          "priority": 6,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "G2:G4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "H2:H4",
+          "ruleType": "dataBar",
+          "priority": 7,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "H2:H4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "I2:I4",
+          "ruleType": "dataBar",
+          "priority": 8,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "-20"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "I2:I4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "-100"
+              },
+              {
+                "type": "num",
+                "f": "-20"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "negativeBarColorSameAsPositive": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "J2:J4",
+          "ruleType": "dataBar",
+          "priority": 9,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "J2:J4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "K2:K4",
+          "ruleType": "dataBar",
+          "priority": 10,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:all-equal-distinct-bounds",
+          "sqref": "K2:K4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "100"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:degenerate-equal-values",
+          "sqref": "L2:L4",
+          "ruleType": "dataBar",
+          "priority": 11,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:degenerate-equal-values",
+          "sqref": "L2:L4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:degenerate-equal-ltr",
+          "sqref": "M2:M4",
+          "ruleType": "dataBar",
+          "priority": 12,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:degenerate-equal-ltr",
+          "sqref": "M2:M4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "direction": "leftToRight"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:degenerate-equal-rtl",
+          "sqref": "N2:N4",
+          "ruleType": "dataBar",
+          "priority": 13,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:degenerate-equal-rtl",
+          "sqref": "N2:N4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "direction": "rightToLeft"
+            },
+            "colors": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:degenerate-equal-10-90",
+          "sqref": "O2:O4",
+          "ruleType": "dataBar",
+          "priority": 14,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:degenerate-equal-10-90",
+          "sqref": "O2:O4",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "bd5b0f7c361b00409a6fbea9e9b64f02e26210ce35cfd00ec5c3f64f3ff9d395",
+        "savedSha256": "bd5b0f7c361b00409a6fbea9e9b64f02e26210ce35cfd00ec5c3f64f3ff9d395",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "C2",
+          "C3",
+          "C4",
+          "D2",
+          "D3",
+          "D4",
+          "E2",
+          "E3",
+          "E4",
+          "F2",
+          "F3",
+          "F4",
+          "G2",
+          "G3",
+          "G4",
+          "H2",
+          "H3",
+          "H4",
+          "I2",
+          "I3",
+          "I4",
+          "J2",
+          "J3",
+          "J4",
+          "K2",
+          "K3",
+          "K4",
+          "L2",
+          "L3",
+          "L4",
+          "M2",
+          "M3",
+          "M4",
+          "N2",
+          "N3",
+          "N4",
+          "O2",
+          "O3",
+          "O4"
+        ],
+        "negativeRefs": [
+          "B6",
+          "B7",
+          "B8",
+          "C6",
+          "C7",
+          "C8",
+          "D6",
+          "D7",
+          "D8",
+          "E6",
+          "E7",
+          "E8",
+          "F6",
+          "F7",
+          "F8",
+          "G6",
+          "G7",
+          "G8",
+          "H6",
+          "H7",
+          "H8",
+          "I6",
+          "I7",
+          "I8",
+          "J6",
+          "J7",
+          "J8",
+          "K6",
+          "K7",
+          "K8",
+          "L6",
+          "L7",
+          "L8",
+          "M6",
+          "M7",
+          "M8",
+          "N6",
+          "N7",
+          "N8",
+          "O6",
+          "O7",
+          "O8"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E2",
+            "controlRef": "E6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E3",
+            "controlRef": "E7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E4",
+            "controlRef": "E8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G2",
+            "controlRef": "G6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G3",
+            "controlRef": "G7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G4",
+            "controlRef": "G8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H2",
+            "controlRef": "H6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H3",
+            "controlRef": "H7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H4",
+            "controlRef": "H8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I2",
+            "controlRef": "I6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I3",
+            "controlRef": "I7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I4",
+            "controlRef": "I8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J2",
+            "controlRef": "J6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J3",
+            "controlRef": "J7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J4",
+            "controlRef": "J8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K2",
+            "controlRef": "K6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K3",
+            "controlRef": "K7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K4",
+            "controlRef": "K8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "L2",
+            "controlRef": "L6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "L3",
+            "controlRef": "L7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "L4",
+            "controlRef": "L8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "M2",
+            "controlRef": "M6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "M3",
+            "controlRef": "M7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "M4",
+            "controlRef": "M8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "N2",
+            "controlRef": "N6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "N3",
+            "controlRef": "N7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "N4",
+            "controlRef": "N8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "O2",
+            "controlRef": "O6",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "O3",
+            "controlRef": "O7",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "O4",
+            "controlRef": "O8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "B3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "C3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "D2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "D3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E6",
+            "controlRef": "E2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E7",
+            "controlRef": "E3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E8",
+            "controlRef": "E4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F6",
+            "controlRef": "F2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "F3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "F4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "G2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G7",
+            "controlRef": "G3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G8",
+            "controlRef": "G4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "H2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "H3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H8",
+            "controlRef": "H4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "I2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I7",
+            "controlRef": "I3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I8",
+            "controlRef": "I4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J6",
+            "controlRef": "J2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J7",
+            "controlRef": "J3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J8",
+            "controlRef": "J4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K6",
+            "controlRef": "K2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K7",
+            "controlRef": "K3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K8",
+            "controlRef": "K4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L6",
+            "controlRef": "L2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L7",
+            "controlRef": "L3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L8",
+            "controlRef": "L4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "M6",
+            "controlRef": "M2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "M7",
+            "controlRef": "M3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "M8",
+            "controlRef": "M4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "N6",
+            "controlRef": "N2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "N7",
+            "controlRef": "N3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "N8",
+            "controlRef": "N4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "O6",
+            "controlRef": "O2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "O7",
+            "controlRef": "O3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "O8",
+            "controlRef": "O4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-all-equal.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-all-equal.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage4-icon-om-reachability",
       "stage": 4,
       "question": "S4-A one-shot probe: is `icon set format condition` reachable from AppleScript? Reads format condition 1 of the range and its properties, icon criteria, reverse icon set order and show icon only. Record only: an answer, or an error, lifts no capability, and an unexpected success becomes an owner question, never an evidence kind.",
