@@ -59545,8 +59545,8 @@
       ],
       "expected": {
         "inputSha256": "bd5b0f7c361b00409a6fbea9e9b64f02e26210ce35cfd00ec5c3f64f3ff9d395",
-        "savedSha256": "bd5b0f7c361b00409a6fbea9e9b64f02e26210ce35cfd00ec5c3f64f3ff9d395",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "4a0a7aecc0eca1499c63ae6cda3116727734b8517b7e262dcd641bcd50f43025",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -59644,7 +59644,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59655,7 +59655,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59666,40 +59666,40 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "C2",
             "controlRef": "C6",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "C3",
             "controlRef": "C7",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "C4",
             "controlRef": "C8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59710,7 +59710,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59721,7 +59721,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59732,7 +59732,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59743,7 +59743,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59754,7 +59754,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59765,7 +59765,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59776,7 +59776,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59787,7 +59787,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59798,7 +59798,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59809,7 +59809,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59820,7 +59820,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59831,7 +59831,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59842,7 +59842,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59853,7 +59853,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59864,7 +59864,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59875,7 +59875,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59886,7 +59886,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59897,7 +59897,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59908,7 +59908,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59919,7 +59919,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59930,7 +59930,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59941,7 +59941,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59952,7 +59952,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59963,7 +59963,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59974,7 +59974,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59985,7 +59985,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -59996,7 +59996,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60007,7 +60007,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60018,7 +60018,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60029,7 +60029,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60040,7 +60040,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60051,7 +60051,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60062,7 +60062,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60073,7 +60073,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60084,7 +60084,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60095,7 +60095,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -60440,17 +60440,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-all-equal.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-all-equal.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-all-equal.json",
+          "pngSha256": "0821214b4c6c81e8ecff920e7250038915deacc4eab232478a64fa6c111e460b"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-23T06:54:55.982Z",
+        "excelVersion": "16.115",
+        "inputSha256": "bd5b0f7c361b00409a6fbea9e9b64f02e26210ce35cfd00ec5c3f64f3ff9d395",
+        "savedSha256": "4a0a7aecc0eca1499c63ae6cda3116727734b8517b7e262dcd641bcd50f43025",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-om-reachability",
