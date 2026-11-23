@@ -125,6 +125,9 @@ export interface ActualCellOutcome {
    * colour (null: none), so equality with the counterfactual covers every component. On a Stage 5 cell `icon` is set
    * (null: none) whether or not an icon rule covers it. */
   bar?: Readonly<{ startFraction: number; endFraction: number }> | null
+  /** Stage 3 bar cell: whether the presentation path draws a bar of non-zero length (`barDrawnOf`); compared on a measured
+   * case with Excel's observed `barApplied` (the PNG measurement), not with the seed `matched`. Absent: not a bar cell. */
+  barDrawn?: boolean
   properties?: Readonly<Record<string, unknown>>
   scaleArgb?: number | null
   style?: {
@@ -173,6 +176,16 @@ export function verifyCellExpectations(
       const decided = obs !== undefined && obs !== 'icon-class-none' && obs !== 'icon-class-ambiguous' && obs !== 'unclassified'
         && !(obs === null && exp.iconEvidence?.bucket !== 'pixel-classified') && !(twins && twins.includes(ICON_NO_ICON_MEMBER))
       if (decided && drawn !== (obs !== null)) return `Cell ${exp.ref}: Excel ${obs === null ? 'draws no icon' : `draws ${obs}`}, but production ${drawn ? 'draws an icon' : 'draws no icon'}`
+      const styled = exp.fillRgb !== undefined || exp.fontRgb !== undefined || exp.bold !== undefined || exp.underline !== undefined || exp.strikethrough !== undefined || exp.borderTop !== undefined || exp.borderBottom !== undefined
+      if (!styled) continue
+    }
+    // A measured Stage 3 bar cell: Excel's `barApplied` is the PNG observation (capture.ts), while `matched` is the seed that
+    // marks every cell of the rule's sqref, so a cell with no bar in Excel (TRUE, a stopIfTrue halt, the column minimum) is
+    // compared on the drawn bar. A withheld cell stays skipped (fail closed); a styled expectation still falls through.
+    if (actual.barDrawn !== undefined && c.stage === 3 && c.status === 'measured' && exp.barApplied !== undefined && !actual.unresolved) {
+      if (actual.barDrawn !== exp.barApplied) {
+        return `Cell ${exp.ref}: Excel ${exp.barApplied ? 'draws a bar' : 'draws no bar'}, but production ${actual.barDrawn ? 'draws a bar' : 'draws no bar'}`
+      }
       const styled = exp.fillRgb !== undefined || exp.fontRgb !== undefined || exp.bold !== undefined || exp.underline !== undefined || exp.strikethrough !== undefined || exp.borderTop !== undefined || exp.borderBottom !== undefined
       if (!styled) continue
     }
@@ -461,6 +474,11 @@ export function verifyCaseCells(
  * descriptor. It counts as applied only where the presentation path paints it: the scope's `barAt` (the painter's own
  * withholds: merged hosts, paint gates, `barWithheld`) reports it, and it carries no `valueFraction`.
  */
+/** Whether a bar descriptor draws ink: present and of non-zero length (a zero-length bar at the minimum draws nothing). */
+export function barDrawnOf(bar: Readonly<{ startFraction: number; endFraction: number }> | null | undefined): boolean {
+  return bar != null && bar.endFraction > bar.startFraction
+}
+
 export function q1BarPainted(scope: { barAt?(row: number, col: number): CfBarDescriptor | undefined } | undefined, row: number, col: number): boolean {
   const bar = scope?.barAt?.(row, col)
   return bar !== undefined && !('valueFraction' in bar)
@@ -612,7 +630,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     const unresolvedSlots = outcome === undefined || outcome.kind === 'unresolved' ? ['ALL'] : [...(outcome.writes ?? [])]
     // Fix round 5: a Stage 5 cell reports every component (the service outcome's descriptors, properties and scale colour).
     const stage5Parts = stage5 ? { icon: outcome?.icon ?? null, bar: outcome?.bar ?? null, properties: outcome?.properties ?? {}, scaleArgb: outcome?.scaleArgb ?? null, visualDetail: outcome?.visualDetail ?? stage5VisualDetail(null, null) } : {}
-    return { applied, unresolved, unresolvedSlots, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}), ...stage5Parts }
+    const barDrawn = barCell && c.stage === 3 ? { barDrawn: barDrawnOf(scope?.barAt?.(row, col)) } : {}
+    return { applied, unresolved, unresolvedSlots, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}), ...stage5Parts, ...barDrawn }
   }, stage5Truths)
   // Task 39 fix round 1 (F2): the Stage 5 accounting of the formula cells Excel formats.
   let stage5Stats: CfCompareResult['stage5']
@@ -750,13 +769,15 @@ async function comparePagedViewportIn(c: CfOracleCase, rootDir: string): Promise
       const hasScale = s.scale?.argb !== undefined
       // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
       const hasBar = s.bar !== undefined
+      const barCell = c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar' && isCellInSqref(a1Of(row, col), m.sqref))
+      const barDrawn = barCell ? { barDrawn: barDrawnOf(s.bar) } : {}
       // Task 39 fix round 1 (F2): on a Stage 5 case Excel's expectation is its DisplayFormat fill, which a bar never writes.
-      if (!hasProps && !hasScale) return { applied: hasBar && c.stage !== 5, unresolved, unresolvedSlots, ...iconState, ...stage5Parts }
+      if (!hasProps && !hasScale) return { applied: hasBar && c.stage !== 5, unresolved, unresolvedSlots, ...iconState, ...stage5Parts, ...barDrawn }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
       }, colors)
-      return { applied: true, unresolved, unresolvedSlots, style, ...iconState, ...stage5Parts }
+      return { applied: true, unresolved, unresolvedSlots, style, ...iconState, ...stage5Parts, ...barDrawn }
     }, stage5Truths)
     const outputHash = sha256Hex(lines)
     if (mismatch) {
