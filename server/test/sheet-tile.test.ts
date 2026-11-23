@@ -69,7 +69,7 @@ describe('sheet tiles (S4 §6.5)', () => {
 
   const warmUp: Array<Partial<TileJob>> = [{ col: 1 }, {}, { zoomStep: 1, dpr: 2 }, { zoomStep: 8, col: 2, row: 3 }, { zoomStep: 0, mark: { kind: 'viewer', text: 'someone else' } }, { palette: 'dark' }, { zoomStep: 10, dpr: 2 }]
   const cfDay = { clock: { day: '2026-11-22', timeZone: 'UTC' } }
-  // One test per workbook (PR #104: the combined test ran 5.48 s on CI's Linux runner).
+  // One test per workbook, each with the heavy-test budget (PR #104: 5.48 s combined, then 5.97 s for grid500x100 alone, on CI's Linux runner).
   for (const [name, make, targets] of [
     ['grid500x100', grid500x100, [{ mark: { kind: 'fixed' } }, { zoomStep: 1, dpr: 2, mark: { kind: 'fixed' } }, { zoomStep: 9, dpr: 2, col: 1 }]],
     ['cfToday', cfToday, [{ ...cfDay, mark: { kind: 'fixed' } }, { ...cfDay, zoomStep: 1, dpr: 2 }, { ...cfDay, zoomStep: 9 }]],
@@ -85,7 +85,7 @@ describe('sheet tiles (S4 §6.5)', () => {
         const later = await warm.host.renderTile(warm.docKey, job(t))
         expect([JSON.stringify(t), sha(later.png)]).toEqual([JSON.stringify(t), sha(first.png)])
       }
-    })
+    }, 30_000)
   }
 
   test('the tile bound is tileRangeFor\'s last + 1 (F8)', () => {
