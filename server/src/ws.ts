@@ -133,6 +133,10 @@ export interface StreamServerOptions {
   sheetTimeZone?: string
   /** TEST and measure only (R3): a `'message'` or `'tile'` override replaces that class's windows, its burst included. */
   rates?: RateOverrides
+  /** TEST and measure only (R3, T8): per delivered tile, `t0` is the instant its batch passed validation, the token
+   * and the `'tile'` rate check, and `t1` the instant its last fragment was passed to `sendBinary` (both
+   * `performance.now()`). Unset, no clock is read. */
+  onTileTiming?(t: { t0: number; t1: number; zoomStep: number; dpr: number }): void
   media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
 }
 
@@ -812,6 +816,7 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     if (batch.stopped) return done([], 0)
     const { admitted, retryAfterMs } = ws.data.rates.takeTiles(args.tiles.length, now())
+    const timing = o.onTileTiming, t0 = timing ? performance.now() : 0
     const run = args.tiles.slice(0, admitted)
     const limited = args.tiles.slice(admitted).map((t) => ({ col: t.col, row: t.row, code: 'rate-limited' as const }))
     // R7: the view and clock this sid's tiles of the sheet are drawn under, durable before its first tile.
@@ -823,7 +828,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const refused = await runTiles({
       batch, tiles: run, slots: sd.tiles.slots, alive,
       deliver: (t) => deliverTile(alive, s.sid, sd, args, t, reqId, ws.data.gone.signal),
-      send: (frames) => { sendFrames(ws, frames) },
+      send: (frames) => { sendFrames(ws, frames); if (timing) timing({ t0, t1: performance.now(), zoomStep: args.zoomStep, dpr: args.dpr }) },
     })
     done([...refused, ...limited], limited.length ? retryAfterMs : 0)
   }
