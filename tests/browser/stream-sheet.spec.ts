@@ -186,12 +186,10 @@ test.describe('4b default client (sheet-view@1)', () => {
     await page.mouse.up()
   }
 
-  test('drag selects a range', async ({ page }) => {
+  test('shift+click selects a range', async ({ page }) => {
     await openView(page, 'doc=text-grid')
     await settled(page)
-    // B2:D4: clear of the hidden row 7, the hidden column F and the A5:C6 merge. The grid's pointer range gesture is
-    // local mode's: press on the anchor, then Shift+press on the far corner (GridSemantics selects on click and has no
-    // press-and-move selection, locally or on a stream; xlsx-stream-selection.test.tsx's `drag` step ends in a click).
+    // The grid has no press-and-move selection, locally or on streams. B2:D4 avoids hidden row 7, column F and A5:C6.
     await click(page, 'B', 2)
     await expect.poll(() => selectedCells(page)).toBe(1)
     await click(page, 'D', 4, true)
