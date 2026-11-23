@@ -18,7 +18,6 @@ import type { SheetClock } from '../src/sheet/clock'
 import { textInputs } from '../src/sheet/text-ops'
 import { sheetTextView, textDocument } from '../src/sheet/text-view'
 import { Client, disposePool, start } from './harness'
-import { rejectionMessage } from './fixtures/rejection'
 import { cfHiddenFormat, slidUnderAnchor, tallColumn, TALL_COLUMN, textGrid, TEXT_GRID, unfilledShapeOverText, unresolvedAnchor } from './sheet-fixtures'
 
 const hosts: DocumentHost[] = []
@@ -241,8 +240,11 @@ describe('sheet-fit (P9, P12)', () => {
     // 17 keys: the least recently used (the identity view) was evicted and released.
     expect(doc.textViews!.size).toBe(16)
     expect(held).toBe(16 * one)
-    // The other ops are Tasks 6–8's: a clear error, nothing cached for them.
-    expect(await rejectionMessage(host.sheetText(docKey, clock, { op: 'a11y', sheetIndex: 0, rows: [[0, 0]], cols: [0, 0], sizes: [] }))).toContain("op 'a11y' is not implemented")
+    // Task 8 replaced the a11y stub: it reads a cached view too (the identity view, rebuilt), and the cache stays at 16.
+    expect(await host.sheetText(docKey, clock, { op: 'a11y', sheetIndex: 0, rows: [[0, 2]], cols: [1, 1], sizes: [] })).toEqual({ op: 'a11y', cells: [[0, 1, '4']] })
+    await Bun.sleep(0)
+    expect(doc.textViews!.size).toBe(16)
+    expect(held).toBe(16 * one)
     host.drop(docKey)
     await Bun.sleep(0)
     expect(held).toBe(0)
