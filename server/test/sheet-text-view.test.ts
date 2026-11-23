@@ -256,6 +256,8 @@ describe('sheetTextView (S4 §6.2, plan P2–P5)', () => {
     expect(fill.scope).toBeDefined()
     expect(fill.withheld).toBe(0)
     for (const r of [0, 4999, 5000, CF_LONG_ROWS - 1]) expect(valueAt(fill.sheet, r, 0)).toBe(r + 1)
+    // The scope itself gives the far rows an outcome (not only the tile's batch).
+    for (const r of [0, 5000, CF_LONG_ROWS - 1]) expect([r, fill.scope!.effectiveStyle(r, 0, undefined)?.fillColor]).toEqual([r, expect.any(String)])
     // A `top10 rank=1` rule writing `;;;`: only the column's maximum (A10000) is undrawn. Preparing the scope in
     // 5,000-cell slices never re-ranks per slice (A5000, the first slice's maximum, keeps its text).
     const top = (await viewOf(await cfLongColumn('top1-hidden'))).view
@@ -263,6 +265,10 @@ describe('sheetTextView (S4 §6.2, plan P2–P5)', () => {
     expect(top.withheld).toBe(1)
     expect(valueAt(top.sheet, CF_LONG_ROWS - 1, 0)).toBeNull()
     for (const r of [0, 4999, 5000, CF_LONG_ROWS - 2]) expect(valueAt(top.sheet, r, 0)).toBe(r + 1)
+    // Isolated from the tile batch: the scope alone ranks over the whole sqref. Rows 999 and 4999 are maxima of the
+    // engine's 1,000-cell chunks and of the first 5,000-cell slice; only A10000 gets the rule's `;;;`.
+    expect(top.scope!.effectiveStyle(CF_LONG_ROWS - 1, 0, undefined)?.formatCode).toBe(';;;')
+    for (const r of [999, 4999, 5000]) expect([r, top.scope!.effectiveStyle(r, 0, undefined)?.formatCode]).not.toEqual([r, ';;;'])
   }, 30_000)
 
   test('covered stays covered in answers', async () => {
@@ -283,6 +289,7 @@ describe('sheetTextView (S4 §6.2, plan P2–P5)', () => {
       ['cfHiddenValue', cfHiddenValue, NO_SESSION_SIZES, CF_HIDDEN_VALUES.map((v, r) => [r, 1, v] as [number, number, number])],
       ['cfHiddenFormat', cfHiddenFormat, NO_SESSION_SIZES, [[1, 1, CF_HIDDEN_FORMAT_VALUES[1]!], [2, 1, CF_HIDDEN_FORMAT_VALUES[2]!]]],
       ['absoluteOverB2', absoluteOverB2, cols([[0, 300]]), [[1, 1, 'ABS-B2']]],
+      ['textGrid', textGrid, NO_SESSION_SIZES, [[TEXT_GRID.covered[0], TEXT_GRID.covered[1], 'NEEDLE-D20'], [4, 1, 7.5]]],
     ]
     for (const [name, make, sizes, present] of fixtures) {
       const { view, projected } = await viewOf(await make(), 'full', { sizes })
