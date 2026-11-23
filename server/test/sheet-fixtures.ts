@@ -531,3 +531,184 @@ export async function labelBesideShape(text: string, o: { rotated?: boolean; cf?
       rectShapeXml({ id: 2, name: 'OverD2', offPx: [200, 24], extPx: [48, 12], fill: 'FF8800' })))
   })
 }
+
+// ---- Stage 4b Task 1: text-view fixtures ----------------------------------------------------------------------
+
+/** A one-cell anchor at `from` of `extPx` CSS px. */
+export function oneCellAnchorXml(from: AnchorMarker, extPx: [number, number], body: string): string {
+  const [cx, cy] = extPx.map((v) => Math.round(v * EMU_PER_PX))
+  const m = `<xdr:col>${from.col}</xdr:col><xdr:colOff>${Math.round((from.colOffPx ?? 0) * EMU_PER_PX)}</xdr:colOff><xdr:row>${from.row}</xdr:row><xdr:rowOff>${Math.round((from.rowOffPx ?? 0) * EMU_PER_PX)}</xdr:rowOff>`
+  return `<xdr:oneCellAnchor><xdr:from>${m}</xdr:from><xdr:ext cx="${cx}" cy="${cy}"/>${body}<xdr:clientData/></xdr:oneCellAnchor>`
+}
+
+/** Add `<numFmts>` (custom formats by id) and one `cellXfs` entry per `xfs` to xl/styles.xml; the new xfs get the style
+ * indexes 3, 4, … in order. */
+async function addStyles(zip: JSZip, numFmts: Record<number, string>, xfs: readonly string[]): Promise<void> {
+  const fmts = Object.entries(numFmts)
+  await patchStylesXml(zip, (xml) => {
+    let out = fmts.length ? xml.replace('<fonts ', `<numFmts count="${fmts.length}">${fmts.map(([id, code]) => `<numFmt numFmtId="${id}" formatCode="${code}"/>`).join('')}</numFmts><fonts `) : xml
+    out = out.replace('<cellXfs count="3">', `<cellXfs count="${3 + xfs.length}">`).replace('</cellXfs>', `${xfs.join('')}</cellXfs>`)
+    if (out === xml) throw new Error('sheet-fixtures: styles not recognised')
+    return out
+  })
+}
+
+/**
+ * Z5000 holds `OFFVIEW-Z5000` under an unfilled box strictly inside it (Z is x 1600..1664, row 5000 y 99980..100000),
+ * far outside any first viewport; A1 holds the uncovered control `OFFVIEW-A1`.
+ */
+export async function offViewportCovered(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [{ r: 1, cells: [textCell(st, 'A1', 'OFFVIEW-A1')] }, { r: 5000, cells: [textCell(st, 'Z5000', 'OFFVIEW-Z5000')] }]
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addDrawing(zip, 0, twoCellAnchorXml({ col: 25, row: 4999, colOffPx: 8, rowOffPx: 4 }, { col: 25, row: 4999, colOffPx: 56, rowOffPx: 16 },
+      rectShapeXml({ id: 2, name: 'Unfilled', offPx: [1608, 99984], extPx: [48, 12], fill: null, line: '404040' })))
+  })
+}
+
+/**
+ * S4 §6.2 step 5 (current-view coverage): a `oneCellAnchor` filled shape of 150 × 20 CSS px at B1 (x 64..214, y 0..20)
+ * and `SLID-E1` in E1 (x 256..320): clear at authored sizes. Shrinking column B to 8 px moves E1 to x 200..264, under
+ * the shape (which keeps its size and its B1 origin).
+ */
+export async function slidUnderAnchor(): Promise<Uint8Array> {
+  const st = stringTable()
+  return sheetWorkbook([{ r: 1, cells: [textCell(st, 'E1', 'SLID-E1')] }], st.list, async (zip) => {
+    await addDrawing(zip, 0, oneCellAnchorXml({ col: 1, row: 0 }, [150, 20], rectShapeXml({ id: 2, name: 'OneCell', offPx: [64, 0], extPx: [150, 20], fill: 'FF8800' })))
+  })
+}
+
+/** A1:C1 merged, with `MERGE-A1` in the anchor and `TAIL-B1` in the merge tail B1. */
+export async function mergeTail(): Promise<Uint8Array> {
+  const st = stringTable()
+  return sheetWorkbook([{ r: 1, cells: [textCell(st, 'A1', 'MERGE-A1'), textCell(st, 'B1', 'TAIL-B1')] }], st.list, undefined, { merges: ['A1:C1'] })
+}
+
+/** B2 holds `HIDDENFMT` under number format `;;;` (style 3, numFmtId 164); A1 holds the control `SHOWN-A1`. */
+export async function hiddenFormat(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [{ r: 1, cells: [textCell(st, 'A1', 'SHOWN-A1')] }, { r: 2, cells: [{ ...textCell(st, 'B2', 'HIDDENFMT'), style: 3 }] }]
+  return sheetWorkbook(rows, st.list, (zip) => addStyles(zip, { 164: ';;;' }, ['<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>']))
+}
+
+/** `cfHiddenValue` B1:B3. */
+export const CF_HIDDEN_VALUES = Object.freeze([10, 20, 30])
+/** A data bar with `showValue="0"` over B1:B4: B1:B3 hold CF_HIDDEN_VALUES (bars, no text), B4 holds `CFTEXT-B4` (no bar). */
+export async function cfHiddenValue(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [...CF_HIDDEN_VALUES.map((v, i) => ({ r: i + 1, cells: [{ ref: `B${i + 1}`, v }] })), { r: 4, cells: [textCell(st, 'B4', 'CFTEXT-B4')] }]
+  return sheetWorkbook(rows, st.list, (zip) => patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+    '<conditionalFormatting sqref="B1:B4"><cfRule type="dataBar" priority="1"><dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule></conditionalFormatting>')))
+}
+
+/** `cfHiddenFormat` B1:B3. */
+export const CF_HIDDEN_FORMAT_VALUES = Object.freeze([4, 7, 9])
+/** B1:B3 hold CF_HIDDEN_FORMAT_VALUES under one `cellIs > 5` rule whose dxf writes `numFmt ";;;"`: B2 and B3 paint
+ * nothing, B1 paints `4`. */
+export async function cfHiddenFormat(): Promise<Uint8Array> {
+  const rows = CF_HIDDEN_FORMAT_VALUES.map((v, i) => ({ r: i + 1, cells: [{ ref: `B${i + 1}`, v }] }))
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', '</cellXfs><dxfs count="1"><dxf><numFmt numFmtId="164" formatCode=";;;"/></dxf></dxfs>'))
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+      '<conditionalFormatting sqref="B1:B3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>5</formula></cfRule></conditionalFormatting>'))
+  })
+}
+
+/** An `absoluteAnchor` unfilled box strictly inside B2 (x 72..120, y 24..36) over `ABS-B2`. Widening column A to 300 px
+ * moves B2 to x 300..364, out from under the box, which stays put. */
+export async function absoluteOverB2(): Promise<Uint8Array> {
+  const st = stringTable()
+  return sheetWorkbook([{ r: 2, cells: [textCell(st, 'B2', 'ABS-B2')] }], st.list, async (zip) => {
+    await addDrawing(zip, 0, absoluteAnchorXml([72, 24], [48, 12], rectShapeXml({ id: 2, name: 'Absolute', offPx: [72, 24], extPx: [48, 12], fill: null, line: '404040' })))
+  })
+}
+
+/** `textGrid`: its sheet names, and the 0-based (row, col) of the six needle cells on each of its first two sheets
+ * (D20, index (19, 3), is under the picture). The third sheet's needle is at (1, 1). */
+export const TEXT_GRID = Object.freeze({
+  sheets: Object.freeze(['Grid1', 'Grid2', 'Plain']),
+  rows: 30, cols: 8, hiddenRow: 6, hiddenCol: 5, merge: 'A5:C6', frozen: Object.freeze({ rows: 1, cols: 1 }),
+  needles: Object.freeze([[1, 1, 'needle'], [9, 2, 'NEEDLE'], [4, 0, 'needle in merge'], [19, 3, 'NEEDLE-D20'], [24, 4, 'a needle here'], [29, 7, 'NEEDLE']] as const),
+  covered: Object.freeze([19, 3] as const),
+  plainNeedle: Object.freeze([1, 1, 'needle-plain'] as const),
+})
+/** A 16 × 16 opaque PNG (one flat colour) for `textGrid`'s picture. */
+function flatPng(): Uint8Array {
+  const rgba = new Uint8Array(16 * 16 * 4)
+  for (let i = 0; i < rgba.length; i += 4) { rgba[i] = 0x44; rgba[i + 1] = 0x72; rgba[i + 2] = 0xc4; rgba[i + 3] = 0xff }
+  return encodePng(16, 16, rgba)
+}
+/**
+ * Stage 4b's text-answer workbook: sheets `Grid1` and `Grid2` are 30 × 8 (A1:H30) of mixed content: A text `T{r}`,
+ * B numbers `r × 1.5` under `#,##0.0` (style 3), C dates (serial 46000 + r, numFmtId 14, style 4), D numbers `r × 100`,
+ * E text `E{r}`, F text `HIDDEN-F{r}` (column F is hidden), G numbers `r % 7`, H text `H-{r}`, with the six
+ * TEXT_GRID.needles cells overriding (`needle`/`NEEDLE`). Row 7 is hidden (its cells hold `HIDDEN-R7-{c}`), A5:C6 is
+ * merged, panes are frozen 1 × 1, and a picture sits strictly inside D20 (base-covering `NEEDLE-D20`). Sheet `Plain` is
+ * A1:C5 of `P-{r}-{c}` text with `needle-plain` at B2, no drawings, no hidden lines.
+ */
+export async function textGrid(): Promise<Uint8Array> {
+  const st = stringTable()
+  const gridRows = (): XlsxSheetSpec['rows'] => Array.from({ length: TEXT_GRID.rows }, (_, i) => {
+    const r = i + 1
+    const cells = Array.from({ length: TEXT_GRID.cols }, (_, c): XlsxCellSpec => {
+      const ref = `${colName(c)}${r}`
+      const needle = TEXT_GRID.needles.find(([nr, nc]) => nr === i && nc === c)
+      if (needle) return textCell(st, ref, needle[2])
+      if (i === TEXT_GRID.hiddenRow) return textCell(st, ref, `HIDDEN-R7-${c + 1}`)
+      switch (c) {
+        case 0: return textCell(st, ref, `T${r}`)
+        case 1: return { ref, v: r * 1.5, style: 3 }
+        case 2: return { ref, v: 46000 + r, style: 4 }
+        case 3: return { ref, v: r * 100 }
+        case 4: return textCell(st, ref, `E${r}`)
+        case 5: return textCell(st, ref, `HIDDEN-F${r}`)
+        case 6: return { ref, v: r % 7 }
+        default: return textCell(st, ref, `H-${r}`)
+      }
+    })
+    return { r, cells }
+  })
+  const plain: XlsxSheetSpec['rows'] = Array.from({ length: 5 }, (_, i) => ({ r: i + 1, cells: [0, 1, 2].map((c) => {
+    const ref = `${colName(c)}${i + 1}`
+    return i === TEXT_GRID.plainNeedle[0] && c === TEXT_GRID.plainNeedle[1] ? textCell(st, ref, TEXT_GRID.plainNeedle[2]) : textCell(st, ref, `P-${i + 1}-${c + 1}`)
+  }) }))
+  const grid = (name: string): XlsxSheetSpec => ({ name, rows: gridRows(), cols: '<col min="6" max="6" width="9" hidden="1" customWidth="1"/>', merges: [TEXT_GRID.merge] })
+  const specs = [grid(TEXT_GRID.sheets[0]!), grid(TEXT_GRID.sheets[1]!), { name: TEXT_GRID.sheets[2]!, rows: plain }]
+  return patchXlsx(await buildXlsx(specs, st.list), async (zip) => {
+    await addStyles(zip, { 165: '#,##0.0' }, [
+      '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+      '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+    ])
+    const ct = await textOf(zip, '[Content_Types].xml')
+    zip.file('[Content_Types].xml', ct.replace('<Default Extension="xml"', '<Default Extension="png" ContentType="image/png"/><Default Extension="xml"'))
+    zip.file('xl/media/grid.png', flatPng())
+    for (const sheetIndex of [0, 1]) {
+      await patchSheetXml(zip, sheetIndex, (xml) => insertSheetElement(setRowAttrs(xml, [TEXT_GRID.hiddenRow + 1], { hidden: '1' }), 'sheetViews', freezeXml(TEXT_GRID.frozen.cols, TEXT_GRID.frozen.rows)))
+      // D20 with row 7 collapsed: x 192..256, y 360..380; the picture sits strictly inside (x 200..248, y 364..376).
+      const [row, col] = TEXT_GRID.covered
+      const pic = `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${2 + sheetIndex}" name="Picture ${sheetIndex + 1}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="${200 * EMU_PER_PX}" y="${364 * EMU_PER_PX}"/><a:ext cx="${48 * EMU_PER_PX}" cy="${12 * EMU_PER_PX}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`
+      const part = await addDrawing(zip, sheetIndex, twoCellAnchorXml({ col, row, colOffPx: 8, rowOffPx: 4 }, { col, row, colOffPx: 56, rowOffPx: 16 }, pic))
+      const name = part.slice(part.lastIndexOf('/') + 1)
+      zip.file(`xl/drawings/_rels/${name}.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/grid.png"/></Relationships>`)
+    }
+  })
+}
+
+/** `cfLongColumn`: its row count (A1:A{CF_LONG_ROWS}). */
+export const CF_LONG_ROWS = 10_000
+/**
+ * F3: A1:A10000 hold 1..10000 under one rule over the whole column range (one 10,000-cell rect, over the 5,000-cell
+ * CF text-scope batch): `'fill'` is a fill-only `cellIs > 0` rule (nothing undrawn); `'top1-hidden'` is a `top10
+ * rank=1` rule whose dxf writes `numFmt ";;;"`, so exactly the maximum, A10000, paints nothing.
+ */
+export async function cfLongColumn(kind: 'fill' | 'top1-hidden'): Promise<Uint8Array> {
+  const rows = Array.from({ length: CF_LONG_ROWS }, (_, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v: i + 1 }] }))
+  const dxf = kind === 'fill' ? '<fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill>' : '<numFmt numFmtId="164" formatCode=";;;"/>'
+  const rule = kind === 'fill'
+    ? '<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule>'
+    : '<cfRule type="top10" dxfId="0" priority="1" rank="1"/>'
+  return sheetWorkbook(rows, [], async (zip) => {
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', `</cellXfs><dxfs count="1"><dxf>${dxf}</dxf></dxfs>`))
+    await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting', `<conditionalFormatting sqref="A1:A${CF_LONG_ROWS}">${rule}</conditionalFormatting>`))
+  })
+}
