@@ -100,7 +100,7 @@ export interface StreamSheetLayout {
   sort: null; filterSummary: Array<{ col: number; kind: string }>
   authorHidden: boolean; counts: { visibleRows: number; totalRows: number }
   /** 4b (P11): the session's resized rows and columns, `[index, px]` ascending by index. Optional so a 4a-shaped layout
-   * still types; the encoder omits an empty list (an identity view's bytes equal 4a's) and the decoder gives `[]`. */
+   * still types; the encoder omits an empty list (an identity view's bytes equal 4a's) and the decoder leaves an empty one absent (read `?? []`). */
   sessionRows?: Array<[number, number]>; sessionCols?: Array<[number, number]>
 }
 
@@ -289,12 +289,9 @@ export function decodeSheetLayout(parts: unknown[]): StreamSheetLayout {
   }
   const { sessionRows, sessionCols, ...required } = lists
   const out = { ...head!, ...(required as unknown as Pick<StreamSheetLayout, Exclude<LayoutList, 'sessionRows' | 'sessionCols'>>) } as StreamSheetLayout
-  // A 4a-shaped layout reads `[]`, as the contract says; the empty list is not enumerable so the decoded value still
-  // equals a literal that never named it (and 4a's strict equality checks keep holding).
-  for (const [k, v] of [['sessionRows', sessionRows], ['sessionCols', sessionCols]] as const) {
-    if (v!.length > 0) out[k] = v as Array<[number, number]>
-    else Object.defineProperty(out, k, { value: [], enumerable: false, writable: true, configurable: true })
-  }
+  // A layout with no session sizes leaves both keys absent (4a-shaped); consumers read `layout.sessionRows ?? []`.
+  if (sessionRows!.length > 0) out.sessionRows = sessionRows as Array<[number, number]>
+  if (sessionCols!.length > 0) out.sessionCols = sessionCols as Array<[number, number]>
   return out
 }
 

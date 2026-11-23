@@ -348,8 +348,10 @@ describe('layout session sizes', () => {
     const empty = wire(layout({ sessionRows: [], sessionCols: [] }))
     expect(empty).toEqual(parts)
     const back = decodeSheetLayout(parts)
-    expect(back.sessionRows).toEqual([])
-    expect(back.sessionCols).toEqual([])
+    expect(back.sessionRows ?? []).toEqual([])
+    expect(back.sessionCols ?? []).toEqual([])
+    expect('sessionRows' in back).toBe(false)
+    expect('sessionCols' in back).toBe(false)
   })
 
   it('refuses hostile session sizes', () => {
