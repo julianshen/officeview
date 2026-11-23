@@ -23,6 +23,18 @@ in git history.
   - **What changes:** the upper-segment withhold now also catches a step that lands within a tiny tolerance (1e-11) of a whole number. Before, it caught only exactly whole products. Excel moved such cells too, where the computed position missed the whole number by a rounding error.
   - **Reach:** 2 more captured cells are withheld. Both were painted correctly before (`stage2-scale-thresholds` E4 and its replica). No capability changed.
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.16.
+- **A third measurement of those cells, and a new withhold for 2-colour scales and lower segments.** A pre-registered Excel 16.115 capture (`stage2-scale-upper-window`) tested whether upper-segment cells under min, percent or percentile bounds, which land within 1e-11 of a whole step, could be painted again.
+  - **What it showed:** neither pre-registered reading matched. Excel drew most such cells one step smaller, but not all. So these cells stay withheld, and nothing was registered.
+  - **A mispaint found:** Excel drew 2-colour scales and 3-colour lower segments one step smaller wherever the computed step lands a rounding error below a whole number. The viewer painted them one step off.
+  - **What changes:** those cells are now withheld (`cf-unmeasured-guard-boundary`). They keep their base formatting and are announced as unavailable.
+  - **Reach:** 14 captured cells, all in this test workbook, all mispainted before; no correctly painted captured cell is lost. No capability changed.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.17.
+- **Those 2-colour and lower-segment cells paint again, exactly.** A pre-registered Excel 16.115 capture (`stage2-scale-raw-floor`) tested how Excel draws a step that lands a rounding error below a whole number in 2-colour scales and 3-colour lower segments.
+  - **What it showed:** Excel drew all 67 test cells at the raw floor of the step, with no rounding tolerance. That covers min / max, percent, percentile, literal, inverted and mixed bounds, the midpoint-above-max re-sort, both colour orders and four spans. All 34 control cells drew as expected. The pre-registered reading `raw-floor` matched and is registered (`scale:guard-boundary-raw-floor`; 346 verified capabilities).
+  - **What changes:** these cells are painted at Excel's colour instead of being withheld (`cf-unmeasured-guard-boundary`).
+  - **Reach:** 81 captured cells paint exactly: the 14 withheld after `stage2-scale-upper-window` and the 67 of this capture. No captured cell is mispainted, and no other cell moves.
+  - **Still withheld:** a 3-colour lower segment bounded by two literal `num` thresholds (the earlier num-segment withhold), a segment with a formula bound in this shape, and every upper-segment cell the earlier withholds cover.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.18.
 
 ### Added
 

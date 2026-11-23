@@ -500,6 +500,8 @@ export function injectCfScaleSegmentProbe(probe: ((segment: CfScaleSegment) => C
   segmentProbe = probe
 }
 
+/** A bound the service resolved from a formula (`num:formula`, `percent:formula`, ...), or an unresolved formula bound. */
+const formulaResolvedBound = (p: CfScalePoint): boolean => p.bound.type === 'formula' || ('resolved' in p.bound && p.bound.resolved === 'formula')
 const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)
 
 /**
@@ -516,20 +518,172 @@ const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && 
  * replica D19 (15.999999999999996), which Excel drew at truncation: fail-closed.
  */
 export function upperSegmentWholeProduct(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
-  if (!(value > tLo && value < tHi)) return false
+  return upperSegmentProductClass(c1, c2, value, tLo, tHi, fraction) !== undefined
+}
+
+/**
+ * The upper-segment window follow-up (brief cf-upperwindow): which part of `upperSegmentWholeProduct`'s shape a cell is in.
+ * `integer`: some RGB channel's product `fraction * d` is an IEEE integer k, 0 < k < d (the shape captures 377564e0 and
+ * 54fc3388 measured, withheld whatever a window reading says). `window`: no channel is an IEEE integer, but some channel's
+ * product lies within CF_TRUNCATION_GUARD of a whole k, 0 < k < d (the widening of PR #99). Undefined: neither, or the value
+ * is not strictly inside the segment.
+ */
+export function upperSegmentProductClass(c1: number, c2: number, value: number, tLo: number, tHi: number, fraction: number): 'integer' | 'window' | undefined {
+  if (!(value > tLo && value < tHi)) return undefined
+  let window = false
   for (const shift of [16, 8, 0]) {
     const d = Math.abs(((c2 >>> shift) & 0xff) - ((c1 >>> shift) & 0xff))
     if (d === 0) continue
     const p = fraction * d, k = Math.round(p)
-    if (k > 0 && k < d && Math.abs(p - k) <= CF_TRUNCATION_GUARD) return true
+    if (!(k > 0 && k < d)) continue
+    if (Number.isInteger(p)) return 'integer'
+    if (Math.abs(p - k) <= CF_TRUNCATION_GUARD) window = true
+  }
+  return window ? 'window' : undefined
+}
+
+/**
+ * The upper-segment window follow-up, owner ruling after capture ed0fccb6 (stage2-scale-upper-window): whether an interior
+ * cell (tLo < value < tHi) of a 2-colour scale or of a 3-colour LOWER segment is withheld because production's truncation
+ * guard changes its step. For some ARGB channel whose endpoints differ by d != 0, p = fraction · |d| (production's
+ * `safeFraction` double times the integer |d|, the one IEEE multiplication `interpolateChannel` performs) has
+ * floor(p + CF_TRUNCATION_GUARD) != floor(p): p lies within 1e-11 strictly below a whole number. Excel 16.115 drew every
+ * captured cell of that shape one step smaller (raw floor: A3, A4, D2, D4, E7..E10, E12..E14 and the twins H8, H18, I5),
+ * where production's guarded truncation paints one step larger; no other lower-segment or 2-colour cell moved. Raw floor
+ * was never pre-registered, so the shape is withheld (`cf-unmeasured-guard-boundary`), never repainted.
+ */
+export function guardBoundaryProduct(c0: number, c1: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  if (!(value > tLo && value < tHi)) return false
+  const f = Math.max(0, Math.min(1, fraction))
+  for (const shift of [24, 16, 8, 0]) {
+    const d = Math.abs(((c1 >>> shift) & 0xff) - ((c0 >>> shift) & 0xff))
+    if (d === 0) continue
+    const p = f * d
+    if (Math.floor(p + CF_TRUNCATION_GUARD) !== Math.floor(p)) return true
   }
   return false
 }
 
-/** A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`, else production's interpolation. */
-function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
-  if (literalNumBound(lo) && literalNumBound(hi) && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
-  if (seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
+/**
+ * The raw-floor follow-up (brief cf-rawfloor, Phase 1 task 2): the readings of Excel's step at a cell in the guard-boundary
+ * shape (`guardBoundaryProduct`: a 2-colour scale, or a 3-colour LOWER segment not withheld as the literal num-segment shape,
+ * where some channel's p = f·|d| lies within 1e-11 strictly below a whole number). Per ARGB channel, the step from the
+ * segment's start colour:
+ * - `raw-floor` (W1, docs/validation/xlsx-cf.md §14.z.17): floor(f·|d|), no guard; every captured lower-segment and 2-colour
+ *   interior cell was drawn so (the 14 of ed0fccb6 included);
+ * - `guarded`: floor(f·|d| + 1e-11), production's `interpolateChannel` before the guard-boundary withhold (the control,
+ *   contradicted by ed0fccb6 at those 14 cells).
+ * Pre-registered by stage2-scale-raw-floor; its capture (Excel 16.115, ce3f701d) matched `raw-floor` at all 67 evidence cells
+ * and every control, so `raw-floor` is registered (docs/validation/xlsx-cf.md §14.z.18).
+ */
+export const CF_GUARD_BOUNDARY_READINGS = ['raw-floor', 'guarded'] as const
+export type CfGuardBoundaryReading = (typeof CF_GUARD_BOUNDARY_READINGS)[number]
+/** The capability a guard-boundary reading is registered under (stage2-scale-raw-floor). */
+export const CF_GUARD_BOUNDARY_CAP = 'scale:guard-boundary-raw-floor'
+/**
+ * The reading production implements per id: `raw-floor` for scale:guard-boundary-raw-floor, matched by the capture of
+ * stage2-scale-raw-floor (ce3f701d). With its evidence, production paints the guard-boundary shape at raw floor where the
+ * default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved; a formula-bounded segment, and a
+ * 3-colour lower segment bounded by two literal num cfvo (the num-segment withhold, first), stay withheld. Without the
+ * evidence the shape stays withheld (`cf-unmeasured-guard-boundary`). The audit's CF_STAGE2_PRODUCTION_READINGS spreads this
+ * table.
+ */
+export const CF_GUARD_BOUNDARY_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> = Object.freeze({ [CF_GUARD_BOUNDARY_CAP]: 'raw-floor' })
+let proposedGuardBoundaryReadings: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfGuardBoundaryReadings(readings: Readonly<Partial<Record<string, CfGuardBoundaryReading>>> | null): void {
+  proposedGuardBoundaryReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The guard-boundary reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfGuardBoundaryReading(capability: string = CF_GUARD_BOUNDARY_CAP): CfGuardBoundaryReading | undefined {
+  const r = proposedGuardBoundaryReadings && Object.prototype.hasOwnProperty.call(proposedGuardBoundaryReadings, capability) ? proposedGuardBoundaryReadings[capability] : CF_GUARD_BOUNDARY_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_GUARD_BOUNDARY_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/**
+ * The outcome of a 2-colour scale or 3-colour lower-segment interpolation. In the guard-boundary shape (truncation only) the
+ * cell is withheld, unless a guard-boundary reading is registered with its evidence and the default sRGB / truncate variants
+ * hold and neither bounding cfvo is formula-resolved: then it paints the reading (`upperWindowReadingColor`, per ARGB channel
+ * from `c0`; undefined on any non-finite intermediate, which withholds).
+ */
+function guardedInterpolation(c0: number, c1: number, value: number, lo: number, hi: number, fraction: number, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, checkEvidence: (cap: string) => boolean, bounds: readonly CfScalePoint[]): CfOutcome<number> {
+  if (rounding === 'truncate' && guardBoundaryProduct(c0, c1, value, lo, hi, fraction)) {
+    // A formula-resolved bound was never captured in this shape (Stage 2 holds none; no Stage 5 cell is in it): withheld.
+    const r = colorSpace === 'sRGB' && !bounds.some(formulaResolvedBound) ? cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) : undefined
+    const argb = r !== undefined && checkEvidence(CF_GUARD_BOUNDARY_CAP) ? upperWindowReadingColor(r, c0, c1, fraction) : undefined
+    return argb !== undefined ? { kind: 'ready', value: argb } : { kind: 'unresolved', reason: 'cf-unmeasured-guard-boundary' }
+  }
+  return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+}
+
+/**
+ * The upper-segment window follow-up (brief cf-upperwindow, Phase 1 task 2): the readings of Excel's step at a cell in the
+ * `window` class of a 3-colour upper segment that is NOT bounded by two literal num cfvo (min, max, percent, percentile, mixed
+ * or formula-resolved bounds; the literal shape is withheld as the num-segment shape first). Per RGB channel, the step from
+ * the segment's start colour, |d| the channel's span:
+ * - `guarded`: floor(f·|d| + 1e-11), production's `interpolateChannel` (what PR #99 withheld; E4 and D19 were drawn so);
+ * - `raw-floor`: floor(f·|d|), no guard (one smaller where the product is just below an integer; F12, F15, F16, F18 of the
+ *   literal capture 54fc3388 were drawn so).
+ * The candidate search (scripts/cf-refs/upper-window-candidates.ts) left no survivor, so these two are the only readings.
+ */
+export const CF_UPPER_WINDOW_READINGS = ['guarded', 'raw-floor'] as const
+export type CfUpperWindowReading = (typeof CF_UPPER_WINDOW_READINGS)[number]
+/** The capability a window reading is registered under (stage2-scale-upper-window). */
+export const CF_UPPER_WINDOW_CAP = 'scale:upper-window-statistical'
+/**
+ * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
+ * (with its evidence), every window-class cell stays withheld (`cf-unmeasured-upper-segment-whole-product`), as on main. The
+ * audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_UPPER_WINDOW_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperWindowReading>>> = Object.freeze({})
+let proposedUpperWindowReadings: Readonly<Partial<Record<string, CfUpperWindowReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfUpperWindowReadings(readings: Readonly<Partial<Record<string, CfUpperWindowReading>>> | null): void {
+  proposedUpperWindowReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The window reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfUpperWindowReading(capability: string = CF_UPPER_WINDOW_CAP): CfUpperWindowReading | undefined {
+  const r = proposedUpperWindowReadings && Object.prototype.hasOwnProperty.call(proposedUpperWindowReadings, capability) ? proposedUpperWindowReadings[capability] : CF_UPPER_WINDOW_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_UPPER_WINDOW_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/**
+ * One window reading's colour between `argb0` (at f = 0) and `argb1`, per channel from the start colour, alpha included (f
+ * clamped to [0, 1]). Undefined (the caller withholds) on any non-finite intermediate.
+ */
+export function upperWindowReadingColor(reading: CfUpperWindowReading | CfGuardBoundaryReading, argb0: number, argb1: number, fraction: number): number | undefined {
+  if (!Number.isFinite(fraction)) return undefined
+  const f = Math.max(0, Math.min(1, fraction))
+  let out = 0
+  for (const shift of [24, 16, 8, 0]) {
+    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
+    const p = f * Math.abs(c1 - c0)
+    if (!Number.isFinite(p)) return undefined
+    const k = reading === 'guarded' ? Math.floor(p + CF_TRUNCATION_GUARD) : Math.floor(p)
+    if (!Number.isFinite(k)) return undefined
+    out |= (c1 >= c0 ? c0 + k : c0 - k) << shift
+  }
+  return out >>> 0
+}
+
+/**
+ * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`; an upper-segment cell in the
+ * `integer` class is withheld; one in the `window` class follows the window reading when it is registered with its evidence,
+ * the segment is not bounded by two literal num cfvo and the default sRGB / truncate variants hold, else is withheld; a
+ * lower-segment cell in the guard-boundary shape is withheld (`guardBoundaryProduct`); every other cell is production's
+ * interpolation.
+ */
+function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
+  const literal = literalNumBound(lo) && literalNumBound(hi)
+  if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  const cls = seg.segment === 1 ? upperSegmentProductClass(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) : undefined
+  if (cls === 'window' && !literal && colorSpace === 'sRGB' && rounding === 'truncate') {
+    const r = cfUpperWindowReading(CF_UPPER_WINDOW_CAP)
+    const argb = r !== undefined && checkEvidence(CF_UPPER_WINDOW_CAP) ? upperWindowReadingColor(r, seg.c0, seg.c1, seg.fraction) : undefined
+    if (argb !== undefined) return { kind: 'ready', value: argb }
+  }
+  if (cls !== undefined) return { kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }
+  if (seg.segment === 0) return guardedInterpolation(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction, colorSpace, rounding, checkEvidence, [lo, hi])
   return { kind: 'ready', value: interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding) }
 }
 
@@ -605,7 +759,7 @@ export function scaleColorAt(
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       const probed = segmentProbe?.({ value: numericVal, lo: tLow, hi: tHigh, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[1]!), hiKind: segmentBoundKind(points[0]!), thresholds: [tLow, tHigh] })
       if (probed) return probed
-      return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+      return guardedInterpolation(c0, c1, numericVal, tLow, tHigh, fraction, colorSpace, rounding, checkEvidence, points)
     }
 
     // Normal t0 < t1
@@ -619,7 +773,7 @@ export function scaleColorAt(
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
     const probed = segmentProbe?.({ value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[1]!), thresholds: [t0, t1] })
     if (probed) return probed
-    return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+    return guardedInterpolation(c0, c1, numericVal, t0, t1, fraction, colorSpace, rounding, checkEvidence, points)
   } else {
     // 3-point scale
     let t0 = thresholds[0]!
@@ -659,7 +813,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 3, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[mid]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[0]!, points[mid]!, seg, colorSpace, rounding)
+      return threeColourSegment(points[0]!, points[mid]!, seg, checkEvidence, colorSpace, rounding)
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
@@ -667,7 +821,7 @@ export function scaleColorAt(
       const seg: CfScaleSegment = { value: numericVal, lo: t1, hi: t2, fraction, c0: c1, c1: c2, colours: 3, segment: 1, loKind: segmentBoundKind(points[mid]!), hiKind: segmentBoundKind(points[top]!), thresholds: [t0, t1, t2] }
       const probed = segmentProbe?.(seg)
       if (probed) return probed
-      return threeColourSegment(points[mid]!, points[top]!, seg, colorSpace, rounding)
+      return threeColourSegment(points[mid]!, points[top]!, seg, checkEvidence, colorSpace, rounding)
     }
   }
 }

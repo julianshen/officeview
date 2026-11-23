@@ -86,8 +86,8 @@ const judge = (c: CfOracleCase, sidecar: Record<string, unknown>) => evaluateFor
 
 describe('stage2-scale-num-segment: the case', () => {
   it('is appended last; owns its four ids, registered as recorded findings (the two questions) and as comparisons (the 2-colour twins, the twin line)', () => {
-    // Appended last at its time; the exploratory follow-up stage2-scale-upper-whole is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual([ID, 'stage2-scale-upper-whole'])
+    // Appended last at its time; the exploratory follow-up stage2-scale-upper-whole and the window follow-up are appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual([ID, 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor'])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toBeDefined()
@@ -267,7 +267,8 @@ describe('the capture (Excel 16.115): no reading matches; production withholds o
 
   it('the audit: Stage 2 ok and complete; the four ids stay recorded findings (unverified-nondiscriminating); the verified Stage 2 set is unchanged', async () => {
     const { auditStage2Manifest, CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union' })
+    // scale:scope-disjoint (union) and, since stage2-scale-raw-floor (ce3f701d), the guard-boundary question (raw-floor).
+    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor' })
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) expect(r.perCapability.find(p => p.capabilityId === id)!.disposition, id).toBe('unverified-nondiscriminating')

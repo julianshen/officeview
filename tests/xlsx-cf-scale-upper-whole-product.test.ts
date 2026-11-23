@@ -77,9 +77,15 @@ describe('the shape, exactly', () => {
       expect(scaleColorAt(v, stat(pqp), t, all), `${v}`).toEqual(UPPER)
       expect(scaleColorAt(v, t.map((x, i) => num(x, pqp[i]!)), t, all), `${v} literal`).toEqual(LITERAL)
     }
-    // Lower-segment cells and a 2-colour scale at the same values still paint.
+    // A lower-segment cell above an integer (0.2: 70.00000000000001) still paints, not being in either shape.
     expect(scaleColorAt(0.2, stat(pqp), tenths, all)).toEqual({ kind: 'ready', value: interpolateScaleColor(P, 0xffe61efa, (0.2 - 0.1) / (0.4 - 0.1)) })
-    expect(scaleColorAt(0.5, [{ bound: { type: 'min' }, argb: 0xffe61efa }, { bound: { type: 'max' }, argb: P }], [0.4, 1], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(0xffe61efa, P, f16Of()) })
+    // A 2-colour scale at F16's double (34.99999999999999, just below 35) is the guard-boundary shape since the owner ruling
+    // after ed0fccb6: stage2-scale-upper-window E9, this very cell, was drawn at 34 where production painted 35. Withheld
+    // without the raw-floor registration's evidence; with it (ce3f701d), painted at raw floor, 34 steps: Excel's FFC440D8.
+    const twoColour = [{ bound: { type: 'min' }, argb: 0xffe61efa }, { bound: { type: 'max' }, argb: P }] as CfScalePoint[]
+    expect(scaleColorAt(0.5, twoColour, [0.4, 1], { hasEvidence: (id: string) => id !== 'scale:guard-boundary-raw-floor' })).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-guard-boundary' })
+    expect(scaleColorAt(0.5, twoColour, [0.4, 1], all)).toEqual({ kind: 'ready', value: 0xffc440d8 })
+    expect(f16Of() * 210).toBe(34.99999999999999)
   })
 
   it('production: the upper-segment shape is withheld for every bound kind; the lower segment, 2-colour scales and endpoints paint as before', () => {
@@ -192,6 +198,12 @@ describe('the reach: every newly withheld cell of every measured case is the sha
       'stage5-cfvo-nonnumeric-v2': ['E4', 'E5', 'S4', 'S5'],
       // The exploratory capture 54fc3388: E4's replica D19 (within the 1e-11 window) and D20 (f = 3/13, product 36).
       'stage2-scale-upper-whole': ['D19', 'D20'],
+      // The pre-registered capture ed0fccb6 (no reading matched): its 27 statistical window cells and the integer-class A17
+      // and E5. Its 27 literal twins keep the num-segment reason.
+      'stage2-scale-upper-window': ['A11', 'A12', 'A13', 'A14', 'A15', 'A17', 'B10', 'B11', 'B12', 'B13', 'B14', 'C5', 'C6', 'C7', 'C8', 'C14', 'C15', 'C16', 'C17', 'D8', 'D9', 'D10', 'D11', 'D15', 'D16', 'D17', 'D18', 'E4', 'E5'].sort(),
+      // The pre-registered capture ce3f701d (raw-floor matched): its 9 W3 probes, upper-segment cells at the doubles of
+      // lower-segment evidence cells (recorded only; the upper-segment rules are unchanged).
+      'stage2-scale-raw-floor': ['H10', 'H11', 'H12', 'H13', 'I9', 'I10', 'I11', 'I12', 'I13'].sort(),
     })
     // The justifications, recomputed independently of production, name exactly these cells, case by case.
     for (const c of manifest.cases.filter(x => x.status === 'measured' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {

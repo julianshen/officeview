@@ -389,12 +389,19 @@ export function truncationMisses(cells: readonly SegmentCell[]): string[] {
  * leaves it out, reproducing the numbers of recipe §9.1 as they were when the case was designed; the default includes it.
  */
 export const UPPER_WHOLE_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WHOLE_ID]
+/**
+ * Captures after this search's own follow-up, left out in every mode: the search is recorded as of 54fc3388 (recipe §9.5).
+ * stage2-scale-upper-window (ed0fccb6) is searched by scripts/cf-refs/upper-window-candidates.ts, which includes it;
+ * stage2-scale-raw-floor (ce3f701d) by scripts/cf-refs/raw-floor-census.ts.
+ */
+export const UPPER_WHOLE_LATER_CASES: readonly string[] = ['stage2-scale-upper-window', 'stage2-scale-raw-floor']
 
 export async function upperWholeCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, faults } = await collectSegmentCells(manifest, rootDir, { include: 'all' })
   if (faults.length > 0) throw new Error(`upper-whole: harness faults ${faults.join('; ')}`)
-  return (opts.include ?? 'all') === 'all' ? cells : cells.filter(c => !UPPER_WHOLE_POST_CAPTURE_CASES.includes(c.caseId))
+  const recorded = cells.filter(c => !UPPER_WHOLE_LATER_CASES.includes(c.caseId))
+  return (opts.include ?? 'all') === 'all' ? recorded : recorded.filter(c => !UPPER_WHOLE_POST_CAPTURE_CASES.includes(c.caseId))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -487,7 +494,7 @@ async function main(): Promise<void> {
   const manifest = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const collected = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
   // `--pre-capture`: the cells as they were before stage2-scale-upper-whole was captured (recipe §9.1).
-  const keep = (k: { caseId: string }): boolean => !process.argv.includes('--pre-capture') || !UPPER_WHOLE_POST_CAPTURE_CASES.includes(k.caseId)
+  const keep = (k: { caseId: string }): boolean => !UPPER_WHOLE_LATER_CASES.includes(k.caseId) && (!process.argv.includes('--pre-capture') || !UPPER_WHOLE_POST_CAPTURE_CASES.includes(k.caseId))
   const [cells, excluded, faults] = [collected.cells.filter(keep), collected.excluded.filter(keep), collected.faults]
   const short = (k: string): string => k.replace(/^stage\d-(scale-)?/, '')
   console.log(`## Cells\n\n${cells.length} captured colour-scale cells; ${excluded.filter(e => e.group === 'a').length} excluded as inapplicable (group a), ${excluded.filter(e => e.group === 'b').length} dropped by a production gate (group b, ${excluded.filter(e => e.group === 'b' && e.threeColour).length} under a 3-colour scale); ${faults.length} harness faults.`)

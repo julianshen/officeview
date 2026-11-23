@@ -188,6 +188,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-scope-disjoint',
     'stage2-scale-num-segment',
     'stage2-scale-upper-whole',
+    'stage2-scale-upper-window',
+    'stage2-scale-raw-floor',
   ]
 
 
@@ -253,7 +255,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               expect(verdict.violation, cellKey).toBeUndefined()
               if (verdict.withheld) { stage5Withheld++; continue }
               stage5FormulaCompared++
-            } else if (!gotMatched && stage5JustifiedRefusals(c, exp.ref, undefined, stage5SheetCells(sheet)).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product')) {
+            } else if (!gotMatched && stage5JustifiedRefusals(c, exp.ref, undefined, stage5SheetCells(sheet)).some(j => j.refused === 'cf-unmeasured-upper-segment-whole-product' || j.refused === 'cf-unmeasured-guard-boundary')) {
               // The num-segment follow-up (owner ruling A): a literal 3-colour cell in the upper-segment whole-product shape
               // is withheld, justified by the shape recomputed from the sheet (stage5-cfvo-nonnumeric-v2 S4, S5).
               stage5Withheld++
@@ -603,18 +605,21 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(checkedCount).toBeGreaterThan(0)
     // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831)
     // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (measured, Excel 16.115)
-    // + the 159 scale cells (127 designated, 32 twin line) of stage2-scale-upper-whole (measured, 54fc3388, Excel 16.115).
-    expect(checkedCount).toBe(650)
+    // + the 159 scale cells (127 designated, 32 twin line) of stage2-scale-upper-whole (measured, 54fc3388, Excel 16.115)
+    // + the 134 scale cells (93 designated, 41 twin line) of stage2-scale-upper-window (recipe-pending; its saved file is the input).
+    // + the 186 scale cells (114 designated, 72 twin line) of stage2-scale-raw-floor (measured, ce3f701d, Excel 16.115).
+    expect(checkedCount).toBe(970)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 10 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 12 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
     expect(r.violations).toEqual([])
     for (const caseId of STAGE2_MEASURED_CASES) expect(r.caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment
     // + the 195 of stage2-scale-upper-whole (54fc3388).
-    expect(r.total).toBe(962)
+    // + the 147 of stage2-scale-upper-window (ed0fccb6) + the 201 of stage2-scale-raw-floor (ce3f701d).
+    expect(r.total).toBe(1310)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
     // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
@@ -624,9 +629,15 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // stage2-scale-upper-whole (exploratory): 120 literal cells withheld by the num-segment finding, D19 and D20 by the
     // upper-segment whole-product withhold, 73 exact (the 2-colour twins, the twin line, the controls).
     // The 1e-11 window (owner ruling after 54fc3388) also withholds stage2-scale-thresholds E4, confirmed-exact before.
-    expect([r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([227, 21])
-    expect(r.exact).toBe(364 + 77 - 6 + 172 + 73 + r.stubCompared)
-    expect(r.withheld).toBe(34 + 11 + 6 + 109 + 122 - r.stubCompared)
+    // stage2-scale-upper-window (no reading matched): 27 literal cells withheld by the num-segment finding, 29 by the
+    // upper-segment whole-product withhold (27 statistical window cells, A17, E5), 14 by the guard-boundary withhold (owner
+    // ruling after ed0fccb6: A3, A4, D2, D4, E7..E10, E12..E14, H8, H18, I5), 77 exact (9 of them unformatted).
+    // stage2-scale-raw-floor (raw-floor matched and registered, §14.z.18): its 67 guard-boundary cells and the 14 of
+    // stage2-scale-upper-window are painted at raw floor, exactly; 4 literal cells stay withheld by the num-segment finding
+    // and 9 W3 probes by the upper-segment whole-product withhold; 188 exact (13 of them unformatted).
+    expect([r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([258, 59, 0])
+    expect(r.exact).toBe(364 + 77 - 6 + 172 + 73 + (77 + 14) + 188 + r.stubCompared)
+    expect(r.withheld).toBe(34 + 11 + 6 + 109 + 122 + (70 - 14) + 13 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

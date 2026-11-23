@@ -5,11 +5,12 @@
  * - `STAGE2_WITHHELD_FINDINGS`: the typed, separately justified findings (Ruling F-2, S2-I, S2-J, Stage 5 stubs);
  * - `stage2NumSegmentShape`: the num-segment finding (capture e448d831, a87121e8), recomputed from the case's own marker
  *   and the cell's value, never a cell list;
- * - `stage2UpperSegmentWholeProductShape`: the upper-segment whole-product withhold (owner ruling after stage2-scale-num-segment).
+ * - `stage2UpperSegmentWholeProductShape`: the upper-segment whole-product withhold (owner ruling after stage2-scale-num-segment);
+ * - `stage2GuardBoundaryShape`: the guard-boundary withhold (owner ruling after stage2-scale-upper-window).
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -96,4 +97,14 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
  */
 export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
   return markers.some(m => upperWholeShapeAt(m, ref, value, values))
+}
+
+/**
+ * The guard-boundary shape (owner ruling after capture ed0fccb6, stage2-scale-upper-window; production's reason
+ * `cf-unmeasured-guard-boundary`), recomputed independently of production (`guardBoundaryShapeAt`,
+ * scripts/cf-refs/upper-whole-justify.ts): a cell strictly inside a 2-colour scale or a 3-colour lower segment whose step
+ * product on some channel lies within 1e-11 strictly below a whole number. Stage 2 holds no formula bound.
+ */
+export function stage2GuardBoundaryShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
+  return markers.some(m => guardBoundaryShapeAt(m, ref, value, values))
 }
