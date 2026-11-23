@@ -7,8 +7,12 @@
  *   of `withoutHidden`.
  * - **Coverage pixels**: a base-covered cell paints empty under visible-only (and as authored under 'full', the
  *   only 'full' use); a rotated box blanks the cells it covers; unknown coverage paints as authored (a local-path
- *   `renderSheetViewport` of the projected sheet); tiles paint saved values. Each "equals" has a same-policy
- *   "differs" control, so a comparison of a document with itself (or a cache that conflates documents) cannot pass.
+ *   `renderSheetViewport` of the projected sheet); tiles paint saved values. Every "equals" has a "differs" control
+ *   (a blank sheet, an uncovered-cell twin, a plain-2 twin, or the 'full' tile), so a comparison of a document with
+ *   itself (or a cache that conflates documents) cannot pass.
+ * - The base-covered reference is the B2-deleted fixture painted as authored (local path), not its wire tile: with B2
+ *   gone, A2's R8 spill rect (the contiguous empty run, unmeasured: `spillSides` / `cellTextOverflow` in
+ *   server/src/sheet/coverage.ts) meets the box, so the twin's own snapshot blanks A2. The test pins that too.
  * - **Marks over the wire**: with the fixed visible mark, tiles (0,0) and (1,0) composited equal one
  *   `paintMarkRegion` over the 1024 × 512 region of the unmarked tiles (Task 7's recipe, at zoomStep 5, dpr 2).
  */
@@ -148,6 +152,9 @@ describe('T2 on tiles', () => {
       expect([f.id, withH.plan.map((e) => `${e.zoomStep}x${e.dpr}`)]).toEqual([f.id, ['5x1', '5x2']])
       const withoutH = await wireTiles(f.withoutHidden, VISIBLE, withH.plan)
       expect([f.id, unequal(withH.pngs, withoutH.pngs)]).toEqual([f.id, []])
+      // Control: the tiles paint the visible control text (they are not a blank sheet's).
+      const blank = await wireTiles(await blankSheet(), VISIBLE, withH.plan)
+      expect([f.id, unequal(withH.pngs, blank.pngs).length > 0]).toEqual([f.id, true])
     }
   }, 300_000)
 })
@@ -166,6 +173,12 @@ describe('coverage pixels', () => {
     // …and as authored under full: the covered text paints, so every tile differs from the B2-deleted one.
     const af = await wireTiles(bytes, { ...VISIBLE, contentPolicy: 'full' }, a.plan)
     for (const [k, ref] of authored) expect([k, diffCount(decodePng(af.pngs.get(k)!).rgba, ref) > 0]).toEqual([k, true])
+    // Why the twin's wire tile is not the reference (R8, coverage.ts spillSides): it equals the twin with A2 deleted
+    // too, and differs from the original's.
+    const twin = await wireTiles(deleted, VISIBLE, a.plan)
+    const twinA2 = await wireTiles(await withoutCells(bytes, ['A2', 'B2']), VISIBLE, a.plan)
+    expect(unequal(twin.pngs, twinA2.pngs)).toEqual([])
+    expect(unequal(twin.pngs, a.pngs)).toEqual([...a.pngs.keys()])
   }, 120_000)
 
   test('rotated box', async () => {
