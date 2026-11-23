@@ -42,8 +42,13 @@ export interface StreamOptions {
   streamFonts?: { baseUrl: string }
   /** Load notices and unit diagnostics of a stream session. */
   onStreamNotice?: (notice: StreamNotice) => void
-  /** Stage 4a (S4 §6.10): `'tiles'` opts an XLSX stream session into server-painted sheet tiles. Off by default. */
-  streamSheets?: 'tiles'
+  /**
+   * How an XLSX stream session asks for its sheets (S4 §6.10; Stage 4b plan P1). Unset (the default) sends
+   * `sheet-view@1`: server-painted tiles with selection, find, copy, resize and a11y text on a 4b server, and Stage 3's
+   * units on a 4a server. `'tiles'` is 4a's opt-in (`sheet-tiles@1` only: tiles, no 4b text ops). `'units'` sends no
+   * feature, as Stage 3 did.
+   */
+  streamSheets?: 'tiles' | 'units'
 }
 
 /**

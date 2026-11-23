@@ -10,6 +10,9 @@
  * `?sheets=` alone does nothing), and `doc=` may name one of the harness's synthetic workbooks (million-rows,
  * grid500x100, frozen). A tiles-mode sheet's frame stats are exposed as window.__ovSheetStats: the last frame's
  * fields, plus `frames` (count) and `basePaintsTotal` (the running sum of `basePaints`).
+ * Stage 4b Task 12: `sheets=view` passes no `streamSheets` (the default client, whose HELLO carries `sheet-view@1`) and
+ * exposes the same frame stats; `doc=` may also name `text-grid` or `slid-under-anchor`. Without `sheets=`, the page
+ * is the default client too, with no frame stats.
  */
 import { useMemo, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -31,6 +34,8 @@ const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ..
 const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined, showDiagnostics: [] as Array<{ code: string; message: string }>, mediaEnds: [] as Array<{ slide: number; nodeId: number; t: number; wall: number }>, mediaTrace: false }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
 const sheetsTiles = q.get('sheets') === 'tiles'
+/** `?sheets=view`: no `streamSheets` option (the default client), with the frame stats hook. */
+const sheetsView = q.get('sheets') === 'view'
 type SheetStats = SheetFrameStats & { frames: number; basePaintsTotal: number }
 let sheetStats: SheetStats | undefined
 /** The viewer's @internal `onFrame` (forwarded by OfficeFile → OfficeDoc → RemoteDocView → RemoteSheetView). */
@@ -71,6 +76,7 @@ function App() {
         watermark={{ text: 'HOSTMARK' }}
         {...(q.get('present') === 'off' ? { allowPresent: false } : {})}
         {...(sheetsTiles ? { streamSheets: 'tiles' as const, ...({ onFrame } as Record<string, unknown>) } : {})}
+        {...(sheetsView ? ({ onFrame } as Record<string, unknown>) : {})}
         {...(q.get('fonts') ? { streamFonts: { baseUrl: `http://127.0.0.1:${P + 1}/fontpack` } } : {})}
         onStreamNotice={(n) => state.notices.push(n)}
         onSlideShowDiagnostic={(d) => state.showDiagnostics.push({ code: d.code, message: d.message })}
