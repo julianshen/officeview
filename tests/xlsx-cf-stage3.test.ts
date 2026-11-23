@@ -92,7 +92,7 @@ describe('every enabled bar capability has verified evidence', () => {
     for (const p of audit.perCapability) {
       expect(['verified', 'unverified-nondiscriminating', 'refused-unsupported', 'supported-structural'], p.capabilityId).toContain(p.disposition)
     }
-    expect(by('verified')).toHaveLength(52) // 52 since bar:bounds-num (stage3-bar-bounds-num)
+    expect(by('verified')).toHaveLength(56) // 52 since bar:bounds-num (stage3-bar-bounds-num); 56 since stage3-bar-all-equal's four (13bba185)
     expect(by('unverified-nondiscriminating')).toEqual(Object.keys(CF_STAGE3_NONDISCRIMINATING).sort())
     expect(by('refused-unsupported')).toEqual([...CF_STAGE3_CAPABILITIES.filter(c => c.capabilityId.startsWith('bar:unresolved-')).map(c => c.capabilityId), ...Object.keys(CF_STAGE3_UNSUPPORTED)].sort())
     expect(by('supported-structural')).toEqual([])
@@ -278,9 +278,11 @@ describe('published bars agree on the resident and the paged worker paths', () =
         for (let row = part.firstRow; row <= part.lastRow; row++) for (let col = part.firstCol; col <= part.lastCol; col++) {
           const o = lease.value.at(row, col)
           const bar = o.kind === 'ready' ? o.value.visual?.dataBar : undefined
-          // A statistical all-equal bar (stage3-bar-degenerate B, lo = hi) announces no position (owner ruling Q1): no valueFraction.
+          // A statistical all-equal bar (stage3-bar-degenerate B, lo = hi; since 13bba185 also stage3-bar-all-equal L..O, the
+          // verified shape and its three twins) announces no position (owner ruling Q1): no valueFraction.
           if (bar) {
-            if (c.id === 'stage3-bar-degenerate' && col === 1) expect('valueFraction' in bar, `${c.id} ${row},${col} valueFraction`).toBe(false)
+            const statistical = (c.id === 'stage3-bar-degenerate' && col === 1) || (c.id === 'stage3-bar-all-equal' && col >= 11 && col <= 14)
+            if (statistical) expect('valueFraction' in bar, `${c.id} ${row},${col} valueFraction`).toBe(false)
             else expect(bar.valueFraction, `${c.id} ${row},${col} valueFraction`).toBeGreaterThanOrEqual(0)
           }
           if (bar) resident.set(`${row},${col}`, { value: bar.valueFraction, start: bar.startFraction, end: bar.endFraction, axis: bar.axisFraction, fill: bar.fillColor, neg: bar.isNegative, border: bar.borderColor, axisColor: bar.axisColor, gradient: bar.isGradient, show: bar.showValue, rtl: bar.direction === 'rightToLeft' })
@@ -310,7 +312,7 @@ describe('published bars agree on the resident and the paged worker paths', () =
       compared++
       bars += resident.size
     }
-    expect(compared).toBe(15) // 15 since stage3-bar-bounds-num
+    expect(compared).toBe(16) // 15 since stage3-bar-bounds-num; 16 since stage3-bar-all-equal (measured, 13bba185)
     expect(bars).toBeGreaterThan(400)
   }, 300000)
 })

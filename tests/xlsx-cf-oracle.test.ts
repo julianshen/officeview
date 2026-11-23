@@ -3337,7 +3337,7 @@ describe('CF oracle verifier', () => {
     // published Stage 3 set (the audit's verified result, asserted in tests/xlsx-cf-stage3.test.ts), and never a
     // non-discriminating, unsupported or unresolved one.
     const published = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string>
-    expect(published.size).toBe(52) // 52 since bar:bounds-num (stage3-bar-bounds-num)
+    expect(published.size).toBe(56) // 52 since bar:bounds-num (stage3-bar-bounds-num); 56 since stage3-bar-all-equal's four (13bba185)
     for (const entry of CF_STAGE3_CAPABILITIES) {
       expect(entry.capabilityId.startsWith('bar:')).toBe(true)
       expect(entry.failClosedDisposition).toMatch(/S3-[A-S]|Always unsupported/)
@@ -3886,10 +3886,10 @@ describe('CF oracle verifier', () => {
     expect(report.ok).toBe(true)
     // Capture run 8 (stage3-bar-auto-bounds) completes Stage 3 again: nothing is blocked or unaccounted.
     expect(report.stageComplete).toBe(true)
-    expect(report.summary.cases).toBe(17) // 17 since stage3-bar-all-equal (recipe-pending until captured)
+    expect(report.summary.cases).toBe(17) // 17 since stage3-bar-all-equal (measured since 13bba185)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities).toEqual([])
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(52)
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(56) // 56 since stage3-bar-all-equal's four (13bba185)
     expect(report.barAutoBounds).toEqual({ autoMin: { rule: 'zero-anchored', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'zero-anchored', settledBy: ['bar:bounds-automax'] } })
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 90_000) // about ten whole-stage audits: 15–25 s alone since capture run 7 (a 510-cell case), up to 50 s beside the full parallel suite

@@ -10,19 +10,24 @@
  * each reading implies is injected (reading + evidence) and production must paint the generated workbook exactly as
  * planted (+-1 px), while every earlier Stage 3 capture keeps its production outcome except the all-equal shapes the
  * reading names. This checks the family and the implementation, not Excel.
+ *
+ * Phase 2 (after the capture, Excel 16.115, 13bba185): the case is measured, each id matched exactly one pre-registered
+ * reading (evaluate, half, half, half-span) and is registered (docs/validation/xlsx-cf.md §14.z.20). The synthetic plants
+ * and the rehearsal stay as they were, run against the state as of the capture: the published evidence without the four
+ * ids (PRE_CAPTURE). The capture itself is checked in the last block.
  */
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CF_STAGE3_CAPABILITIES, CF_STAGE3_CASES, CF_STAGE3_NONDISCRIMINATING, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
-import { computeWorksheetRangeGeometry, evaluateBarCapabilities, measureCaseBars, readZipPartsSync, type DecodedPng } from '../scripts/cf-refs/verify'
+import { computeWorksheetRangeGeometry, decodePngSync, evaluateBarCapabilities, measureCaseBars, readZipPartsSync, type DecodedPng } from '../scripts/cf-refs/verify'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
-import { injectCfBarAllEqualReadings } from '../src/xlsx/cf/dataBar'
+import { CF_BAR_ALL_EQUAL_PRODUCTION_READINGS, injectCfBarAllEqualReadings } from '../src/xlsx/cf/dataBar'
 import { layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
 
 const REPO_ROOT = resolve(__dirname, '..')
@@ -105,16 +110,20 @@ const judge = (png: DecodedPng) => {
 }
 const BASE: Plant = { distinct: 'evaluate', ltr: 'half', rtl: 'half', d1090: 'half-span', stat: 'half' }
 const CAPS = { distinct: 'bar:all-equal-distinct-bounds', ltr: 'bar:degenerate-equal-ltr', rtl: 'bar:degenerate-equal-rtl', d1090: 'bar:degenerate-equal-10-90' } as const
+/** The published evidence as of the capture: without the four ids this case registered afterwards. */
+const PRE_CAPTURE = [...VERIFIED_CAPABILITIES].filter(id => !(Object.values(CAPS) as string[]).includes(id))
 
 afterEach(() => injectCfBarAllEqualReadings(null))
 
 describe('stage3-bar-all-equal (pre-registered, synthetic capture)', () => {
-  it('is appended last, recipe-pending, and owns its four questions; the controls stay owned elsewhere', () => {
-    expect(c.status).toBe('recipe-pending')
+  it('is appended last, measured (13bba185), and owns its four questions, no longer non-discriminating; the controls stay owned elsewhere', () => {
+    expect(c.status).toBe('measured')
     expect(CF_STAGE3_CASES.at(-1)!.id).toBe(ID)
     for (const cap of Object.values(CAPS)) {
       expect(CF_STAGE3_CAPABILITIES.find(e => e.capabilityId === cap)!.caseId, cap).toBe(ID)
-      expect(CF_STAGE3_NONDISCRIMINATING[cap], cap).toMatch(/^Pre-registered \(stage3-bar-all-equal/)
+      expect(CF_STAGE3_NONDISCRIMINATING[cap], cap).toBeUndefined()
+      expect(VERIFIED_CAPABILITIES.has(cap), cap).toBe(true)
+      expect(PRE_CAPTURE.includes(cap), cap).toBe(false)
     }
     expect(CF_STAGE3_CAPABILITIES.find(e => e.capabilityId === 'bar:degenerate-equal-values')!.caseId).toBe('stage3-bar-degenerate')
     expect(c.expected.cells.filter(x => x.matched).map(x => x.ref)).toEqual(COLS.flatMap(col => [2, 3, 4].map(r => `${col}${r}`)))
@@ -173,13 +182,14 @@ async function productionBars(saved: string, refs?: readonly string[]): Promise<
 }
 
 describe('rehearsal: each reading registered (reading + evidence) paints as planted, and no earlier capture moves', () => {
-  const measured3 = manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')
+  // Every EARLIER Stage 3 capture (this case is measured since 13bba185; its own cells are checked against the plant above).
+  const measured3 = manifest.cases.filter(x => x.stage === 3 && x.status === 'measured' && x.id !== ID)
   let baseline: Map<string, Map<string, string>> | undefined
   const base = async () => {
     if (baseline) return baseline
-    baseline = new Map()
-    for (const m of measured3) baseline.set(m.id, await productionBars(m.saved))
-    return baseline
+    const b = new Map<string, Map<string, string>>()
+    await withExactCfEvidence(PRE_CAPTURE, async () => { for (const m of measured3) b.set(m.id, await productionBars(m.saved)) })
+    return (baseline = b)
   }
 
   for (const [knob, readings] of [['distinct', DISTINCT], ['ltr', LTR], ['rtl', RTL], ['d1090', D1090]] as const) {
@@ -187,7 +197,7 @@ describe('rehearsal: each reading registered (reading + evidence) paints as plan
       it(`${CAPS[knob]} = ${reading}`, async () => {
         const before = await base()
         injectCfBarAllEqualReadings({ [CAPS[knob]]: reading })
-        await withExactCfEvidence([...VERIFIED_CAPABILITIES, CAPS[knob]], async () => {
+        await withExactCfEvidence([...PRE_CAPTURE, CAPS[knob]], async () => {
           // The generated workbook: production's px at capture scale equal the planted ones (+-1 px) on the reading's cells.
           const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
           const batch = (await prepareCfPaint(doc.sheets[0]!, { evidence: cfRuntimeEvidence }))!
@@ -234,7 +244,7 @@ describe('rehearsal: each reading registered (reading + evidence) paints as plan
     const verdict: Record<string, boolean> = {}
     for (const reading of DISTINCT) {
       injectCfBarAllEqualReadings({ 'bar:all-equal-distinct-bounds': reading })
-      verdict[reading] = await withExactCfEvidence([...VERIFIED_CAPABILITIES, 'bar:all-equal-distinct-bounds'], async () => {
+      verdict[reading] = await withExactCfEvidence([...PRE_CAPTURE, 'bar:all-equal-distinct-bounds'], async () => {
         const g = manifest.cases.find(x => x.id === 'stage3-bar-geometry')!
         const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, g.saved)))))
         const batch = (await prepareCfPaint(doc.sheets[0]!, { evidence: cfRuntimeEvidence }))!
@@ -251,5 +261,50 @@ describe('rehearsal: each reading registered (reading + evidence) paints as plan
       })
     }
     expect(verdict).toEqual({ evaluate: true, full: true, 'degenerate-half': false, none: false })
+  }, TIMEOUT_MS)
+})
+
+describe('the capture (Excel 16.115, 13bba185): one reading per id, registered, painted as Excel drew it', () => {
+  const R = resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs', `${ID}.json`)
+  const side = JSON.parse(readFileSync(R, 'utf8')) as { colWidthsPt: number[]; rowHeightsPt: number[]; observedBars: Array<{ ref: string; cellLeftPx: number; cellWidthPx: number; bar: { leftPx: number; rightPx: number } | null }> }
+  const WANT = { 'bar:all-equal-distinct-bounds': 'evaluate', 'bar:degenerate-equal-ltr': 'half', 'bar:degenerate-equal-rtl': 'half', 'bar:degenerate-equal-10-90': 'half-span' } as const
+
+  it('the verifier on the real capture matches exactly one reading per id (and the control L the verified half); production registers that reading', () => {
+    const png = decodePngSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs', `${ID}.png`))))!
+    const g = computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt: side.colWidthsPt, rowHeightsPt: side.rowHeightsPt })!
+    const measured = measureCaseBars(c as never, png, g, parts)
+    expect(measured instanceof Map).toBe(true)
+    const ev = evaluateBarCapabilities(c as never, parts, png, g, measured as never)
+    for (const [cap, reading] of Object.entries(WANT)) {
+      expect([ev[cap]!.status, ev[cap]!.matched], cap).toEqual(['discriminating', reading])
+      expect(CF_BAR_ALL_EQUAL_PRODUCTION_READINGS[cap], cap).toBe(reading)
+    }
+    expect([ev['bar:degenerate-equal-values']!.status, ev['bar:degenerate-equal-values']!.matched]).toEqual(['discriminating', 'half'])
+  }, TIMEOUT_MS)
+
+  it('production paints all 42 cells of the saved workbook within +-1 px of Excel; without the four ids\' evidence their cells stay withheld', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const paint = async () => (await prepareCfPaint(doc.sheets[0]!, { evidence: cfRuntimeEvidence }))!
+    const batch = await paint()
+    try {
+      for (const o of side.observedBars) {
+        const row = Number(o.ref.slice(1)) - 1, col = o.ref.charCodeAt(0) - 65
+        const bar = batch.barAt(row, col)
+        const p = bar ? layoutDataBar(bar, { x: o.cellLeftPx * 4 / 3, y: row * 40, width: o.cellWidthPx * 4 / 3, height: 40 }, { zoom: 0.75, dpr: 1, output: 'device' }) : undefined
+        if (o.bar === null) { expect(p?.fill, `${o.ref}: no bar`).toBeUndefined(); continue }
+        expect(p?.fill, `${o.ref} paints`).toBeDefined()
+        expect(Math.abs(p!.fill!.x - o.bar.leftPx), `${o.ref} left`).toBeLessThanOrEqual(1)
+        expect(Math.abs(p!.fill!.x + p!.fill!.w - 1 - o.bar.rightPx), `${o.ref} right`).toBeLessThanOrEqual(1)
+        // Distinct bounds announce the real value's position; the statistical shapes (L, M, N, O) none (owner ruling Q1).
+        expect('valueFraction' in bar! && bar!.valueFraction !== undefined, o.ref).toBe(!'LMNO'.includes(o.ref[0]!))
+      }
+    } finally { batch.dispose() }
+    await withExactCfEvidence(PRE_CAPTURE, async () => {
+      const b = await paint()
+      try {
+        for (const col of 'BCDEFGHIMNO') for (const r of [2, 3, 4]) expect(b.barAt(r - 1, col.charCodeAt(0) - 65), `${col}${r} withheld`).toBeUndefined()
+        for (const col of 'JKL') for (const r of [2, 3, 4]) expect(b.barAt(r - 1, col.charCodeAt(0) - 65), `${col}${r} paints`).toBeDefined()
+      } finally { b.dispose() }
+    })
   }, TIMEOUT_MS)
 })

@@ -166,10 +166,29 @@ describe('2b: the pre-registered all-equal readings are implemented, selectable 
   const NUM = (lo: number, hi: number, o: Partial<BarDef> = {}) => evidenceShape({ bounds: [{ type: 'num', value: lo }, { type: 'num', value: hi }], ...o })
   afterEach(() => injectCfBarAllEqualReadings(null))
 
-  it('production registers none of them: every pre-registered shape stays withheld even with its evidence', () => {
-    expect(Object.keys(CF_BAR_ALL_EQUAL_PRODUCTION_READINGS)).toEqual(['bar:degenerate-equal-values'])
-    withExactCfEvidence(ALL, () => {
+  it('as of the capture production registered none of them; since 13bba185 each carries its matched reading and still needs its evidence', () => {
+    // Phase 2 (stage3-bar-all-equal captured, Excel 16.115, 13bba185): each id matched exactly one reading (§14.z.20).
+    expect(CF_BAR_ALL_EQUAL_PRODUCTION_READINGS).toEqual({
+      'bar:degenerate-equal-values': 'half',
+      'bar:all-equal-distinct-bounds': 'evaluate',
+      'bar:degenerate-equal-ltr': 'half',
+      'bar:degenerate-equal-rtl': 'half',
+      'bar:degenerate-equal-10-90': 'half-span',
+    })
+    // The unregistered state as of the capture is the state without each id's evidence: withheld, as on main.
+    withExactCfEvidence(EVIDENCE, () => {
       for (const [cap, def, scope] of shapes) expect(ev(scope[0]!, def, scope), cap).toEqual(DEGENERATE)
+    })
+    withExactCfEvidence(ALL, () => {
+      expect(geo(ev(42, evidenceShape({ direction: 'leftToRight' }), [42, 42, 42]))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(geo(ev(42, evidenceShape({ direction: 'rightToLeft' }), [42, 42, 42]))).toEqual([0, 0.5, 'rightToLeft', undefined])
+      expect(geo(ev(42, evidenceShape({ minLength: 10, maxLength: 90 }), [42, 42, 42]))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(geo(ev(30, NUM(0, 100), [30, 30, 30]))).toEqual([0, 0.3, 'leftToRight', 0.3])
+      // The explicit-direction twins were measured on a left-to-right sheet only: elsewhere they stay withheld.
+      for (const direction of ['leftToRight', 'rightToLeft'] as const) {
+        expect(ev(42, evidenceShape({ direction, sheetRightToLeft: true }), [42, 42, 42]), `${direction} on an RTL sheet`).toEqual(DEGENERATE)
+        expect(ev(42, evidenceShape({ direction, sheetRightToLeft: undefined }), [42, 42, 42]), `${direction} on an unknown sheet`).toEqual(DEGENERATE)
+      }
     })
   })
 
@@ -198,10 +217,11 @@ describe('2b: the pre-registered all-equal readings are implemented, selectable 
       expect(geo(at('bar:degenerate-equal-10-90', 'half-min', d1090))).toEqual([0, 0.45, 'leftToRight', undefined])
       expect(geo(at('bar:degenerate-equal-10-90', 'full', d1090))).toEqual([0, 0.85, 'leftToRight', undefined])
       expect(at('bar:degenerate-equal-10-90', 'none', d1090)).toEqual({ kind: 'no-match' })
-      // A twin's reading never reaches another twin's shape, nor the evidence shape.
+      // A twin's reading never reaches another twin's shape, nor the evidence shape (rtl's own evidence withheld: as of
+      // the capture it had none).
       injectCfBarAllEqualReadings({ 'bar:degenerate-equal-ltr': 'full' })
       expect(geo(ev(42, evidenceShape(), [42, 42, 42]))).toEqual([0, 0.5, 'leftToRight', undefined])
-      expect(ev(42, rtl, [42, 42, 42])).toEqual(DEGENERATE)
+      withExactCfEvidence(ALL.filter(x => x !== 'bar:degenerate-equal-rtl'), () => expect(ev(42, rtl, [42, 42, 42])).toEqual(DEGENERATE))
     })
   })
 

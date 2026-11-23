@@ -86,8 +86,9 @@ const DELEGATED_ALL_EQUAL_CHECKS: ReadonlySet<string> = new Set([...DELEGATED_TH
  * - `bar:degenerate-equal-values` (stage3-bar-degenerate B, verified and published: Excel 86..174, 89 of 177 px, matched
  *   `half`): min/max bounds, x14 paired, 0/100, solid, no border, `context` on an LTR sheet, automatic axis, values > 0.
  *   Registered `half`: the bar spans 0..0.5 of the span. Owner ruling Q1: it announces no position (no `valueFraction`).
- * Pre-registered by stage3-bar-all-equal (Phase 1, before its capture) and UNREGISTERED (withheld until a capture matches
- * one reading and it is registered here; owner ruling Q2 for the three statistical twins):
+ * Pre-registered by stage3-bar-all-equal (Phase 1, before its capture; owner ruling Q2 for the three statistical twins).
+ * Its capture (Excel 16.115, 13bba185) matched exactly one reading per id at every decisive cell, so each is registered
+ * below (docs/validation/xlsx-cf.md §14.z.20): `evaluate`, `half`, `half` (mirrored) and `half-span`.
  * - `bar:degenerate-equal-ltr`: the evidence shape with `direction="leftToRight"`: `half` (0..0.5), `none`, `full`;
  * - `bar:degenerate-equal-rtl`: with `direction="rightToLeft"`: `half` (0..0.5 in reading order, the mirrored half),
  *   `half-ltr` (an unmirrored half from the left edge), `none`, `full`;
@@ -110,9 +111,16 @@ export const CF_BAR_ALL_EQUAL_READINGS = {
 } as const satisfies Readonly<Record<string, readonly string[]>>
 export type CfBarAllEqualCap = keyof typeof CF_BAR_ALL_EQUAL_READINGS
 export type CfBarAllEqualReading = (typeof CF_BAR_ALL_EQUAL_READINGS)[CfBarAllEqualCap][number]
-/** The reading production implements per id. 2a registers the verified evidence's `half` on its own shape only; every
- * pre-registered id is absent (its shape withheld) until its capture matches a reading. */
-export const CF_BAR_ALL_EQUAL_PRODUCTION_READINGS: Readonly<Partial<Record<string, string>>> = Object.freeze({ 'bar:degenerate-equal-values': 'half' })
+/** The reading production implements per id. 2a registers the verified evidence's `half` on its own shape only; the four
+ * ids stage3-bar-all-equal pre-registered carry the reading its capture (13bba185) matched, each on its own shape only.
+ * Without an id's evidence its shape stays withheld (`cf-degenerate-scope`), as on main. */
+export const CF_BAR_ALL_EQUAL_PRODUCTION_READINGS: Readonly<Partial<Record<string, string>>> = Object.freeze({
+  'bar:degenerate-equal-values': 'half',
+  'bar:all-equal-distinct-bounds': 'evaluate',
+  'bar:degenerate-equal-ltr': 'half',
+  'bar:degenerate-equal-rtl': 'half',
+  'bar:degenerate-equal-10-90': 'half-span',
+})
 let proposedAllEqualReadings: Readonly<Partial<Record<string, string>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfBarAllEqualReadings(readings: Readonly<Partial<Record<string, string>>> | null): void {
@@ -141,8 +149,10 @@ export function barAllEqualShape(def: CfDataBarDefinition, equalThresholds: bool
   }
   if (b0.type !== 'min' || b1.type !== 'max' || !(lo > 0)) return undefined
   if (full && contextLtr) return 'bar:degenerate-equal-values'
-  if (full && def.direction === 'leftToRight') return 'bar:degenerate-equal-ltr'
-  if (full && def.direction === 'rightToLeft') return 'bar:degenerate-equal-rtl'
+  // The explicit-direction twins were measured on a left-to-right sheet only (owner ruling Q2: the exact evidence shape).
+  const ltrSheet = def.sheetRightToLeft === false
+  if (full && ltrSheet && def.direction === 'leftToRight') return 'bar:degenerate-equal-ltr'
+  if (full && ltrSheet && def.direction === 'rightToLeft') return 'bar:degenerate-equal-rtl'
   if (d1090 && contextLtr) return 'bar:degenerate-equal-10-90'
   return undefined
 }

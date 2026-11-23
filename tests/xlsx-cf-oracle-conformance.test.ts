@@ -723,7 +723,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
 
     const stage3 = manifest.cases.filter(c => c.stage === 3)
-    expect(stage3.map(c => c.id)).toHaveLength(17) // 17 since stage3-bar-all-equal (recipe-pending)
+    expect(stage3.map(c => c.id)).toHaveLength(17) // 17 since stage3-bar-all-equal (measured since 13bba185)
     let checked = 0
     let barCells = 0
     let painted = 0
@@ -739,10 +739,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       // Since the bar:bounds-num follow-up these num-bounded bars need only verified capabilities.
       'stage3-bar-geometry:G': 'bar:geometry-min-visible-width is non-discriminating; the saved num 0/100 bar\'s bounds and lengths are verified',
       'stage3-bar-showvalue:C': 'bar:showvalue-copy-text is a clipboard observation, not paint; the saved num 0/100 bar\'s bounds and lengths are verified',
-      // The all-equal follow-up: the non-equal controls of bar:all-equal-distinct-bounds (pre-registered, recipe-pending, so
-      // not yet in the Lesson 1 test): a non-equal scope needs only the verified num bounds and lengths.
-      'stage3-bar-all-equal:J': 'bar:all-equal-distinct-bounds applies to all-equal scopes only; the non-equal num 0/100 control needs only verified capabilities',
-      'stage3-bar-all-equal:K': 'bar:all-equal-distinct-bounds applies to all-equal scopes only; the non-equal num 0/100, 10/90 control needs only verified capabilities',
+      // The all-equal follow-up: stage3-bar-all-equal J and K (the non-equal controls) were listed here while the case was
+      // recipe-pending; since its capture (13bba185) bar:all-equal-distinct-bounds is verified, so they need no entry.
     }
     const markerOnlyPainted = new Set<string>()
     for (const c of stage3) {
@@ -1215,7 +1213,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       // and showvalue paint and are checked against Excel's px below; these two stay withheld by S3-E itself.
       'stage3-bar-degenerate:D': { outcome: 'withheld', reason: 'inverted num 80/20: S3-E keeps the degenerate scope unresolved (Excel swaps the bounds; not implemented)' },
       'stage3-bar-degenerate:E': { outcome: 'withheld', reason: 'values beyond num 20/80: S3-E keeps the rule unresolved (Excel clamps; not implemented)' },
-      ...Object.fromEntries(['stage3-bar-geometry:H', 'stage3-bar-geometry:I'].map(key => [key, { outcome: 'withheld', reason: 'every value is 100 (v_min = v_max): S3-E keeps the degenerate scope unresolved even under num 0/100 bounds (Excel draws the full bar; not implemented)' } as Finding])),
+      // stage3-bar-geometry H and I (all 100 under num 0/100; Excel full) paint since stage3-bar-all-equal's capture
+      // (13bba185) registered `evaluate` for bar:all-equal-distinct-bounds (§14.z.20), and are checked against Excel below.
       'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
     }
     // Bars production paints on cells the capture designated for no geometry capability (settings or another
@@ -1335,7 +1334,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
     // 555/498/27/250 since the bar:bounds-num follow-up (was 472/428/84/246): the num-bounded bars now paint, each at Excel's px.
     // 560/503/22 since the all-equal follow-up (stage3-bar-degenerate B2:B6 paint the verified half length).
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 560, measuredPainted: 503, withheldFound: 22, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
+    // 607/550/17 since stage3-bar-all-equal's capture (13bba185) and registration: its 42 designated cells paint at Excel's px
+    // (+42), and stage3-bar-geometry's five designated H/I cells move from withheld findings to painted (+5, -5).
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 607, measuredPainted: 550, withheldFound: 17, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     // Run 8 adds stage3-bar-auto-bounds J and K: ten more explicit black axes.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(38)

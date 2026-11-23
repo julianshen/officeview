@@ -6319,15 +6319,9 @@ export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo.',
   'bar:negative-border-same-as-positive':
     'With negativeBarBorderColorSameAsPositive="1" Excel\'s canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel\'s default negative border colour is known.',
-  // The all-equal follow-up (stage3-bar-all-equal): pre-registered questions awaiting their capture (as Stage 2's are).
-  'bar:all-equal-distinct-bounds':
-    'Pre-registered (stage3-bar-all-equal, readings evaluate / full / degenerate-half / none), awaiting its capture: distinct literal bounds over an all-equal scope stay withheld (cf-degenerate-scope) until a matched reading is registered.',
-  'bar:degenerate-equal-ltr':
-    'Pre-registered (stage3-bar-all-equal, readings half / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with direction="leftToRight" stays withheld until a matched reading is registered.',
-  'bar:degenerate-equal-rtl':
-    'Pre-registered (stage3-bar-all-equal, readings half (mirrored) / half-ltr / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with direction="rightToLeft" stays withheld until a matched reading is registered.',
-  'bar:degenerate-equal-10-90':
-    'Pre-registered (stage3-bar-all-equal, readings half-span / half-min / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with 10/90 lengths stays withheld until a matched reading is registered.',
+  // The all-equal follow-up (stage3-bar-all-equal): its four pre-registered questions (bar:all-equal-distinct-bounds and the
+  // twins bar:degenerate-equal-ltr / -rtl / -10-90) each matched one reading in its capture (Excel 16.115, 13bba185) and are
+  // registered (CF_BAR_ALL_EQUAL_PRODUCTION_READINGS, src/xlsx/cf/dataBar.ts), so their entries are removed.
   'bar:showvalue-copy-text':
     'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
 }
