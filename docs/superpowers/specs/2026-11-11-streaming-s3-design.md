@@ -261,6 +261,39 @@ audit rows carry the counts.
 >     or a rotation by a multiple of 90°); otherwise its whole box counts
 >     as painted. The review's residual A is closed.
 
+> **Amendment (2026-11-24, Stage 4b as built; S4 design §6.7, §6.11 and
+> "As built (4b)" P8, P10, P15).** On an XLSX stream in tiles mode with
+> `sheetView` (`sheet-copy`, `sheet-a11y`):
+>
+> 1. **The sheet copy unit.** One cell counts 1 (item 1). n is the number of
+>    non-empty fields of the copied TSV. A withheld cell (merge tail,
+>    undrawn, covered, or any cell of an unknown-coverage sheet) is an empty
+>    field and counts 0, so the columns keep their shape. A copy with n = 0
+>    sends its shape and writes no audit row and no count, as a 0-paragraph
+>    copy does here.
+> 2. **Caps and counter.** The caps are this section's, unchanged: refused at
+>    n+1 and allowed at n, per copy (`copy-too-large {limit, requested}`)
+>    and per session (`copy-quota-exhausted {limit, requested}`); never
+>    truncated; one copy ≤ 4 MiB of UTF-8. Sheet copies and focused sheet
+>    a11y reads share `copiedParagraphs` with Stage 3 copy and a11y, and the
+>    rules of item 2 (resume) and item 11 (a lost answer counts) hold.
+> 3. **Whole-sheet select-all** (every row × every column) is refused
+>    `copy-too-large {limit: 4194304}` with no `requested`, because the
+>    local engine refuses it before reading a cell. A used-range or
+>    full-height column copy is answered.
+> 4. **A11y.** Unit mode serves a window of ≤ 2,000 cells, uncounted; focused
+>    mode reads the active cell, 1×1, counting 1 when it has text, fetched
+>    after a 400 ms rest and cached per `(sheetId, viewGen, cell)`. A request
+>    that serves no text writes no audit row.
+> 5. **Audit.** `copies` rows of a sheet copy or a11y read carry `sheet_id`
+>    and `rect` (the bounding source rect, JSON), and `from_unit` /
+>    `to_unit` hold the sheet index. Older stores gain the two nullable
+>    columns on open.
+> 6. **The notice condition (item 10, widened).** On a 4b sheet stream,
+>    "text unavailable in this viewing mode" is shown once when copy **or**
+>    a11y is off, not only when both are (S4 design §6.11). Units mode and
+>    the other kinds keep item 10's "both".
+
 ### 4.2 Piece 2 — print (parent §2 item 9)
 
 **Policy surface:** `print?: boolean | { maxPages: number; maxSessionPages?: number }`

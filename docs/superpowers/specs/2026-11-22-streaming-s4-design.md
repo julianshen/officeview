@@ -300,6 +300,9 @@ the unprojected parse.
    `projectXlsx`. The other two depend on format evaluation, so they are
    applied when the snapshot is built. This is a new parent §6.4 row (§10,
    item 1).
+   *Amendment (2026-11-24, Stage 4b as built):* all three are blanked in
+   the text view (`sheetTextView`), not in `projectXlsx` and not in the
+   tile snapshot. See §10 item 1 and "As built (4b)".
 4. **Drawing-covered cells: the analytic rule (parent §12), as written.**
    - A cell's grid rect, plus its own spill rect, that intersects any
      drawing's transformed and effect-padded painted extent counts as
@@ -943,6 +946,16 @@ none of them.
    (`showValue="0"`) paints no text count as blank to every text and key
    answer (§6.2 step 3). Drawing coverage uses the whole transformed,
    effect-padded box, whatever the fill or transparency (§6.2 step 4).
+   *Amendment (2026-11-24, Stage 4b as built; owner confirmed plan Open
+   item 1 on 2026-11-23):* merge-covered values are **not** purged in
+   `projectXlsx`, which also feeds units mode, whose formulas and CF would
+   then read the purged cells. They are blanked in `sheetTextView`
+   (`server/src/sheet/text-view.ts`) only, for every text and key answer;
+   tiles and units mode are unchanged. A non-anchor merge cell paints no
+   text of its own, so nothing visible changes. The undrawn half (`;;;`
+   and the like, CF `showValue="0"`) is blanked in the same place, when the
+   text view is built. Residual (preflight F20): tile-side CF (colour-scale
+   anchors, data bars) still reads merge-tail values, as in 4a.
 2. **§11/§12 join for sheets:** the analytic rule is the sole rule for
    sheet answers. The parent's "where a visual pass exists" ink rule
    becomes a corpus test oracle, with per-cell unclipped recording (§6.7,
@@ -1150,3 +1163,241 @@ design needs.
 item 2 (the analytic rule as the sole rule for answers, the ink oracle);
 item 4's `'sheet'` class; item 6's sort-order and fit limits; item 11 (typed
 conditions refused on protected streams).
+
+#### As built (4b)
+
+Stage 4b was built on `feature/streaming-s4b` (1e2fbf4d..d30394a3 and the
+validation commit after it), to the plan
+`docs/superpowers/plans/2026-11-23-streaming-s4b.md`, its plan calls P1–P17
+and the rulings in its ledger
+(`.superpowers/sdd/2026-11-23-streaming-s4b/progress.md`, pre-flight
+findings F1–F22 in `preflight.md` there). Validation, numbers and gates:
+`docs/validation/streaming-s4b.md`. The parent and S3 amendments this stage
+implements are written into those specs, dated 2026-11-24. Where a ruling
+changed a plan call, the ruling is what was built, and it is stated here.
+
+**Owner decisions (2026-11-23).**
+- **Open item 1, confirmed:** merge tails are blanked in text answers only
+  (`sheetTextView`), never in `projectXlsx`. §10 item 1 is amended to say
+  so.
+- **Open item 2, confirmed:** focused-mode a11y fetches once the active cell
+  has rested 400 ms, and caches the text per `(sheetId, viewGen, cell)`. A
+  cached cell is never fetched again, so a cell counts at most once per
+  view, and a blank or withheld cell counts 0.
+
+**P1, the 4b capability (`sheet-view@1`), with ruling F1.**
+- A 4b server answers an XLSX in tiles mode iff the HELLO `features` hold
+  `sheet-tiles@1` or `sheet-view@1` (`server/src/sheet/mode.ts`). The
+  manifest carries `sheetView: 1` iff the session is in tiles mode and the
+  features hold `sheet-view@1` (computed from the final mode, so a document
+  that falls back to units under "As built (4a)" never has it). The client
+  rejects `sheetView` other than `1`, or `sheetView` without `sheetMode`.
+- Without `sheetView`, the server refuses `sheet-find`, `sheet-copy`,
+  `sheet-a11y`, `sheet-fit` and `sheet-resize` `unsupported-op`; the three
+  text ops are charged one `'text'` check first (refused off-mode requests
+  are included in the class, as in Stage 3).
+- **The client's `streamSheets` option (F1, deviating from the plan's
+  "`'tiles'` sends both"):** unset (the default) sends exactly
+  `['sheet-view@1']`; `'tiles'` sends exactly `['sheet-tiles@1']`, so it
+  gets 4a's tiles with no 4b text; `'units'` sends no `features`, Stage 3's
+  HELLO. A host that opted in with `'tiles'` must drop the option to get
+  4b. This keeps every 4a assertion in `tests/stream` true.
+- **Mixed versions (the compatibility matrix, legs (a)–(g)):** a default 4b
+  client against a 4a server gets units mode with Stage 3 search, copy and
+  a11y (a 4a server ignores the unknown feature); a `'tiles'` 4b client
+  against a 4a server gets 4a tiles; a 4a client against a 4b server gets
+  4a's manifest and 4a's `sheet-layout` bytes. A resume whose manifest
+  changes `sheetView` ends the session `layout-changed`, as one that
+  changes `sheetMode` does.
+- This extends §6.10 and §10 item 9 (F19): a 4b server also selects tiles
+  on `sheet-view@1`.
+
+**P2, one text accessor.** No text op reads `SheetSnapshot.sheet`.
+`sheetTextView(snap, projected, sizes, {workbook, clock, budget})` gives
+the one sheet find, copy, a11y and fit read. Under unknown coverage it
+blanks every content cell (keeping styles), because the snapshot keeps the
+authored sheet there.
+
+**P3, merge tails.** Every non-anchor merge cell is blank in the text view.
+Tiles and `projectXlsx` are untouched (owner Open item 1). Tile-side CF
+still reads merge-tail values (F20).
+
+**P4, undrawn cells (with rulings F3 amended, F4, and the Task 1 rulings).**
+- A non-empty value whose display text is `''` is blank. The display text
+  is formatted under the CF-effective style, and also under the tile CF
+  batch's style where that differs; either one blanks it. A formatting
+  throw counts as undrawn.
+- A cell is blank when the CF batch gives `barAt`/`iconAt(r, c).showValue
+  === false`. With no batch, every cell of a `showValue="0"` rule is blank.
+- **The CF text scope is prepared as the local viewer prepares it (F3
+  amended).** It covers the content cells inside any rule's sqref (not the
+  whole sqref ∩ used range: an empty cell has no text). Rects over the
+  engine's 5,000-cell batch are split, and every slice goes in one
+  `prepareCfTextScope` call, so rank and aggregate rules keep their
+  whole-range results. The clock is the session clock.
+- **Fail closed, whole scope.** When the sheet has CF and the scope is
+  refused, over budget or throws, every cell of every CF sqref is blank.
+  The engine refuses a scope as a unit, so this is stricter than
+  per-rule.
+- **Fit is not a scope user (F4).** `autoFitSize` measures with the base
+  style over the blanked cells, as the local fit does.
+
+**P5, current-view coverage.** With session sizes, the server measures
+`baseCoverage` on the projected (unblanked) sheet, with drawings placed by
+`buildSheetGeometry(projected, {sizes}).sizedDrawings` (ruling A7). Cells
+covered there are blank in the text view, in addition to base coverage.
+An `unknown` result blanks the whole view. Tiles stay base-blanked only.
+
+**P6, find, with ruling F15.**
+- `sheet-find {query, matchCase?, scope?}`; `scope` is `'workbook'` (the
+  default) or a `sheetId`. One local `WorkbookFind` job runs per sheet, in
+  workbook order, each asking for the hits still wanted.
+- The answer is `sheet-find-result {hits: [[sheetIndex, row, col], …]}`
+  chunks (≤ 48 KiB each), then `sheet-find-done {total, truncated}`:
+  `total` is the number of hits sent, `truncated` says more existed. There
+  is **no `cursor`** (a spec deviation; see below). At 5,000 hits the viewer
+  says "Showing the first 5,000 matches.".
+- `wholeCell: true` is refused `policy-refused`; `false` is accepted (local
+  find has no whole-cell mode). A `hidden: 'filter'` hit is the 4-tuple
+  `[s, r, c, 1]`. It cannot occur before 4c, because local find matches
+  visible cells only; the codec and the viewer message are tested with a
+  fake server.
+- A newer find on the sid supersedes a running one, which is answered
+  `sheet-find-done {total: sent, truncated: true}`.
+
+**P7, the selection on the wire.** Interval-only, as planned: ≤ 256 ranges,
+ascending, disjoint, inclusive, in range, ≤ 64 KiB. The client keeps 1 KiB
+of the request cap for the envelope and refuses locally with 'Selection too
+large to copy.' past it.
+
+**P8, copy, with rulings F8 and the select-all parity ruling.**
+- `sheet-copy {sheetId, viewGen, selection}`; `viewGen` is required. The
+  order is P8's (resolve, serialize under 4 MiB, count, per-copy cap,
+  session cap, audit, counter, chunks) on the sid's `copyQueue`, sharing
+  `TextSlot.copiedParagraphs` with focused a11y.
+- `stale-view` is checked when the turn starts (after the token and the
+  `'text'` charge, before any count or audit), so a copy overtaken by a
+  resize is refused uncounted.
+- n is the number of non-empty TSV fields. A copy with n = 0 sends its
+  tab-and-newline shape with no audit row and no count (Stage 3 parity).
+- **Whole-sheet select-all is refused `copy-too-large {limit: 4194304}`,
+  as locally** (parity ruling). The local engine refuses every row × every
+  column before reading a cell ("Copy is too large"). Review Focus 4's
+  premise that it fits 4 MiB was false. A full-height single column
+  (A1:A1048576, about 1.06 MB) copies in one answer.
+- `copies` gains nullable `sheet_id` and `rect` (JSON of the bounding
+  source rect), added to an older store by a guarded `ALTER TABLE`.
+
+**P9, fit.** `sheet-fit {sheetId, viewGen, axis, index, pane, regions?}`,
+answered `sheet-fit-result {size}`; a fit is two ops (fit, then resize).
+`autoFitSize` moved verbatim to React-free `src/xlsx/view/autoFit.ts`. An
+omitted or empty `regions` keeps `autoFitSize`'s `[pane]` default (fix
+round 1). An unknown-coverage sheet fits to the blank size; fit has no
+`coverage-unknown` refusal.
+
+**P10, a11y, with rulings F8 and the audit ruling.**
+- `sheet-a11y {sheetId, viewGen, rows, cols}` in source rows, ≤ 2,000 cells,
+  answered by `sheet-a11y-result {seq, cells: [[row, col, text], …], last}`
+  listing only servable non-empty text. `stale-view` as for copy.
+- Text is `formatCellPresentation` with the CF-effective style when a scope
+  exists, else the cell's own style (local `presentCell` parity). No CF
+  descriptor is sent.
+- `unit` is uncounted; `focused` is 1×1 and counts 1 when non-empty; `off`
+  is refused `text-unavailable`, and the client never sends it.
+- **A request that serves no text writes no audit row** (a unit window with
+  nothing servable, or a focused empty cell). Nothing served, nothing to
+  account for.
+- **Client:** unit mode fetches a window that has rested 250 ms, only its
+  uncached cells, in requests of ≤ 2,000 cells; focused mode follows Open
+  item 2. Both share a limit of 30 requests per 60 s. `rate-limited` gets
+  one retry after 1 s. `text-unavailable`, `copy-quota-exhausted` and
+  `closed` stop all fetching. The cache keeps the newest `viewGen` per
+  sheet and at most 100,000 unit-mode cells per sheet.
+
+**P11, resize, with ruling F2.**
+- `sheet-resize {sheetId, viewGen, axis, index, size}` or `{sheetId,
+  viewGen, reset: true}`, answered `sheet-view {sheetId, viewGen, change}`
+  with the clamped size. A resize to the size already held, or a reset of a
+  sheet with no sizes, answers the current `viewGen` and changes nothing.
+- `sheet-layout` carries `sessionRows`/`sessionCols` (`[index, px]`,
+  ascending) **only to a `sheetView` session and only when non-empty (F2)**.
+  An unresized layout, and every layout to a `sheet-tiles@1`-only session,
+  is byte-identical to 4a's, because the 4a decoder rejects unknown keys.
+
+**P12, refusals and caps, with ruling F17.**
+- Order: `stale-view`, `hidden-target`, `coverage-unknown` (resize only),
+  `view-state-limit`. None advances `viewGen`.
+- Caps: `MAX_SESSION_SIZES` = 4,096 per axis per sheet, and a 16 MiB
+  process ledger at `SESSION_SIZE_ENTRY_BYTES` = 128 B per entry.
+- **§6.3's document-cache admission is deferred to 4c (F17)**, against
+  §6.3's "required": 4b's view state is at most 1 MiB per sheet, and 4c's
+  sort bands are what need admission. §6.3's two-non-identity-sheets cap is
+  applied to sort and filter state only (4c); a viewer may resize on any
+  number of tabs.
+- The `'sheet'` class is charged before the one-in-flight check, so an op
+  refused for busy still spends a slot of the 30.
+
+**P12a, client pacing.** One resize in flight per viewer; key-repeat
+steps fold into one pending target, the latest winning. A find is sent
+250 ms after the last keystroke. Announcements are P12a's strings; a
+rejection with no listed string says "{name} was not resized; try again."
+(or "was not fitted").
+
+**P13, lost replies.** On resume `sheet-find` and `sheet-fit` are
+re-issued; `sheet-copy`, `sheet-a11y` and `sheet-resize` reject
+`session-rotated`. A resize rejected for any reason except `closed` or an
+abort re-fetches `sheet-layout`; copy, a11y and fit re-fetch only on
+`stale-view`. Nothing is retried automatically.
+
+**P14.** A resize stops the sid's tile batches of that sheet; their late
+tiles carry the old `viewGen` and the client drops them.
+
+**P15, the notices.** All appear only on a 4b stream; 4a streams are
+unchanged.
+- "Some rows are hidden by the author and can't be shown." shows while the
+  active sheet's layout has `authorHidden`, once per sheet.
+- "Hidden cells can't be shown in this viewing mode." is announced on each
+  hidden Go To target or hidden find hit, replacing the local
+  "Read-only inspection" text; no inspection opens.
+- "This match is in a row hidden by the filter." for a `hidden: 'filter'`
+  hit.
+- 'text unavailable in this viewing mode' once when copy **or** a11y is off.
+  This widens S3 item 10's "both" for 4b streams (S3 §4.1 is amended).
+
+**P16, the ink oracle.** Built as planned (`server/test/sheet-ink-oracle.test.ts`).
+On the fixtures it is real evidence: it found the exact withheld sets, and
+mutations of the text view and of the measured spill fail it. **On the
+corpus it is not evidence:** no corpus XLSX has a drawing over text, so it
+checks 0 cells and passes even with an identity text view. A
+drawing-bearing corpus file is needed.
+
+**P17, no freeze command.** The viewer has authored frozen panes only, so
+"the client freeze choice" was checked as selection and navigation parity
+under authored panes. **No drag-select exists**, locally or on streams:
+the grid selects on click, so the range gesture is shift+click (the spec
+is named for it).
+
+**Spec gaps and deviations (one list).**
+- §6.7 find: no `wholeCell` (refused when `true`), no `cursor` (F15).
+- §6.7 find: `hidden: 'filter'` cannot occur before 4c.
+- §6.7 a11y: `rect` became `rows`/`cols` in source rows, so 4c's sorted
+  windows fit.
+- §6.7 a11y `off`: refused `text-unavailable`, never sent by the client,
+  rather than "positions only".
+- §6.7 fit: the request carries the pane (and `regions`), because local fit
+  parity is defined only with them.
+- §6.3: admission deferred to 4c, and the two-sheet cap applies to sort and
+  filter only (F17).
+- §6.10: `sheet-view@1` selects tiles too (F19); `streamSheets: 'tiles'`
+  sends `sheet-tiles@1` only (F1).
+- §6.11 against S3 item 10: the text-unavailable notice shows when copy or
+  a11y is off.
+- §9 4b: "the client freeze choice" is a gap (no freeze command, P17);
+  drag-select is not a local feature.
+- Review Focus 4: whole-sheet select-all is refused, as locally.
+
+**Left to 4c** (of §10): item 1's sort and filter key use of the blanking;
+item 3's sort and filter half (keys use base coverage); the rest of item
+4's `'sheet'` class (`sheet-sort`, `sheet-filter`, `filter-values`,
+`range-detect`); item 6's sort-order limit; item 11 (typed conditions);
+§6.3's admission; `sheet_ops` audit rows.
