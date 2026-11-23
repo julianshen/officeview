@@ -617,6 +617,12 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       ...(stage5 ? { evaluation: documentEvaluation, now: anchorNow, documentSheets: doc.sheets } : {}),
     })
   } catch (error) {
+    // The resident text scope's whole-request admission (its O(rules x cells) estimate against the scratch bound, pinned
+    // by the Stage 2-4 pressure audits) refuses atomically and the viewer shows base formatting: withheld fail-closed, as
+    // the service batches above. A rule-heavy viewport (stage4-icon-glyph-key: 76 rules over A1:K42) lands here.
+    if ((error as { code?: string }).code === 'resource-limit') {
+      return { id: c.id, mode: 'interactive', outcome: 'recipe-pending', reason: `Interactive text scope refused at its admitted batch (${(error as Error).message}); withheld fail-closed, pixel diff awaits Excel viewport refs.`, oracleRef, workbookHash, oracleHash, reads: 1 }
+    }
     return fail(error instanceof Error ? error.message : String(error))
   }
   if (scope) {
