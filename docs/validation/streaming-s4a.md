@@ -4,9 +4,10 @@ Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4a; "As bu
 
 ## Status
 
-Every 4a gate is green except two that were already red before 4a:
+Every 4a gate is green except three that were already red before 4a:
 - the eager size gate (index closure), red at the base 2de7ae4a from the xlsx-cf work; 4a adds 45 B and no module to it (§Size gate);
-- one vitest case, `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed", which fails the same way at main 53668e81 (Node 26.13.1 exposes no `localStorage` without `--localstorage-file`); 4a touches neither the test nor `src/slideshow`.
+- one vitest case, `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed", which fails the same way at main 53668e81 (Node 26.13.1 exposes no `localStorage` without `--localstorage-file`); 4a touches neither the test nor `src/slideshow`;
+- two manual-device collector tests of the unmodified `tests/browser/interactive-viewer.spec.ts`, which fail at the default ports because the stream harness holds 4181–4183, and fail the same way at 53668e81; all 25 pass with `OV_STREAM_PORT=4281` (§Known flakes).
 
 T8 tile p95 is GREEN: 83.6 ms at dpr 1 and 56.0 ms at dpr 2 against 120 ms. The compatibility matrix passes all four legs.
 
@@ -48,7 +49,7 @@ Runs 2 and 3 agreed within 1 %; run 1, contended (load rising into the teens), r
 
 ### Task 17 (T8, R3, over the socket)
 
-`bun scripts/stream-s4/tile-p95.ts`: `grid500x100`, `visibleMark: 'fixed'`, forensic on; one tile per request, serial; zoomStep 5 (zoom 1) at dpr 1 (13 × 20 = 260 tiles) and dpr 2 (25 × 40 = 1,000); warm document cache, cold render cache (fresh server and `Pool({})`); `'message'` and `'tile'` rates raised. t0/t1 from `StreamServerOptions.onTileTiming`. No suite of this task ran alongside. The 1-minute load of about 6 came from other processes on the machine (Preview, WindowServer, PerfPowerServices and another session's vitest worker, about one core each).
+`bun scripts/stream-s4/tile-p95.ts`: `grid500x100`, `visibleMark: 'fixed'`, forensic on; one tile per request, serial; zoomStep 5 (zoom 1) at dpr 1 (13 × 20 = 260 tiles) and dpr 2 (25 × 40 = 1,000); warm document cache, cold render cache (fresh server and `Pool({})`); `'message'` and `'tile'` rates raised. t0/t1 from `StreamServerOptions.onTileTiming`. No suite of this task ran alongside, but the machine was not quiet: the 1-minute load of about 6 came from other processes (Preview, WindowServer, PerfPowerServices and another session's repeatedly restarting vitest worker, about one core each), and no idle window came during the task.
 
 | Run | 1-min load (start / after serial / end) | dpr 1 p50 / **p95** / max (ms) | dpr 2 p50 / **p95** / max (ms) | all 1,260 p95 | recycles | client send→`tiles-done` p95, dpr 1 / dpr 2 |
 |---|---|---|---|---|---|---|
