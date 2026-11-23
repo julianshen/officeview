@@ -3,6 +3,9 @@
  *
  *   bun scripts/stream-s4/compat-matrix.ts --base 53668e81 [--keep] [--tmp <dir>]
  *
+ * Every temp file (the base worktree, fixtures, the server launcher) lives in one run directory: a fresh `mkdtemp`
+ * under `os.tmpdir()`, or a new subdirectory of `--tmp <dir>`.
+ *
  * `--base` is the pre-4a build (main before Stage 4a). The script adds a detached worktree of it, links this
  * checkout's `node_modules` into it, starts the BASE server and the CURRENT server from source (each a separate
  * `bun` process on an OS-picked free port, same docs dir, same origin), runs the legs and prints one PASS/FAIL
@@ -28,8 +31,9 @@
  * `copy: 'full'`. It imports each tree's own `server/src/*`, so the base server runs the base code.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { buildXlsx } from '../../src/testdata/ooxml-builders'
 import { Reassembler } from '../../src/stream/frame'
 import { StreamSession as CurrentSession, type TextMessage } from '../../src/stream/remote/session'
@@ -38,8 +42,6 @@ import { grid500x100 } from '../../server/test/sheet-fixtures'
 const ROOT = resolve(import.meta.dir, '../..')
 const ORIGIN = 'http://localhost:5173'
 const TILES = 'sheet-tiles@1'
-/** The session-scoped scratch directory the controller ruled for every temp file (override: `--tmp`). */
-const DEFAULT_TMP = '/private/tmp/claude-501/-Users-julianshen-prj-officeview/dc98f3a9-cd56-475c-b13a-365a9ed0478e/scratchpad'
 const STAGE3_KEYS = ['can', 'caps', 'docRef', 'kind', 'layoutFingerprint', 'limits', 'name', 'notices', 'policy', 'recorder', 'session', 'units', 'v']
 const LEG_MS = 120_000
 
@@ -47,7 +49,8 @@ const argv = process.argv.slice(2)
 const argOf = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
 const BASE = argOf('--base')
 const KEEP = argv.includes('--keep')
-const TMP = resolve(argOf('--tmp') ?? DEFAULT_TMP)
+/** `--tmp <dir>`: the parent of this run's directory (must exist or be creatable). Default: a fresh `mkdtemp` under `os.tmpdir()`. */
+const TMP = argOf('--tmp')
 if (!BASE || BASE.startsWith('--')) { console.error('usage: bun scripts/stream-s4/compat-matrix.ts --base <rev> [--keep] [--tmp <dir>]'); process.exit(2) }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -267,7 +270,7 @@ async function legD(cur: Server): Promise<string> {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-const runDir = resolve(TMP, `compat-matrix-${process.pid}-${Date.now()}`)
+const runDir = TMP ? resolve(TMP, `compat-matrix-${process.pid}-${Date.now()}`) : mkdtempSync(join(tmpdir(), 'compat-matrix-'))
 const baseTree = resolve(runDir, 'base')
 let worktreeAdded = false
 let cur: Server | undefined, base: Server | undefined
