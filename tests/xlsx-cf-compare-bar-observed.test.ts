@@ -70,7 +70,7 @@ describe('cf-compare: the two Stage 3 cases that failed on main now pass on the 
         const probe = id === 'stage3-bar-participation' ? 'B4' : 'F2'
         expect(c.expected.cells.find(e => e.ref === probe)).toMatchObject({ matched: true, barApplied: false })
         const res = await compareCfCase(c, mode, { rootDir: root })
-        expect(res.outcome, res.detail).toBe('pass')
+        expect(res.outcome, res.reason).toBe('pass')
       }, 300_000)
     }
   }
