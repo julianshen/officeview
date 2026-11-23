@@ -10,6 +10,7 @@
  */
 import JSZip from 'jszip'
 import { buildXlsx, type XlsxCellSpec, type XlsxSheetSpec } from '../../src/testdata/ooxml-builders'
+import { encodePng } from '../src/mark/png'
 
 /** The fixed entry date of every fixture zip (JSZip stores DOS time; any constant works). */
 export const FIXTURE_ZIP_DATE = new Date(Date.UTC(2026, 0, 1, 0, 0, 0))
@@ -410,4 +411,76 @@ export async function manyMerges(n: number, o: { perRow?: number } = {}): Promis
     return `${colName(c)}${r}:${colName(c + 1)}${r}`
   })
   return sheetWorkbook([], [], undefined, { merges })
+}
+
+/** The strings `sentinels()` hides from the wire (Task 15): none may occur in any decoded server→client text. */
+export const SENTINELS = Object.freeze({
+  /** A1's formula is `=LEN("SENTINEL_F")` (saved value 10). */
+  formula: 'SENTINEL_F', formulaText: '=LEN', formulaSaved: 10,
+  /** B1 holds this number under number format `0` (it paints `1235`). */
+  number: '1234.5678',
+  /** A workbook-scope defined name (`S!$B$1`). */
+  definedName: 'SENTINEL_N',
+  /** The comment on C1. */
+  comment: 'SENTINEL_C',
+  /** The second sheet is hidden; its name and its A1. */
+  hiddenSheet: 'SENTINEL_HS', hiddenCell: 'SENTINEL_HC',
+  /** A visible text cell (A2): a cell value never reaches the client either. */
+  visibleText: 'SENTINEL_VIS',
+  /** The hidden picture's `cNvPr name`. */
+  drawingName: 'SENTINEL_D',
+})
+
+/** The hidden picture of `sentinels()`: a 16 × 16 RGBA PNG of deterministic noise (xorshift32), 1,024 pixel bytes that
+ * deflate cannot shrink, so its bytes (and its IDAT) are unique on any wire. */
+export function sentinelPng(): Uint8Array {
+  const rgba = new Uint8Array(16 * 16 * 4)
+  let x = 0x9e3779b9
+  for (let i = 0; i < rgba.length; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; rgba[i] = x & 0xff }
+  return encodePng(16, 16, rgba)
+}
+
+/**
+ * Task 15's wire-audit fixture: visible sheet `S` and hidden sheet `SENTINEL_HS` (`state="hidden"`, A1 =
+ * `SENTINEL_HC`). On `S`: A1 = `=LEN("SENTINEL_F")` with saved value 10; B1 = 1234.5678 under number format `0`
+ * (style 3, numFmtId 1); A2 = `SENTINEL_VIS`; a comment on C1 (`SENTINEL_C`, a comments part the visible-only
+ * projection drops); a workbook defined name `SENTINEL_N` → `S!$B$1`; and a hidden picture (`cNvPr hidden="1"`,
+ * named `SENTINEL_D`) over E2:H8 whose image is `sentinelPng()`; I10 = 1 extends the used range past the picture.
+ * No sentinel sits in a covered cell.
+ */
+export async function sentinels(): Promise<Uint8Array> {
+  const S = SENTINELS
+  const rows: XlsxSheetSpec['rows'] = [
+    { r: 1, cells: [{ ref: 'A1', formula: `LEN("${S.formula}")`, v: S.formulaSaved }, { ref: 'B1', v: Number(S.number), style: 3 }] },
+    { r: 2, cells: [{ ref: 'A2', t: 's', v: 0 }] },
+    // Extends the used range past the picture's box (E2:H8, x 256..512, y 20..160 CSS px), so the tiles of the used
+    // extent cover it at every pair.
+    { r: 10, cells: [{ ref: 'I10', v: 1 }] },
+  ]
+  const hidden: XlsxSheetSpec['rows'] = [{ r: 1, cells: [{ ref: 'A1', t: 's', v: 1 }] }]
+  return patchXlsx(await buildXlsx([{ name: 'S', rows }, { name: S.hiddenSheet, rows: hidden }], [S.visibleText, S.hiddenCell]), async (zip) => {
+    const wb = await textOf(zip, 'xl/workbook.xml')
+    const marked = wb.replace(`<sheet name="${S.hiddenSheet}" sheetId="2"`, `<sheet name="${S.hiddenSheet}" sheetId="2" state="hidden"`)
+      .replace('</sheets>', `</sheets><definedNames><definedName name="${S.definedName}">S!$B$1</definedName></definedNames>`)
+    if (marked === wb || !marked.includes('state="hidden"') || !marked.includes('definedNames')) throw new Error('sheet-fixtures: workbook not recognised')
+    zip.file('xl/workbook.xml', marked)
+    await patchStylesXml(zip, (xml) => xml
+      .replace('<cellXfs count="3">', '<cellXfs count="4">')
+      .replace('</cellXfs>', '<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'))
+    // The hidden picture: its drawing, the drawing's image relationship and the media part.
+    const pic = `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="${S.drawingName}" hidden="1"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="${256 * EMU_PER_PX}" y="${20 * EMU_PER_PX}"/><a:ext cx="${256 * EMU_PER_PX}" cy="${140 * EMU_PER_PX}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`
+    const part = await addDrawing(zip, 0, twoCellAnchorXml({ col: 4, row: 1 }, { col: 8, row: 8 }, pic))
+    const name = part.slice(part.lastIndexOf('/') + 1)
+    zip.file(`xl/drawings/_rels/${name}.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>`)
+    zip.file('xl/media/image1.png', sentinelPng())
+    // The comment on C1.
+    zip.file('xl/comments1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${SPREADSHEET_NS}"><authors><author>a</author></authors><commentList><comment ref="C1" authorId="0"><text><t>${S.comment}</t></text></comment></commentList></comments>`)
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const rels = await textOf(zip, relsPath)
+    zip.file(relsPath, rels.replace('</Relationships>', '<Relationship Id="rIdC1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/></Relationships>'))
+    const ct = await textOf(zip, '[Content_Types].xml')
+    zip.file('[Content_Types].xml', ct
+      .replace('<Default Extension="xml"', '<Default Extension="png" ContentType="image/png"/><Default Extension="xml"')
+      .replace('</Types>', '<Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/></Types>'))
+  })
 }
