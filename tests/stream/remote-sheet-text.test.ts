@@ -89,6 +89,21 @@ describe('RemoteSheets.view (S4 §6.7, P1)', () => {
     b.doc.close()
   })
 
+  it('a sheet op on a session without sheetView rejects unsupported-op without sending', async () => {
+    const { s, sock } = await opened(baseManifest())
+    const e = await errorOf(s.text({ type: 'sheet-fit', sheetId: '0', viewGen: 0, axis: 'col', index: 0, pane: PANE }, () => {}))
+    expect(e.code).toBe('unsupported-op')
+    expect(sock.of('sheet-fit')).toHaveLength(0)
+    s.close()
+  })
+
+  it('a resume that changes sheetView ends the session layout-changed', async () => {
+    const { s, socks, manifest } = await opened()
+    const { sheetView: _drop, ...without } = manifest
+    await resumeOn(socks, without as Manifest)
+    expect((await s.ended)?.code).toBe('layout-changed')
+  })
+
   it('the ops travel as their wire requests and settle on their answers', async () => {
     const { doc, sock } = await opened()
     const find = view(doc).find({ query: 'x', matchCase: true })

@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { StreamWorkbook } from '../src/components/xlsx/streamWorkbook'
 import { streamFindSession, wireSelection } from '../src/components/xlsx/streamText'
+import { FindError } from '../src/xlsx/view/find'
 import type { RemoteSheets } from '../src/stream/remote/remote-doc'
 import { StreamSessionError } from '../src/stream/remote/errors'
 import type { SheetFindHit, StreamSheetLayout } from '../src/stream/sheet-wire'
@@ -134,7 +135,7 @@ describe('StreamWorkbook text methods (P7, P9–P13)', () => {
   it('stale-view on copy, a11y or fit re-fetches sheet-layout and rejects stale-view', async () => {
     let gen = 1
     const stale = async () => { throw new StreamSessionError('stale-view') }
-    const { sheets, layout } = fakeSheets({ layout: (id) => wire(id, { viewGen: gen }), view: { copy: vi.fn(stale), a11y: vi.fn(stale), fit: vi.fn(stale) } })
+    const { sheets, layout } = fakeSheets({ layout: (id) => wire(id, { viewGen: gen }), view: { copy: vi.fn(stale), a11y: vi.fn(stale), fit: vi.fn(stale), resize: vi.fn(stale) } })
     const wb = new StreamWorkbook(sheets, 'doc')
     await wb.activate('0')
     const one = cellSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 0 }] }])
@@ -142,12 +143,23 @@ describe('StreamWorkbook text methods (P7, P9–P13)', () => {
       () => wb.copy('0', one),
       () => wb.a11y('0', 1, [[0, 0]], [0, 0]),
       () => wb.fit({ sheetId: '0', axis: 'row', index: 0, pane: { x: 0, y: 0, width: 1, height: 1 } }),
+      () => wb.resize({ sheetId: '0', axis: 'row', index: 0, size: 30 }),
     ] as const).entries()) {
       gen = 10 + i
       expect((await errorOf(call())).code).toBe('stale-view')
       expect(layout).toHaveBeenCalledTimes(2 + i)
       expect(wb.identity('0').viewGen).toBe(10 + i)
     }
+  })
+
+  it('a change at the held viewGen is a no-op (the server answers a no-op resize with the current viewGen)', async () => {
+    const { sheets } = fakeSheets({ layout: (id) => wire(id, { viewGen: 4 }) })
+    const wb = new StreamWorkbook(sheets, 'doc')
+    await wb.activate('0')
+    const notified = vi.fn()
+    wb.subscribe(notified)
+    wb.applyView({ sheetId: '0', viewGen: 4, change: { axis: 'col', index: 1, size: 8 } })
+    expect([wb.sizes('0').cols.size, wb.geometry('0').cols.size(1), notified.mock.calls.length]).toEqual([0, 64, 0])
   })
 
   it('a layout older than the held view is not adopted', async () => {
@@ -228,6 +240,26 @@ describe('streamFindSession (P6, F15)', () => {
     expect(find.mock.calls[0]![0]).toEqual({ query: 'q', matchCase: true })
     expect([page.complete, page.truncated, page.totalKnown]).toEqual([true, true, undefined])
     expect(page.hits[0]).toMatchObject({ sheetId: '1', hidden: 'filter' })
+  })
+
+  it('closing or aborting while the find is pending rejects FindError closed / cancelled', async () => {
+    const pending = (_q: unknown, s?: AbortSignal) => new Promise<never>((_, reject) => s!.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))))
+    const a = streamFindSession({ find: pending } as never, OWNER, ['0'], { text: 'q', caseSensitive: false })
+    const pa = a.nextPage().then(() => undefined, (e: unknown) => e as FindError)
+    a.close()
+    expect((await pa)).toBeInstanceOf(FindError)
+    expect((await pa)!.code).toBe('closed')
+    const outer = new AbortController()
+    const b = streamFindSession({ find: pending } as never, OWNER, ['0'], { text: 'q', caseSensitive: false }, outer.signal)
+    const pb = b.nextPage().then(() => undefined, (e: unknown) => e as FindError)
+    outer.abort()
+    expect((await pb)!.code).toBe('cancelled')
+    // Superseded by a newer find (the session rejects `closed`): ended quietly as well.
+    const c = streamFindSession({ find: async () => { throw new StreamSessionError('closed') } } as never, OWNER, ['0'], { text: 'q', caseSensitive: false })
+    expect((await c.nextPage().then(() => undefined, (e: unknown) => e as FindError))!.code).toBe('closed')
+    // Any other refusal is shown, as it came.
+    const d = streamFindSession({ find: async () => { throw new StreamSessionError('rate-limited') } } as never, OWNER, ['0'], { text: 'q', caseSensitive: false })
+    expect((await d.nextPage().then(() => undefined, (e: unknown) => e as StreamSessionError))!.code).toBe('rate-limited')
   })
 
   it('StreamWorkbook.findSession asks the view; closing aborts the find', async () => {

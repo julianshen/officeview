@@ -212,10 +212,11 @@ export class StreamWorkbook implements ViewerSheetSource {
     return state.sizes ??= Object.freeze({ rows: new Map(sessionRows ?? []), cols: new Map(sessionCols ?? []) })
   }
   /** Applies the server's `sheet-view` answer: the sheet's viewGen and session sizes move, and listeners are notified.
-   * A change older than the held view is ignored (idempotent for the one already applied). */
+   * A change at or below the held viewGen is ignored: that view already holds it (the server answers a no-op resize
+   * with the current viewGen), so applying a change again is idempotent. */
   applyView(v: SheetViewChange): void {
     const state = this.state(v.sheetId)
-    if (v.viewGen < state.wire.viewGen) return
+    if (v.viewGen <= state.wire.viewGen) return
     const c = v.change
     let { sessionRows, sessionCols } = state.wire
     if ('reset' in c) { sessionRows = undefined; sessionCols = undefined }

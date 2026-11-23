@@ -86,9 +86,17 @@ export function streamFindSession(view: Pick<RemoteSheetOps, 'find'>, owner: Wor
   })
   return {
     async nextPage() {
-      if (closed || abort.signal.aborted) throw new FindError(closed ? 'closed' : 'cancelled', 'The find session is closed')
-      const a = await load()
-      if (closed) throw new FindError('closed', 'The find session is closed')
+      if (closed) throw new FindError('closed', 'Find session closed')
+      if (abort.signal.aborted) throw new FindError('cancelled', 'Find cancelled')
+      let a: Awaited<ReturnType<typeof load>>
+      try { a = await load() } catch (error) {
+        // As the local session: closed, aborted or superseded (a newer find, `closed`) end the run quietly; any other
+        // refusal (rate-limited, policy-refused, …) is an outcome the viewer shows.
+        if (closed || (error as { code?: unknown })?.code === 'closed') throw new FindError('closed', 'Find session closed')
+        if (abort.signal.aborted) throw new FindError('cancelled', 'Find cancelled')
+        throw error
+      }
+      if (closed) throw new FindError('closed', 'Find session closed')
       const from = page * FIND_PAGE_HITS, hits = a.hits.slice(from, from + FIND_PAGE_HITS)
       page++
       const complete = from + FIND_PAGE_HITS >= a.hits.length
