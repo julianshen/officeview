@@ -16,12 +16,13 @@ import { cfClockOptions } from '../../src/components/xlsx/sheetAssets'
 import { cfDocumentEvaluationOf } from '../../src/xlsx/cf/formula'
 import { prepareCfPaint } from '../../src/xlsx/cf/render'
 import { buildSheetGeometry } from '../../src/xlsx/view/viewport'
+import { installCanvasBackend } from '../../src/core/canvas-backend'
 import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../src/xlsx/types'
 import { augmentedFixtures } from './fixtures'
 import { rejection } from './fixtures/rejection'
 import {
   cfToday, cfTodayFormula, crossSheetCoveredRef, sparklineUnderShape, CF_TODAY_SERIALS, DATA_BAR_VALUES, rotatedBox, savedFormula, spillUnderShape, SPILL_TEXT,
-  unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor,
+  unfilledShapeOverDataBar, unfilledShapeOverText, unresolvedAnchor, labelBesideShape, LONG_LABEL,
 } from './sheet-fixtures'
 
 const hosts: DocumentHost[] = []
@@ -141,6 +142,33 @@ describe('the servable snapshot (S4 §6.2)', () => {
     expect(cellAt(right.sheet, 2, 0)!.value).toBe(SPILL_TEXT)
     // The box itself sits in C3 either way.
     expect(known(right.coverage).covered(2, 2)).toBe(true)
+  }, 60_000)
+
+  test('measured spill: a short label beside a shape paints (fix round 1)', async () => {
+    // "Q1" fits A2: the empty run B2:E2 reaches the box in D2, but the text never does.
+    const { snap } = await snapshotOf(await labelBesideShape('Q1'))
+    expect([known(snap.coverage).covered(1, 0), known(snap.coverage).count]).toEqual([false, 0])
+    expect(cellAt(snap.sheet, 1, 0)!.value).toBe('Q1')
+    expect(known(snap.coverage).covered(1, 3)).toBe(true)
+  }, 60_000)
+
+  test('measured spill: long text that reaches the shape is still blanked', async () => {
+    const { snap } = await snapshotOf(await labelBesideShape(LONG_LABEL))
+    expect([known(snap.coverage).covered(1, 0), known(snap.coverage).count]).toEqual([true, 1])
+    expect(cellAt(snap.sheet, 1, 0)!.value).toBeNull()
+  }, 60_000)
+
+  test('measured spill: unmeasurable keeps the whole-run box', async () => {
+    // Rotated text is never measured.
+    const rotated = (await snapshotOf(await labelBesideShape('Q1', { rotated: true }))).snap
+    expect(known(rotated.coverage).covered(1, 0)).toBe(true)
+    expect(cellAt(rotated.sheet, 1, 0)!.value).toBeNull()
+    // No canvas backend: nothing can be measured.
+    const sheet = (await savedParseFor(await labelBesideShape('Q1'))).sheets[0]!
+    const geometry = buildSheetGeometry(sheet)
+    expect(known(baseCoverage(sheet, geometry)).covered(1, 0)).toBe(false)
+    const previous = installCanvasBackend(undefined)
+    try { expect(known(baseCoverage(sheet, geometry)).covered(1, 0)).toBe(true) } finally { installCanvasBackend(previous) }
   }, 60_000)
 
   test('unknown coverage paints as authored', async () => {

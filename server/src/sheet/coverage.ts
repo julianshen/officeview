@@ -3,6 +3,13 @@
  * no session filter) lie under a drawing. A cell is covered iff its grid rect, or its R8 spill rect, meets any
  * drawing's transformed, effect-padded painted extent. Fill and transparency are ignored (owner, §11.1): the whole box
  * covers. Anything the analysis cannot bound fails closed to `unknown`, never to "absent" (F16).
+ *
+ * Task 15 fix round 1 (ruling "measure the spill"): a spill rect reaches only as far as the cell's text measurably
+ * overflows its cell, laid out by the tile renderer's own cell layout (`createCellLayoutHost`, the same fonts and
+ * measurement on the installed canvas backend), on the sides `spillSides` allows, plus `SPILL_SLACK`, capped by the
+ * empty-run room. Text that fits never spills. Where the paint cannot be measured here (no canvas backend, rotated or
+ * stacked text, a layout that throws, or a sheet whose conditional formats or region styles can restyle or inset the
+ * text at paint time), the rect keeps the whole empty run (fail closed).
  */
 import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../../../src/xlsx/types'
 import type { DrawingContentShape } from '../../../src/drawing/content'
@@ -12,6 +19,9 @@ import { cellSourceRow, drawingExtent } from '../../../src/xlsx/view/sheetCells'
 import { cellTextOverflow, type SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import { alignmentOverflows } from '../../../src/xlsx/view/textOverflow'
 import { isValidCoordinate, MAX_COLS } from '../../../src/xlsx/view/coordinates'
+import { installedCanvasBackend } from '../../../src/core/canvas-backend'
+import { createCellLayoutHost } from '../../../src/xlsx/view/renderViewport'
+import { sheetHasRegionStyles } from '../../../src/xlsx/pivots/stub'
 
 export type BaseCoverage =
   | { kind: 'known'; covered(row: number, col: number): boolean; count: number }
@@ -132,6 +142,43 @@ function spillSides(cell: XlsxCell, style: XlsxCellStyle | undefined): { left: b
   return { left: true, right: true }
 }
 
+/**
+ * Slack added to a measured overflow, in CSS px: `AA_PX` for antialiasing past the advance box, plus a quarter em of
+ * the cell's font for ink past the advance (italic overhang, side bearings) and for hinting at another zoom or dpr,
+ * where the scaled paint's advances need not equal the logical measurement. A quarter em (≈3.7 px at 11 pt) is well
+ * above either (Calibri's widest overhang is under 0.1 em); it only widens a box that already overflows.
+ */
+export function spillSlack(fontSizePt: number | undefined): number {
+  return AA_PX + 0.25 * (fontSizePt ?? 10) * 96 / 72
+}
+/** How far a cell's painted text reaches past its own box on each side (CSS px), or undefined when it cannot be known. */
+export type SpillMeasure = (cell: XlsxCell, width: number, height: number, room: { left: number; right: number }) => { left: number; right: number } | undefined
+
+/** The tile renderer's layout of one cell, on the installed canvas backend; undefined when nothing can be measured. */
+function rendererSpillMeasure(sheet: XlsxSheet): SpillMeasure | undefined {
+  if (sheetHasRegionStyles(sheet)) return undefined
+  const cf = sheet.conditionalFormatting
+  if (cf && (cf.rules.length > 0 || cf.unresolvedSheet)) return undefined
+  const backend = installedCanvasBackend()
+  if (!backend) return undefined
+  let host: ReturnType<typeof createCellLayoutHost>
+  try {
+    const ctx = backend.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    // Format diagnostics land on a copy, never on the projected sheet.
+    host = createCellLayoutHost(ctx, { ...sheet })
+  } catch { return undefined }
+  return (cell, width, height, room) => {
+    let body: ReturnType<typeof host.layoutBody>
+    try { body = host.layoutBody(cell, width, height, room) } catch { return undefined }
+    const t = body.text
+    if (!t) return { left: 0, right: 0 }
+    if (t.kind === 'plain') return { left: Math.max(0, -t.tx), right: Math.max(0, t.tx + t.width - width) }
+    if (t.rotation || t.stacked) return undefined
+    // A laid-out line's clip is the band it paints in: its own box, widened by the room the measured text needs.
+    return { left: Math.max(0, -t.clip.x), right: Math.max(0, t.clip.x + t.clip.width - width) }
+  }
+}
+
 export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): BaseCoverage {
   const drawings = sheet.drawings ?? []
   if ((sheet.drawingAnchors?.unresolved ?? 0) > 0 || (drawings.length > 0 && !sheet.drawingAnchors)) return { kind: 'unknown', reason: 'unresolved-anchors' }
@@ -147,6 +194,7 @@ export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): B
   const anyMeets = (b: Box) => extents.some((e) => meets(b, e))
   const covered = new Set<number>()
   let count = 0
+  let measure: SpillMeasure | undefined | null = null
   if (extents.length > 0) {
     const union = extents.reduce((u, e) => ({ left: Math.min(u.left, e.left), top: Math.min(u.top, e.top), right: Math.max(u.right, e.right), bottom: Math.max(u.bottom, e.bottom) }))
     for (const row of sheet.rows) {
@@ -162,7 +210,17 @@ export function baseCoverage(sheet: XlsxSheet, geometry: SheetGeometryResult): B
           const sides = spillSides(cell, cell.style)
           if (sides.left || sides.right) {
             const room = cellTextOverflow(geometry, { row: r, col: c })
-            if (room) box = { ...box, left: box.left - (sides.left ? room.left : 0), right: box.right + (sides.right ? room.right : 0) }
+            if (room && (room.left > 0 || room.right > 0)) {
+              if (measure === null) measure = rendererSpillMeasure(sheet)
+              const rotated = cell.style?.textRotation !== undefined
+              const used = rotated || !measure ? undefined : measure(cell, box.right - box.left, box.bottom - box.top, room)
+              const reach = (side: 'left' | 'right') => {
+                if (!sides[side]) return 0
+                if (!used) return room[side]
+                return used[side] > 0 ? Math.min(room[side], used[side] + spillSlack(cell.style?.fontSizePt)) : 0
+              }
+              box = { ...box, left: box.left - reach('left'), right: box.right + reach('right') }
+            }
           }
         }
         if (!meets(box, union) || !anyMeets(box)) continue

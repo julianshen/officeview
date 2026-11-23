@@ -484,3 +484,22 @@ export async function sentinels(): Promise<Uint8Array> {
       .replace('</Types>', '<Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/></Types>'))
   })
 }
+
+/** The long label of `labelBesideShape`: at Calibri 11 it runs well past D2's left edge (192 CSS px). */
+export const LONG_LABEL = 'LONG-A2 label text that runs on across the empty cells into the shape in D2'
+/**
+ * Task 15 fix round 1 (measured spill): A2 holds `text` (general alignment; `rotated` adds style 3, `textRotation`
+ * 45), B2:E2 are empty, and a filled box sits strictly inside D2 (x 192..256, y 20..40 → box x 200..248, y 24..36).
+ * A short label fits A2 and never reaches the box; `LONG_LABEL` does.
+ */
+export async function labelBesideShape(text: string, o: { rotated?: boolean } = {}): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [{ r: 2, cells: [{ ...textCell(st, 'A2', text), ...(o.rotated ? { style: 3 } : {}) }] }]
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    if (o.rotated) await patchStylesXml(zip, (xml) => xml
+      .replace('<cellXfs count="3">', '<cellXfs count="4">')
+      .replace('</cellXfs>', '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment textRotation="45"/></xf></cellXfs>'))
+    await addDrawing(zip, 0, twoCellAnchorXml({ col: 3, row: 1, colOffPx: 8, rowOffPx: 4 }, { col: 3, row: 1, colOffPx: 56, rowOffPx: 16 },
+      rectShapeXml({ id: 2, name: 'OverD2', offPx: [200, 24], extPx: [48, 12], fill: 'FF8800' })))
+  })
+}
