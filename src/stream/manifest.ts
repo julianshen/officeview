@@ -28,6 +28,9 @@ export interface Manifest {
   sheets?: ManifestSheet[]
   /** Tiles mode: the fixed tile grid (S4 §6). */
   tiles?: ManifestTiles
+  /** Stage 4b (P1): `1` iff the client sent `sheet-view@1` and the server serves the session in tiles mode with the 4b ops
+   * (find, copy, a11y text, fit, resize). Valid only with `sheetMode: 'tiles'`; absent for a 4a server or session. */
+  sheetView?: 1
 }
 export interface ManifestSheet { sheetId: string; name: string }
 export interface ManifestTiles { px: 512; zoomSteps: number[]; dprs: [1, 2]; palettes: ['light', 'dark']; maxBatch: 64 }
@@ -99,6 +102,7 @@ export function validateManifest(json: unknown): ManifestResult {
     })
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
     const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')
+    if (m.sheetView !== undefined && m.sheetMode === undefined) throw new Bad('sheetView')
     const kc = k.copy === null ? null : obj(k.copy, 'caps.copy')
     const canMedia = c.media === undefined ? undefined : bool(c.media, 'can.media')
     const media = mediaCaps(k.media)
@@ -137,7 +141,7 @@ export function validateManifest(json: unknown): ManifestResult {
       },
       limits: { maxUnitPx: int(l.maxUnitPx, 'limits.maxUnitPx', 1, 8192), maxAssetBytes: int(l.maxAssetBytes, 'limits.maxAssetBytes', 1, 1 << 30), wsFrameBytes: int(l.wsFrameBytes, 'limits.wsFrameBytes', 1024, 1 << 20), tilePx: int(l.tilePx, 'limits.tilePx', 16, 8192) },
       notices: arr(m.notices, 'notices', MAX_NOTICES).map((n, i) => str(n, `notices[${i}]`, 128)),
-      ...(m.sheetMode === undefined ? {} : { sheetMode: oneOf(m.sheetMode, 'sheetMode', ['tiles'] as const), sheets: sheetList(m.sheets), tiles: tilesBlock(m.tiles) }),
+      ...(m.sheetMode === undefined ? {} : { sheetMode: oneOf(m.sheetMode, 'sheetMode', ['tiles'] as const), sheets: sheetList(m.sheets), tiles: tilesBlock(m.tiles), ...(m.sheetView === undefined ? {} : { sheetView: int(m.sheetView, 'sheetView', 1, 1) as 1 }) }),
     }
     return { ok: true, manifest }
   } catch (e) {

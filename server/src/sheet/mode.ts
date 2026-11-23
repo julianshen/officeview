@@ -1,5 +1,5 @@
 /** Stage 4a: HELLO `features` (R12) and the per-sid sheet mode they select. */
-import { HELLO_FEATURE_CHARS, HELLO_FEATURES_MAX, SHEET_TILES_FEATURE } from '../../../src/stream/sheet-wire'
+import { HELLO_FEATURE_CHARS, HELLO_FEATURES_MAX, SHEET_TILES_FEATURE, SHEET_VIEW_FEATURE } from '../../../src/stream/sheet-wire'
 import type { SheetMode } from '../render'
 
 export type { SheetMode }
@@ -20,7 +20,7 @@ export function parseFeatures(v: unknown): readonly string[] | 'invalid' {
   return Object.freeze([...seen])
 }
 
-/** Tiles only for an XLSX document whose client sent `sheet-tiles@1`; everything else keeps units mode. */
+/** Tiles only for an XLSX document whose client sent `sheet-tiles@1` or `sheet-view@1` (4b, P1); everything else keeps units mode. */
 export function sheetModeOf(format: 'docx' | 'xlsx' | 'pptx', features: readonly string[]): SheetMode {
-  return format === 'xlsx' && features.includes(SHEET_TILES_FEATURE) ? 'tiles' : 'units'
+  return format === 'xlsx' && (features.includes(SHEET_TILES_FEATURE) || features.includes(SHEET_VIEW_FEATURE)) ? 'tiles' : 'units'
 }
