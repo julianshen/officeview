@@ -18,7 +18,7 @@ import type { AuthDecision } from '../src/hooks'
 import { DocumentHost } from '../src/render'
 import { Client, disposePool, start } from './harness'
 import {
-  a11yFocus, A11Y_FOCUS, cfHiddenFormat, cfNumFmt, mergeTail, offViewportCovered, rotatedBox, textGrid, TEXT_GRID,
+  a11yFocus, A11Y_FOCUS, bigText, BIG_TEXT, cfHiddenFormat, cfNumFmt, mergeTail, offViewportCovered, rotatedBox, textGrid, TEXT_GRID,
   unfilledShapeOverText, unresolvedAnchor,
 } from './sheet-fixtures'
 
@@ -293,6 +293,32 @@ describe('sheet-a11y (P10)', () => {
       expect((await a11y(c, { sheetId: '2', viewGen: 1, rows: [[0, 0]], cols: [0, 0] })).cells).toEqual([[0, 0, 'P-1-1']])
       // Another sheet keeps its own viewGen 0.
       expect((await a11y(c, { sheetId: '1', viewGen: 1, rows: [[0, 0]], cols: [0, 0] })).end).toMatchObject({ type: 'refused', code: 'stale-view' })
+    } finally { await stop() }
+  }, 30_000)
+
+  test('a large answer is chunked at 48 KiB', async () => {
+    const bytes = await bigText()
+    const rows: Array<[number, number]> = [[0, BIG_TEXT.rows - 1]]
+    const local = await localA11y(await projectedOf(bytes), 0, rows, [0, 0])
+    // Each label is bounded at 256 UTF-16 units (mostly 3-byte U+6587): about 150 KB in all, over three messages.
+    expect(local.length).toBe(BIG_TEXT.rows)
+    expect(local.every(([, , t]) => t.length === 256)).toBe(true)
+    const { c, stop } = await session({ doc: bytes, policy: { copy: 'full' } })
+    try {
+      const reqId = ++rq
+      c.send({ token: c.manifest!.session.token, reqId, type: 'sheet-a11y', sheetId: '0', viewGen: 0, rows, cols: [0, 0] })
+      const parts: Array<{ text: Record<string, any>; bytes: number }> = []
+      for (;;) {
+        const m = await c.next((m) => 'text' in m && m.text.reqId === reqId, 30_000) as { text: Record<string, any>; bytes: number }
+        expect(m.text.type).toBe('sheet-a11y-result')
+        parts.push(m)
+        if (m.text.last === true) break
+      }
+      expect(parts.length).toBeGreaterThan(1)
+      expect(parts.map((p) => p.text.seq)).toEqual(parts.map((_, i) => i))
+      expect(parts.map((p) => p.text.last)).toEqual(parts.map((_, i) => i === parts.length - 1))
+      for (const p of parts) expect(p.bytes).toBeLessThanOrEqual(48 * 1024)
+      expect(parts.flatMap((p) => p.text.cells)).toEqual(local)
     } finally { await stop() }
   }, 30_000)
 
