@@ -52,6 +52,7 @@ import { SHEET_ZOOM_STEPS, dprBucket, keyboardSheetZoom, nearestZoomStep, pinchS
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import type { StreamFindHit } from './streamText'
+import { createStreamA11yText, type StreamA11yMode, type StreamA11yText } from './streamA11y'
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { createFrameHostSource } from '../../xlsx/view/frameHosts'
@@ -216,8 +217,9 @@ export interface InteractiveSheetDocProps {
   /** @internal Stage 4a (RemoteSheetView): a tiles-mode stream's own chrome. `textUnavailable` is the parent §15
    * notice, shown once in its own status region; `print` starts the server's print (`RemoteOfficeDoc.print`) from
    * Ctrl/Cmd+P, and `toolbar` holds its controls. Read only when the source is a stream. Stage 4b: `copyFailure` words
-   * a refused stream copy (S3 item 10's strings, which need the manifest's copy caps). */
-  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode; copyFailure?: (error: unknown) => string }
+   * a refused stream copy (S3 item 10's strings, which need the manifest's copy caps); `a11y` is the manifest's
+   * `caps.a11y` mode, which a 4b stream's grid text follows (P10; absent: off). */
+  remoteChrome?: { textUnavailable: string; print: () => void; toolbar: ReactNode; copyFailure?: (error: unknown) => string; a11y?: StreamA11yMode }
   /** @internal Called after each committed selection change (the stream selection parity tests). */
   onSelection?: (sheetId: string, selection: GridSelection) => void
 }
@@ -394,6 +396,12 @@ const STREAM_RATE_LIMITED = 'Too many requests. Try again shortly.'
 const STREAM_FILTER_HIDDEN_HIT = 'This match is in a row hidden by the filter.'
 /** F15: a stream find answer stops at 5,000 hits. */
 const STREAM_FIND_TRUNCATED = 'Showing the first 5,000 matches.'
+/** P15 (S4 §6.11): a sheet whose layout says `authorHidden`, once in the notice region while it is shown. */
+const STREAM_AUTHOR_HIDDEN = "Some rows are hidden by the author and can't be shown."
+/** P15: a hidden Go To or find target on a 4b stream opens no inspection; the grid status says this instead. */
+const STREAM_HIDDEN_CELLS = "Hidden cells can't be shown in this viewing mode."
+/** GridSemantics renders no gridcells at or over this many cells (its coarse rule): no a11y text is asked then. */
+const STREAM_A11Y_COARSE_CELLS = { D: 20_000, M: 10_000 } as const
 const streamFailure = (error: unknown): string | undefined => (error as { code?: unknown } | null)?.code === 'rate-limited' ? STREAM_RATE_LIMITED : undefined
 /** Stage 4a (S4 §6.5): a stream's wheel zoom settles to the nearest step once no wheel event came for this long. */
 const STREAM_ZOOM_SETTLE_MS = 150
@@ -490,6 +498,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const shared: ViewerSheetSource | null = remote ?? stream
   // Stage 4b: a stream whose session serves find, copy, fit and resize (`sheet-view@1`); it selects as local mode does.
   const streamText = stream?.textOps ? stream : null
+  // Stage 4b (P10): the grid's text on a stream, by the manifest's a11y mode (one fetcher per mode; a mode change on
+  // resume replaces it, dropping its cache, and `off` shows positions only).
+  const streamA11yMode: StreamA11yMode = streamText ? props.remoteChrome?.a11y ?? 'off' : 'off'
+  const [streamA11y, setStreamA11y] = useState<StreamA11yText | null>(null)
+  useEffect(() => {
+    if (!streamText || streamA11yMode === 'off') { setStreamA11y(null); return }
+    const text = createStreamA11yText({ mode: streamA11yMode, a11y: (sheetId, viewGen, rows, cols) => streamText.a11y(sheetId, viewGen, rows, cols) })
+    const off = text.onChange(() => setTick(tick => tick + 1))
+    setStreamA11y(text)
+    return () => { off(); text.dispose() }
+  }, [streamText, streamA11yMode])
+  const streamCells = streamA11yMode !== 'off' ? streamA11y : null
   useEffect(() => {
     if (!remote) return
     return remote.subscribeSparklineEvictions(sheetId => {
@@ -1126,6 +1146,27 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     rerender()
   }
   const selection: GridSelection = entry ? session.get(activeSheetId).selection : emptyGridSelection()
+  // Stage 4b (P10, Open item 2): unit mode asks for the shown window once it rests, focused mode for the resting
+  // active cell. Keyed on what is shown, never on the re-render a reply triggers (the fetcher dedupes a same window).
+  const streamViewGen = streamText && activeSheetId ? streamText.wireLayout(activeSheetId).viewGen : 0
+  const streamLoaded = Boolean(streamText && activeSheetId && streamText.loadState(activeSheetId).completeness === 'complete')
+  const activeCell = selection.active
+  useEffect(() => {
+    if (!streamCells || !streamLoaded || !entry || !scroll || !activeSheetId) return
+    if (streamA11yMode === 'focused') { if (activeCell) streamCells.focus(activeSheetId, streamViewGen, activeCell); return }
+    const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+    const sourceRows: number[] = []
+    for (const [a, b] of spans.y) for (const run of entry.metrics.rows.visibleBetween(a, b).runs) for (let slot = run.start; slot <= run.end; slot++) sourceRows.push(entry.metrics.order.displayToSource(slot))
+    const cols: Array<[number, number]> = []
+    for (const [a, b] of spans.x) for (const run of entry.metrics.cols.visibleBetween(a, b).runs) cols.push([run.start, run.end])
+    const width = cols.reduce((n, [a, b]) => n + b - a + 1, 0)
+    if (!sourceRows.length || !width || sourceRows.length * width >= STREAM_A11Y_COARSE_CELLS[profile]) return
+    sourceRows.sort((a, b) => a - b)
+    const rows: Array<[number, number]> = []
+    for (const r of sourceRows) { const last = rows[rows.length - 1]; if (last && r <= last[1] + 1) last[1] = Math.max(last[1], r); else rows.push([r, r]) }
+    streamCells.showWindow(activeSheetId, streamViewGen, rows, cols)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamCells, streamLoaded, activeSheetId, streamViewGen, scroll, viewport, entry, streamA11yMode, activeCell?.row, activeCell?.col, profile])
 
   // No CF sheet: only the optional-field check. CF blank coverage follows the
   // actual projected panes; the existing asset-swap path invalidates their tiles.
@@ -2065,7 +2106,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     else setInspection(undefined)
     session.activate(hit.sheetId)
     setActiveSheetId(hit.sheetId)
-    setAnnouncement(result.announcement)
+    setAnnouncement(result.kind === 'hidden' && streamText ? STREAM_HIDDEN_CELLS : result.announcement)
     selectionCommitted(hit.sheetId)
     rerender()
   }
@@ -3159,7 +3200,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const result = navigateSelection(state.selection, entry.metrics, request, entry.view)
     setAnnouncement(result.announcement)
     // A stream has no cell to inspect (its store rejects every read).
-    if (result.kind === 'hidden' && stream) return
+    if (result.kind === 'hidden' && stream) { if (streamText) setAnnouncement(STREAM_HIDDEN_CELLS); return }
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
     let moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
@@ -3385,6 +3426,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     rerender()
   }
   const resized = Boolean(activeSheetId && (stream ? streamText && streamSized(activeSheetId) : !sizesOf(activeSheetId).empty))
+  // P15 (S4 §6.11): the stream notices. A 4a stream always says text is unavailable; a 4b one while copy or a11y is
+  // off (this widens S3 item 10's "both"), and an author-hidden sheet says so while it is shown.
+  const streamNotices: string[] = stream ? [
+    props.remoteChrome && (!streamText || !allowCopy || streamA11yMode === 'off') ? props.remoteChrome.textUnavailable : '',
+    streamText && activeSheetId && streamText.wireLayout(activeSheetId).authorHidden ? STREAM_AUTHOR_HIDDEN : '',
+  ].filter(Boolean) : []
 
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
@@ -3485,14 +3532,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           </div>
         )}
         </div>
-        {/* The parent §15 notice, once (S4 §6.11): a stream's grid has positions only. */}
-        {stream && props.remoteChrome ? <div role="status" data-officeview-notice="" className="ov:bg-chrome ov:text-muted ov:text-xs ov:px-3">{props.remoteChrome.textUnavailable}</div> : null}
+        {/* The parent §15 notice, once (S4 §6.11; P15: on 4b while copy or a11y is off), and an author-hidden sheet's. */}
+        {stream && (props.remoteChrome || streamNotices.length) ? <div role="status" data-officeview-notice="" className="ov:bg-chrome ov:text-muted ov:text-xs ov:px-3">{streamNotices.map((text, i) => <span key={text}>{i ? ` ${text}` : text}</span>)}</div> : null}
         <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, minWidth: 0 }}>
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
-              {...(stream ? streamText ? { positionsOnly: true, onResize: resizeLine } : { positionsOnly: true, selectable: false } : {
+              {...(stream ? streamText ? { positionsOnly: !streamCells, onResize: resizeLine } : { positionsOnly: true, selectable: false } : {
                 onResize: resizeLine,
                 onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
               })} pendingSortColumn={sortPending?.col ?? null} onNotice={setAnnouncement}
@@ -3560,7 +3607,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
                 return true
               } : undefined} announcement={[page && truncatedHits.has(page.hits) ? STREAM_FIND_TRUNCATED : '', sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
-              cellPresentation={stream ? undefined : at => {
+              cellPresentation={stream ? streamCells ? at => {
+                // P10: the server's text, cached under the sheet's viewGen; 'Loading…' while it is asked (the paged string).
+                const text = streamCells.textAt(activeSheetId, streamViewGen, at)
+                return { text: text ?? (streamCells.pending(activeSheetId, streamViewGen, at) ? 'Loading…' : '') }
+              } : undefined : at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
                 // The grid-facing text carries the reviewed CF descriptor so the

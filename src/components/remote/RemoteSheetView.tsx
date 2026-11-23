@@ -8,7 +8,8 @@
  *   source is closed when the session ends, never on unmount (StrictMode's simulated unmount would close it for good).
  * - **No text, no copy, no find, no selection** (R6): the viewer shows positions only, and says `TEXT_UNAVAILABLE` once.
  * - **Stage 4b** (`manifest.sheetView === 1`): the viewer selects, resizes and fits as local mode does; search is always
- *   on and copy follows `can.copy` (re-read on every manifest change), each answered by the server (S4 §6.7, P15).
+ *   on, copy follows `can.copy` and the grid's text follows `caps.a11y` (both re-read on every manifest change), each
+ *   answered by the server (S4 §6.7, P10, P15).
  * - **Print** is the server's static per-sheet units through `RemoteOfficeDoc.print` (the Stage 3b flow; the range
  *   picker counts sheets), started from the viewer's toolbar or Ctrl/Cmd+P; the viewer's screen never prints.
  */
@@ -65,18 +66,20 @@ export default function RemoteSheetView(props: RemoteSheetViewProps): ReactEleme
     void doc.ended.then((e) => { if (live && e) setEnded(e.code) })
     return () => { live = false }
   }, [doc])
-  // A resume may change `can.copy` (S3 item 2): the copy controls follow the current manifest.
+  // A resume may change `can.copy` and `caps.a11y` (S3 item 2): the copy controls and grid text follow the manifest.
   const [, setManifestRev] = useState(0)
   useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
   const sheetView = doc.manifest.sheetView === 1
   const allowCopy = doc.manifest.can.copy && sheetView
+  // P10: the grid's text follows `caps.a11y` (re-read on every manifest change, as copy is; Review Focus 2).
+  const a11y = sheetView ? doc.manifest.caps.a11y : 'off'
   return (
     <div ref={root} data-ov-remote-sheet="" className={className} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, ...style }}>
       {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}
       <InteractiveSheetDoc doc={shell.doc} source={shell.source}
         {...(theme !== undefined ? { theme } : {})} {...(background !== undefined ? { background } : {})} {...(onFrame ? { onFrame } : {})}
         allowCopy={allowCopy} showSearch={sheetView}
-        remoteChrome={{ textUnavailable: TEXT_UNAVAILABLE, print: print.start, toolbar: print.ui, copyFailure: (e) => copyFailure(e, doc.manifest.caps.copy) }} />
+        remoteChrome={{ textUnavailable: TEXT_UNAVAILABLE, print: print.start, toolbar: print.ui, copyFailure: (e) => copyFailure(e, doc.manifest.caps.copy), a11y }} />
     </div>
   )
 }
