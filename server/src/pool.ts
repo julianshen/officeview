@@ -25,6 +25,7 @@ import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import type { SheetClock } from './sheet/clock'
 import type { RenderedTile, TileJob } from './sheet/tile'
+import type { SheetTextJob, SheetTextReply } from './sheet/text-ops'
 import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
@@ -66,6 +67,12 @@ export type PoolTileJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
 export { TILE_BYTES_ESTIMATE } from './sheet/tile'
 /** Admission charge of one layout job (the snapshot it may build, and the layout it copies out). */
 export const LAYOUT_JOB_BYTES = 16 * 1024 * 1024
+/** Stage 4b: a `sheet-text` job on the docRef's worker: one text op under the session clock. */
+export type PoolSheetTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; clock: SheetClock } & SheetTextJob
+/** Admission charge of one sheet-text job: what a layout job charges (the snapshot and text view it may build) plus a
+ * fit's measurement scratch (`FIT_MEASURE_BYTES`, 16 MiB, in `sheet/text-ops.ts`, not imported here: the pool thread
+ * never loads the text engines). */
+export const SHEET_TEXT_JOB_BYTES = LAYOUT_JOB_BYTES + 16 * 1024 * 1024
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
 export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
 
@@ -385,6 +392,26 @@ export class Pool {
         const r = await this.runJob(slot, admitted, { type: 'layout', id: this.nextId++, docKey, sheetIndex: job.sheetIndex, clock: { day: job.clock.day, timeZone: job.clock.timeZone } })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as StreamSheetLayout
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** Stage 4b: one `sheet-text` op (find, copy, a11y, fit) over a sheet's text view, with the same affinity, admission,
+   * deadline and recycle paths as `sheetLayout`. Every job field but the routing is forwarded. */
+  async sheetText(sessionId: string, job: PoolSheetTextJob, bytesEstimate = SHEET_TEXT_JOB_BYTES, signal?: AbortSignal): Promise<SheetTextReply> {
+    const { docRef, contentPolicy, clock, ...text } = job
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const slot = this.pick(docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+        if (signal?.aborted) throw new ShowCancelled()
+        const r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob })
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r as SheetTextReply
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)

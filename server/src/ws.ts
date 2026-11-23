@@ -33,6 +33,7 @@ import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthD
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
+import type { SheetTextReply } from './sheet/text-ops'
 import { showBuildGrant, showMorphGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
@@ -46,7 +47,7 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { encodeSheetLayout, encodeTileBody, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { encodeSheetLayout, encodeTileBody, fitArgs, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
@@ -979,6 +980,50 @@ export function createStreamServer(o: StreamServerOptions) {
     }
   }
 
+  /**
+   * Stage 4b (P9, P12): `sheet-fit {reqId, token, sheetId, viewGen, axis, index, pane, regions?}` on a `sheet-view@1`
+   * session. In `onSheetResize`'s order, each failure one `refused` that changes nothing: the token; the arguments
+   * (`fitArgs`), else `policy-refused`; the `'sheet'` rate, then `sheetBusy` (`rate-limited`; set before the next await,
+   * cleared in the `finally` only while this socket owns the sid); `stale-view`; the fingerprint and the document ledger;
+   * `hidden-target` for a collapsed row or column of the identity layout. Then the `sheet-text` fit job over the sheet's
+   * text view at the session's sizes (read in the same tick as the viewGen check), answered `sheet-fit-result {size}`.
+   * No `coverage-unknown`: an unknown-coverage sheet's text view is blank, so it fits to the blank size. Fit never
+   * changes view state; it is served with copy and a11y off.
+   */
+  async function onSheetFit(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = fitArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    const rates = ws.data.rates
+    if (rates.check('sheet', now()) !== 'ok' || rates.sheetBusy) return refuse(ws, reqId, 'rate-limited')
+    rates.sheetBusy = true
+    try {
+      if (args.viewGen !== sd.views.viewGen(args.sheetIndex)) return refuse(ws, reqId, 'stale-view')
+      // The sizes of that viewGen: no resize can land meanwhile (one 'sheet' op in flight).
+      const sizes = sd.views.canonical(args.sheetIndex)
+      if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+      if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+      const alive = textAlive(ws, s.sid, sd)
+      let base: ServerSheetLayout
+      try { base = await baseLayout(s.sid, sd, args.sheetIndex) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      const runs = args.axis === 'row' ? base.collapsedRows : base.collapsedCols
+      if (runs.some((r) => r.start <= args.index && args.index <= r.end)) return refuse(ws, reqId, 'hidden-target')
+      let r: SheetTextReply
+      try {
+        r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'fit', sheetIndex: args.sheetIndex, axis: args.axis, index: args.index, pane: args.pane, regions: args.regions ?? [], sizes }, undefined, ws.data.gone.signal)
+      } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      // Fail closed: only a fit answer with a finite size travels.
+      if (r.op !== 'fit' || !Number.isFinite(r.size) || r.size < 0) return refuse(ws, reqId, 'policy-refused')
+      send(ws, { reqId, type: 'sheet-fit-result', size: r.size })
+    } finally {
+      if (owns(ws, s.sid)) rates.sheetBusy = false
+    }
+  }
+
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
    * audited and charged before `print-start`; everything after the token
    * await up to `print-start` is synchronous, so two prints cannot both pass
@@ -1579,6 +1624,7 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     // Stage 4b: a sheet-view session's ops (the gate above admits only those).
     if (m.type === 'sheet-resize') return onSheetResize(ws, m)
+    if (m.type === 'sheet-fit') return onSheetFit(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)

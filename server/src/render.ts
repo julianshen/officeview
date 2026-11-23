@@ -22,6 +22,9 @@ import { LayoutTooLarge } from '../../src/stream/sheet-wire'
 import { buildSheetSnapshot, servableSheet, type ServableSheet, type SheetSnapshot } from './sheet/snapshot'
 import { TILE_PALETTE_COLORS, tileJobProblem, tileLimit, type RenderedTile, type TileJob } from './sheet/tile'
 import { sessionSizesOf, type WireSizes } from './sheet/view-state'
+import { sheetTextView, type TextView } from './sheet/text-view'
+import { answerSheetText, type SheetTextJob, type SheetTextReply } from './sheet/text-ops'
+import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import { TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 import { renderSheetViewport } from '../../src/xlsx/view/renderViewport'
 import { tileLogicalBox } from '../../src/xlsx/view/tileCache'
@@ -68,6 +71,15 @@ export const MAX_UNIT_PX = 8192
 export const SCALE_BUCKETS = [1, 2] as const
 /** Stage 4b: sized snapshot geometries kept per document (LRU). */
 export const SIZED_GEOMETRIES = 8
+/** Stage 4b: text views kept per document (LRU, by `(sheetIndex, clock, sha256(sizes))`), released on eviction and `drop`. */
+export const TEXT_VIEWS = 16
+/** Stage 4b: the formatting bytes (CF text scopes) one document's text views may hold together; past it a scope is
+ * unavailable, and its sqrefs are blank in the view (P4, fail closed). */
+export const TEXT_VIEW_FORMAT_BYTES = 64 * 1024 * 1024
+/** The canonical hash of session sizes, shared by the sized-geometry and text-view keys. */
+const sizesHash = (sizes: WireSizes) => createHash('sha256').update(JSON.stringify(sizes.map((e) => [e.axis, e.index, e.px]))).digest('hex')
+/** One cached text view: `uses` counts the jobs holding it; an entry evicted while held is released by its last user. */
+interface TextViewEntry { view: Promise<TextView>; uses: number; evicted: boolean }
 export { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec }
 export type Projection = 'final-raster' | 'commands'
 
@@ -116,7 +128,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4b: the snapshot geometries at session sizes, by `snapshot key|sha256(sizes)`, at most `SIZED_GEOMETRIES` (LRU), released on `drop`. */ sizedGeometries?: Map<string, SheetGeometryResult>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4b: the snapshot geometries at session sizes, by `snapshot key|sha256(sizes)`, at most `SIZED_GEOMETRIES` (LRU), released on `drop`. */ sizedGeometries?: Map<string, SheetGeometryResult>; /** Stage 4b: text views by `snapshot key|sha256(sizes)`, at most `TEXT_VIEWS` (LRU). */ textViews?: Map<string, TextViewEntry>; /** Stage 4b: the formatting budget every text view of the entry reserves from. */ textBudget?: FormatBudget; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -197,6 +209,20 @@ export const TILES_REFUSAL_UNIT: Readonly<UnitSize> = Object.freeze({ w: 480, h:
  * reads the entry's own size and refuses it `oversize`). Units mode returns the entry's sizes unchanged. */
 export function tilesUnits(units: readonly UnitSize[]): UnitSize[] {
   return units.map((u) => unitSurfaceAllowed(u.w, u.h) ? u : { ...TILES_REFUSAL_UNIT })
+}
+
+/** Marks `e` evicted; it is released now if no job holds it, else by the last job that does. */
+function evictTextView(e: TextViewEntry): void {
+  e.evicted = true
+  if (e.uses === 0) e.view.then((v) => v.release(), () => undefined)
+}
+/** A formatting budget that refuses (throws) past `max` bytes held. */
+function boundedBudget(max: number): FormatBudget {
+  let held = 0
+  return {
+    reserve(bytes) { if (held + bytes > max) throw new RangeError('sheet text: formatting exceeds its budget'); held += bytes },
+    release(bytes) { held -= bytes },
+  }
 }
 
 export class DocumentHost {
@@ -341,18 +367,11 @@ export class DocumentHost {
     if (!built) {
       const contentPolicy = doc.contentPolicyId === 'full@1' ? 'full' as const : 'visible-only' as const
       const cfClock = { epochNowMs: clockEpochMs(clock), timeZone: clock.timeZone }
-      const cache = doc.servable ??= new Map()
-      const servable = (i: number): ServableSheet => {
-        let s = cache.get(i)
-        if (!s) cache.set(i, s = servableSheet(saved.sheets[i]!, contentPolicy))
-        return s
-      }
+      const servable = (i: number): ServableSheet => this.servableOf(doc, saved, i)
       built = buildSheetSnapshot(saved, sheetIndex, contentPolicy, clock, () => {
         // The lease reads `doc.sheets[sheetIndex]`, and CF's cross-sheet rules read the other sheets: every slot holds its
         // servable (blanked) sheet, so no sheet's covered cell reaches any rule (owner 11.1). Chart contexts stay shared.
-        const sheets = saved.sheets.map((_, i) => servable(i).sheet)
-        const view: XlsxDocument = sheets.every((s, i) => s === saved.sheets[i]) ? saved : { ...saved, sheets }
-        return prepareSheetAssets(view, { sheetIndex, registerFont, cfClock, chartOwner: saved })
+        return prepareSheetAssets(this.servableWorkbook(doc, saved), { sheetIndex, registerFont, cfClock, chartOwner: saved })
       }, servable).then((snap) => {
         // Dropped while building: nothing will release it later.
         if (this.docs.get(docKey) !== doc) { snap.release(); throw new RenderRefusal('unknown-doc') }
@@ -362,6 +381,73 @@ export class DocumentHost {
       built.catch(() => { if (snapshots.get(key) === built) snapshots.delete(key) })
     }
     return built
+  }
+
+  /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free). */
+  private servableOf(doc: OpenDoc, saved: XlsxDocument, i: number): ServableSheet {
+    const cache = doc.servable ??= new Map()
+    let s = cache.get(i)
+    if (!s) cache.set(i, s = servableSheet(saved.sheets[i]!, doc.contentPolicyId === 'full@1' ? 'full' : 'visible-only'))
+    return s
+  }
+  /** The servable workbook: every slot its servable (blanked) sheet (`saved` itself when none is blanked). */
+  private servableWorkbook(doc: OpenDoc, saved: XlsxDocument): XlsxDocument {
+    const sheets = saved.sheets.map((_, i) => this.servableOf(doc, saved, i).sheet)
+    return sheets.every((s, i) => s === saved.sheets[i]) ? saved : { ...saved, sheets }
+  }
+
+  /**
+   * Stage 4b (P2, P9): one `sheet-text` op over the text view of its sheet at the job's session sizes, under the session
+   * clock (no clock is read). Views are built from the cached snapshots (`sheetTextView`) and cached per
+   * `(sheetIndex, clock, sha256(sizes))`, at most `TEXT_VIEWS` per document (LRU), released on eviction and on `drop`;
+   * a view a running job holds is released by that job when it ends. Fit measures with the server backend's text.
+   */
+  async sheetText(docKey: string, clock: SheetClock, job: SheetTextJob): Promise<SheetTextReply> {
+    const held: TextViewEntry[] = []
+    let measureCtx: CanvasRenderingContext2D | undefined
+    try {
+      return await answerSheetText(job, {
+        viewOf: (sheetIndex, sizes) => {
+          const e = this.textViewEntry(docKey, sheetIndex, clock, sizes)
+          e.uses++; held.push(e)
+          return e.view
+        },
+        measureText: (font, text) => {
+          measureCtx ??= this.backend.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+          measureCtx.font = font
+          return measureCtx.measureText(text).width
+        },
+      })
+    } finally {
+      for (const e of held) if (--e.uses === 0 && e.evicted) e.view.then((v) => v.release(), () => undefined)
+    }
+  }
+
+  /** The cached text view entry of `(sheetIndex, clock, sizes)`, built on a miss (a failed build is not kept). */
+  private textViewEntry(docKey: string, sheetIndex: number, clock: SheetClock, sizes: WireSizes): TextViewEntry {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    const views = doc.textViews ??= new Map()
+    const key = `${sheetIndex}|${clock.day}|${clock.timeZone}|${sizesHash(sizes)}`
+    const hit = views.get(key)
+    if (hit) { views.delete(key); views.set(key, hit); return hit }
+    const budget = doc.textBudget ??= boundedBudget(TEXT_VIEW_FORMAT_BYTES)
+    const entry: TextViewEntry = { uses: 0, evicted: false, view: this.sheetSnapshot(docKey, sheetIndex, clock).then(async (snap) => {
+      const saved = doc.savedParse
+      if (!saved || this.docs.get(docKey) !== doc) throw new RenderRefusal('unknown-doc')
+      const view = await sheetTextView(snap, saved.sheets[sheetIndex]!, sessionSizesOf(sizes), { workbook: this.servableWorkbook(doc, saved), clock, budget })
+      // Dropped while building: nothing else will release it.
+      if (this.docs.get(docKey) !== doc) { view.release(); throw new RenderRefusal('unknown-doc') }
+      return view
+    }) }
+    views.set(key, entry)
+    entry.view.catch(() => { if (views.get(key) === entry) views.delete(key) })
+    while (views.size > TEXT_VIEWS) {
+      const [oldKey, old] = views.entries().next().value!
+      views.delete(oldKey)
+      evictTextView(old)
+    }
+    return entry
   }
 
   /**
@@ -441,7 +527,7 @@ export class DocumentHost {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
     const cache = doc.sizedGeometries ??= new Map()
-    const key = `${snap.sheetIndex}|${snap.clock.day}|${snap.clock.timeZone}|${createHash('sha256').update(JSON.stringify(sizes.map((e) => [e.axis, e.index, e.px]))).digest('hex')}`
+    const key = `${snap.sheetIndex}|${snap.clock.day}|${snap.clock.timeZone}|${sizesHash(sizes)}`
     let g = cache.get(key)
     if (g) { cache.delete(key); cache.set(key, g); return g }
     g = buildSheetGeometry(snap.sheet, { sizes: sessionSizesOf(sizes) })
@@ -465,6 +551,8 @@ export class DocumentHost {
       d.snapshots?.clear()
       d.tileLayouts?.clear()
       d.sizedGeometries?.clear()
+      for (const e of d.textViews?.values() ?? []) evictTextView(e)
+      d.textViews?.clear()
     }
     this.served.drop(docKey)
   }

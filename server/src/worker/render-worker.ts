@@ -9,6 +9,7 @@ import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
 import type { SheetClock } from '../sheet/clock'
 import type { TileJob } from '../sheet/tile'
+import type { SheetTextJob } from '../sheet/text-ops'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -47,6 +48,8 @@ export type WorkerRequest =
   | { type: 'layout'; id: number; docKey: string; sheetIndex: number; clock: SheetClock }
   /** Stage 4a (S4 §6.5): one 512² sheet tile (canonical, pre-forensic) from its servable snapshot. */
   | { type: 'tile'; id: number; docKey: string; job: TileJob; hangMs?: number; crash?: boolean }
+  /** Stage 4b (P2, P9): one text op (find, copy, a11y, fit) over a sheet's text view under the session clock. */
+  | { type: 'sheet-text'; id: number; docKey: string; clock: SheetClock; job: SheetTextJob }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -106,6 +109,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     else if (m.type === 'notes') result = await host.notes(m.docKey, m)
     // Before the final `else`: an unlisted type would fall through to `render`.
     else if (m.type === 'layout') result = await host.sheetLayout(m.docKey, m.sheetIndex, m.clock)
+    else if (m.type === 'sheet-text') result = await host.sheetText(m.docKey, m.clock, m.job)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }
