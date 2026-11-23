@@ -170,9 +170,6 @@ export interface StreamServerOptions {
   sheetTimeZone?: string
   /** TEST and measure only (R3): a `'message'` or `'tile'` override replaces that class's windows, its burst included. */
   rates?: RateOverrides
-  /** TEST-ONLY: the per-IP session gate (§14; default 30 new sessions/min, 8 concurrent connects). Only the Playwright WS
-   * harness (server/test/app.ts) passes it: one browser runs the whole stream project from one IP. */
-  ipRates?: { perMinute?: number; concurrent?: number }
   /** TEST and measure only (R3, T8): per delivered tile, `t0` is the instant its batch passed validation, the token
    * and the `'tile'` rate check, and `t1` the instant its last fragment was passed to `sendBinary` (both
    * `performance.now()`). Unset, no clock is read. */
@@ -253,7 +250,7 @@ export function createStreamServer(o: StreamServerOptions) {
   const services = canMedia ? o.media?.services : undefined
   const table = new SessionTable()
   const audit = o.audit ?? new AuditTable()
-  const ipRates = new IpRates(o.ipRates?.perMinute, o.ipRates?.concurrent)
+  const ipRates = new IpRates()
   const docs = new Map<string, DocState>()          // docRef → state
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is

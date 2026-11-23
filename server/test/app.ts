@@ -27,9 +27,6 @@
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity; `media`: the ffmpeg probe passed)
  *
- * Stage 4b: the per-IP session gate is raised to `HARNESS_IP_RATES` (app-options.ts): the whole stream project runs
- * from one browser on 127.0.0.1 and opens more than the product's 30 sessions a minute.
- *
  * Piece 5 (Task 11): media is on as in production (`MEDIA_ENABLED_DEFAULT`, the startup probe failing closed).
  */
 import { readFile } from 'node:fs/promises'
@@ -41,7 +38,6 @@ import { Pool } from '../src/pool'
 import { createStreamServer } from '../src/ws'
 import { cubeDeck, flyInDeck, morphDeck, narrationDeck, navDeck, stillSoundDeck, transitionSoundDeck, videoDeck } from '../../src/testdata/show-decks'
 import { frozenMerges, grid500x100, millionRows, slidUnderAnchor, textGrid } from './sheet-fixtures'
-import { HARNESS_IP_RATES } from './app-options'
 
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `http://localhost:${process.env.IV_HARNESS_PORT ?? 4173}`]
@@ -95,8 +91,8 @@ const hooks = {
 }
 
 const servers = {
-  normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ipRates: HARNESS_IP_RATES, ...hooks }),
-  short: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ipRates: HARNESS_IP_RATES, ...hooks, tokenTtlSec: 8, renewLeadSec: 5 }),
+  normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ...hooks }),
+  short: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ...hooks, tokenTtlSec: 8, renewLeadSec: 5 }),
 }
 Bun.serve({ port: P, fetch: servers.normal.fetch as never, websocket: servers.normal.websocket as never })
 Bun.serve({ port: P + 2, fetch: servers.short.fetch as never, websocket: servers.short.websocket as never })
