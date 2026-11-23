@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { evaluateDataBar, resolveBarThresholds } from '../src/xlsx/cf/dataBar'
+import { CF_BAR_ALL_EQUAL_PRODUCTION_READINGS, CF_BAR_ALL_EQUAL_READINGS, evaluateDataBar, injectCfBarAllEqualReadings, resolveBarThresholds } from '../src/xlsx/cf/dataBar'
 import { injectCfBarAutoBounds, injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { describeCfWin } from '../src/xlsx/cf/describe'
 import { barPaintable } from '../src/xlsx/cf/dataBarPaint'
@@ -140,4 +140,108 @@ describe('2a: bar:degenerate-equal-values paints its verified half length on the
       expect(batch.barAt(1, 2)).toBeUndefined()
     } finally { batch.dispose() }
   }, 300_000)
+})
+
+describe('2b: the pre-registered all-equal readings are implemented, selectable and unregistered', () => {
+  const PRE = ['bar:degenerate-equal-ltr', 'bar:degenerate-equal-rtl', 'bar:degenerate-equal-10-90', 'bar:all-equal-distinct-bounds']
+  const HALF_MIN = { rule: 'half-min@x14', measured: ['base-only/gradient', 'base-only/solid', 'x14/gradient', 'x14/solid'], settledBy: ['bar:lengths-default-10-90'] }
+  const LAYOUT = { allPositive: SPAN, mixedSign: { origin: 'axis', lengthBasis: 'side' } } as const
+  const ev = (v: number, def: BarDef, scope: number[]) => {
+    const s = stats(scope)
+    const t = resolveBarThresholds(def, s)
+    return t.kind !== 'ready' ? t : evaluateDataBar(v, def, t.value, s, { layout: LAYOUT, lengthsRule: HALF_MIN as never })
+  }
+  const geo = (out: CfOutcome<Omit<CfBarDescriptor, 'ruleId'>>) => {
+    expect(out.kind, JSON.stringify(out)).toBe('ready')
+    const b = (out as { value: Omit<CfBarDescriptor, 'ruleId'> }).value
+    return [b.startFraction, +b.endFraction.toFixed(12), b.direction, b.valueFraction]
+  }
+  const ALL = [...EVIDENCE, ...PRE, 'bar:lengths-all-negative']
+  const shapes: Array<[string, BarDef, number[]]> = [
+    ['bar:degenerate-equal-ltr', evidenceShape({ direction: 'leftToRight' }), [42, 42, 42]],
+    ['bar:degenerate-equal-rtl', evidenceShape({ direction: 'rightToLeft' }), [42, 42, 42]],
+    ['bar:degenerate-equal-10-90', evidenceShape({ minLength: 10, maxLength: 90 }), [42, 42, 42]],
+    ['bar:all-equal-distinct-bounds', evidenceShape({ bounds: [{ type: 'num', value: 0 }, { type: 'num', value: 100 }] }), [30, 30, 30]],
+  ]
+  const NUM = (lo: number, hi: number, o: Partial<BarDef> = {}) => evidenceShape({ bounds: [{ type: 'num', value: lo }, { type: 'num', value: hi }], ...o })
+  afterEach(() => injectCfBarAllEqualReadings(null))
+
+  it('production registers none of them: every pre-registered shape stays withheld even with its evidence', () => {
+    expect(Object.keys(CF_BAR_ALL_EQUAL_PRODUCTION_READINGS)).toEqual(['bar:degenerate-equal-values'])
+    withExactCfEvidence(ALL, () => {
+      for (const [cap, def, scope] of shapes) expect(ev(scope[0]!, def, scope), cap).toEqual(DEGENERATE)
+    })
+  })
+
+  it('a registered reading paints only with its capability evidenced, and an unknown reading is ignored', () => {
+    for (const [cap, def, scope] of shapes) {
+      const reading = CF_BAR_ALL_EQUAL_READINGS[cap as keyof typeof CF_BAR_ALL_EQUAL_READINGS][0]!
+      injectCfBarAllEqualReadings({ [cap]: reading })
+      withExactCfEvidence(ALL.filter(c => c !== cap), () => expect(ev(scope[0]!, def, scope), `${cap} without evidence`).toEqual(DEGENERATE))
+      withExactCfEvidence(ALL, () => expect(ev(scope[0]!, def, scope).kind, `${cap} ${reading}`).toBe('ready'))
+      injectCfBarAllEqualReadings({ [cap]: 'bogus' })
+      withExactCfEvidence(ALL, () => expect(ev(scope[0]!, def, scope), `${cap} bogus`).toEqual(DEGENERATE))
+    }
+  })
+
+  it('the statistical twins: each reading\'s geometry, with no announced position', () => {
+    withExactCfEvidence(ALL, () => {
+      const at = (cap: string, reading: string, def: BarDef) => { injectCfBarAllEqualReadings({ [cap]: reading }); return ev(42, def, [42, 42, 42]) }
+      const ltr = evidenceShape({ direction: 'leftToRight' }), rtl = evidenceShape({ direction: 'rightToLeft' }), d1090 = evidenceShape({ minLength: 10, maxLength: 90 })
+      expect(geo(at('bar:degenerate-equal-ltr', 'half', ltr))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(geo(at('bar:degenerate-equal-ltr', 'full', ltr))).toEqual([0, 1, 'leftToRight', undefined])
+      expect(at('bar:degenerate-equal-ltr', 'none', ltr)).toEqual({ kind: 'no-match' })
+      expect(geo(at('bar:degenerate-equal-rtl', 'half', rtl))).toEqual([0, 0.5, 'rightToLeft', undefined])
+      expect(geo(at('bar:degenerate-equal-rtl', 'half-ltr', rtl))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(geo(at('bar:degenerate-equal-rtl', 'full', rtl))).toEqual([0, 1, 'rightToLeft', undefined])
+      expect(geo(at('bar:degenerate-equal-10-90', 'half-span', d1090))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(geo(at('bar:degenerate-equal-10-90', 'half-min', d1090))).toEqual([0, 0.45, 'leftToRight', undefined])
+      expect(geo(at('bar:degenerate-equal-10-90', 'full', d1090))).toEqual([0, 0.85, 'leftToRight', undefined])
+      expect(at('bar:degenerate-equal-10-90', 'none', d1090)).toEqual({ kind: 'no-match' })
+      // A twin's reading never reaches another twin's shape, nor the evidence shape.
+      injectCfBarAllEqualReadings({ 'bar:degenerate-equal-ltr': 'full' })
+      expect(geo(ev(42, evidenceShape(), [42, 42, 42]))).toEqual([0, 0.5, 'leftToRight', undefined])
+      expect(ev(42, rtl, [42, 42, 42])).toEqual(DEGENERATE)
+    })
+  })
+
+  it('distinct literal bounds: each reading evaluates at its effective value and announces the real position', () => {
+    withExactCfEvidence(ALL, () => {
+      const at = (reading: string, v: number, def: BarDef) => { injectCfBarAllEqualReadings({ 'bar:all-equal-distinct-bounds': reading }); return ev(v, def, [v, v, v]) }
+      const n0100 = NUM(0, 100), n1090 = NUM(0, 100, { minLength: 10, maxLength: 90 })
+      expect(geo(at('evaluate', 30, n0100))).toEqual([0, 0.3, 'leftToRight', 0.3])
+      expect(geo(at('full', 30, n0100))).toEqual([0, 1, 'leftToRight', 0.3])
+      expect(geo(at('degenerate-half', 30, n0100))).toEqual([0, 0.5, 'leftToRight', 0.3])
+      expect(at('none', 30, n0100)).toEqual({ kind: 'no-match' })
+      expect(geo(at('evaluate', 100, n0100))).toEqual([0, 1, 'leftToRight', 1])
+      expect(geo(at('evaluate', 0, n1090))).toEqual([0, 0.05, 'leftToRight', 0])
+      expect(geo(at('evaluate', 30, n1090))).toEqual([0, 0.29, 'leftToRight', 0.3])
+      expect(geo(at('degenerate-half', 30, n1090))).toEqual([0, 0.45, 'leftToRight', 0.3])
+      expect(geo(at('full', 30, n1090))).toEqual([0, 0.85, 'leftToRight', 0.3])
+      // Mixed-sign bounds (automatic axis at 40/140), and all-negative bounds (grows from the right edge).
+      const mixed = NUM(-40, 100, { axisArgb: 0xff000000 })
+      const m = at('evaluate', 20, mixed) as { kind: 'ready'; value: CfBarDescriptor }
+      expect([+m.value.axisFraction.toFixed(12), +(m.value.endFraction - m.value.axisFraction).toFixed(12)]).toEqual([+(40 / 140).toFixed(12), +((100 / 140) * 0.2).toFixed(12)])
+      const mh = at('degenerate-half', 20, mixed) as { kind: 'ready'; value: CfBarDescriptor }
+      expect(+(mh.value.endFraction - mh.value.axisFraction).toFixed(12)).toBe(+((100 / 140) * 0.3).toFixed(12))
+      const neg = NUM(-100, -20)
+      const e = at('evaluate', -40, neg) as { kind: 'ready'; value: CfBarDescriptor }
+      expect([+e.value.startFraction.toFixed(12), e.value.endFraction, e.value.isNegative]).toEqual([0.75, 1, true])
+      const f = at('full', -40, neg) as { kind: 'ready'; value: CfBarDescriptor }
+      expect([f.value.startFraction, f.value.endFraction]).toEqual([0, 1])
+      const h = at('degenerate-half', -40, neg) as { kind: 'ready'; value: CfBarDescriptor }
+      expect([h.value.startFraction, h.value.endFraction]).toEqual([0.5, 1])
+      // Outside the shape (formula-resolved, min/num, RTL, gradient, border, a non-equal scope) nothing changes.
+      injectCfBarAllEqualReadings({ 'bar:all-equal-distinct-bounds': 'full' })
+      expect(ev(30, NUM(0, 100, { direction: 'rightToLeft' }), [30, 30, 30])).toEqual(DEGENERATE)
+      expect(ev(30, NUM(0, 100, { gradient: true }), [30, 30, 30])).toEqual(DEGENERATE)
+      withExactCfEvidence([...ALL, 'bar:bounds-formula'], () => {
+        expect(ev(30, evidenceShape({ bounds: [{ type: 'num', value: 0, resolved: 'formula' } as never, { type: 'num', value: 100 }] }), [30, 30, 30])).toEqual(DEGENERATE)
+      })
+      expect(geo(ev(30, n0100, [30, 60, 90]))).toEqual([0, 0.3, 'leftToRight', 0.3])
+      // Overflow-safe midpoint; a non-finite intermediate fails closed.
+      injectCfBarAllEqualReadings({ 'bar:all-equal-distinct-bounds': 'degenerate-half' })
+      expect(geo(ev(0, NUM(-1e308, 1e308, { axisArgb: 0xff000000 }), [0, 0, 0])).slice(0, 1)).toEqual([0.5])
+    })
+  })
 })

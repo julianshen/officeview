@@ -86,13 +86,31 @@ const DELEGATED_ALL_EQUAL_CHECKS: ReadonlySet<string> = new Set([...DELEGATED_TH
  * - `bar:degenerate-equal-values` (stage3-bar-degenerate B, verified and published: Excel 86..174, 89 of 177 px, matched
  *   `half`): min/max bounds, x14 paired, 0/100, solid, no border, `context` on an LTR sheet, automatic axis, values > 0.
  *   Registered `half`: the bar spans 0..0.5 of the span. Owner ruling Q1: it announces no position (no `valueFraction`).
+ * Pre-registered by stage3-bar-all-equal (Phase 1, before its capture) and UNREGISTERED (withheld until a capture matches
+ * one reading and it is registered here; owner ruling Q2 for the three statistical twins):
+ * - `bar:degenerate-equal-ltr`: the evidence shape with `direction="leftToRight"`: `half` (0..0.5), `none`, `full`;
+ * - `bar:degenerate-equal-rtl`: with `direction="rightToLeft"`: `half` (0..0.5 in reading order, the mirrored half),
+ *   `half-ltr` (an unmirrored half from the left edge), `none`, `full`;
+ * - `bar:degenerate-equal-10-90`: with the default 10/90 lengths: `half-span` (0.5 of the span), `half-min` (t = 0.5
+ *   through the verified half-min@x14 rule: 0.05 + 0.8 · 0.5 = 0.45), `none`, `full` (t = 1 through that rule: 0.85);
+ *   these twins too announce no position;
+ * - `bar:all-equal-distinct-bounds`: two literal num bounds with lo < hi over an all-equal scope whose value lies within
+ *   them (stage3-bar-geometry H and I, a recorded finding: Excel drew full bars at hi), x14 paired, solid, no border,
+ *   automatic axis, `context` on an LTR sheet, 0/100 or 10/90: the cell is evaluated as usual at an effective value
+ *   `evaluate` (v), `full` (hi, or lo for a negative value), `degenerate-half` (the bounds' midpoint, the statistical
+ *   answer's t = 0.5), or `none` (no bar). It announces the real value's position (lo < hi, Ruling S3-P).
  */
 export const CF_BAR_ALL_EQUAL_READINGS = {
   'bar:degenerate-equal-values': ['half'],
+  'bar:degenerate-equal-ltr': ['half', 'none', 'full'],
+  'bar:degenerate-equal-rtl': ['half', 'half-ltr', 'none', 'full'],
+  'bar:degenerate-equal-10-90': ['half-span', 'half-min', 'none', 'full'],
+  'bar:all-equal-distinct-bounds': ['evaluate', 'full', 'degenerate-half', 'none'],
 } as const satisfies Readonly<Record<string, readonly string[]>>
 export type CfBarAllEqualCap = keyof typeof CF_BAR_ALL_EQUAL_READINGS
 export type CfBarAllEqualReading = (typeof CF_BAR_ALL_EQUAL_READINGS)[CfBarAllEqualCap][number]
-/** The reading production implements per id. 2a registers the verified evidence's `half` on its own shape only. */
+/** The reading production implements per id. 2a registers the verified evidence's `half` on its own shape only; every
+ * pre-registered id is absent (its shape withheld) until its capture matches a reading. */
 export const CF_BAR_ALL_EQUAL_PRODUCTION_READINGS: Readonly<Partial<Record<string, string>>> = Object.freeze({ 'bar:degenerate-equal-values': 'half' })
 let proposedAllEqualReadings: Readonly<Partial<Record<string, string>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
@@ -109,12 +127,21 @@ export function cfBarAllEqualReading(capability: string): CfBarAllEqualReading |
 
 /** The all-equal shape id a definition falls in, or undefined (withheld). `equalThresholds`: lo = hi (statistical bounds). */
 export function barAllEqualShape(def: CfDataBarDefinition, equalThresholds: boolean, lo: number): CfBarAllEqualCap | undefined {
-  if (!equalThresholds) return undefined
+  if (def.pairing !== 'x14' || def.gradient || def.border || def.axisPosition !== 'automatic') return undefined
   const [b0, b1] = def.bounds
-  if (b0.type !== 'min' || b1.type !== 'max') return undefined
-  if (def.pairing !== 'x14' || def.gradient || def.border || def.axisPosition !== 'automatic' || !(lo > 0)) return undefined
   const contextLtr = def.direction === 'context' && def.sheetRightToLeft === false
-  if (def.minLength === 0 && def.maxLength === 100 && contextLtr) return 'bar:degenerate-equal-values'
+  const full = def.minLength === 0 && def.maxLength === 100
+  const d1090 = def.minLength === 10 && def.maxLength === 90
+  if (!equalThresholds) {
+    // Two literal num bounds (a formula-resolved one was never captured in this shape).
+    const literal = (b: CfBarBound): boolean => b.type === 'num' && !('resolved' in b && b.resolved !== undefined)
+    return literal(b0) && literal(b1) && contextLtr && (full || d1090) ? 'bar:all-equal-distinct-bounds' : undefined
+  }
+  if (b0.type !== 'min' || b1.type !== 'max' || !(lo > 0)) return undefined
+  if (full && contextLtr) return 'bar:degenerate-equal-values'
+  if (full && def.direction === 'leftToRight') return 'bar:degenerate-equal-ltr'
+  if (full && def.direction === 'rightToLeft') return 'bar:degenerate-equal-rtl'
+  if (d1090 && contextLtr) return 'bar:degenerate-equal-10-90'
   return undefined
 }
 
@@ -214,17 +241,9 @@ export function evaluateDataBar(
   if (!Number.isFinite(v)) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   if (v < lo || v > hi) return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
 
-  if (lo === hi) {
-    // A statistical all-equal scope (lo = hi = v): the registered reading's length; owner ruling Q1: no announced position.
-    return finish(def, checkEvidence, { axisFraction: 0, startFraction: 0, endFraction: allEqualLength(allEqualReading!), valueFraction: undefined, isNegative: false, axisColor: undefined, direction })
-  }
-
   // Ruling S3-P: what the bar announces is the VALUE's position between the resolved thresholds, whatever the geometry
   // (default lengths and an axis move the painted endpoint, never the value). Under a mixed-sign axis the axis value
   // reads as its own position in the range, not 0%.
-  const valueFraction = safeFraction(v, lo, hi)
-  if (valueFraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
-  const isNegative = v < 0
   const fullLengths = def.minLength === 0 && def.maxLength === 100
   // Task 22b: lengths other than 0/100 follow the rule the oracle selected (the plain linear reading is refuted for
   // Excel's paired solid bars). With no selected rule, or one this evaluator cannot apply, the bar is unresolved.
@@ -233,6 +252,42 @@ export function evaluateDataBar(
   const l0 = lengthStart
   const span = (def.maxLength - def.minLength) / 100
   const length = (f: number): number => l0 + f * span
+
+  if (lo === hi) {
+    // A statistical all-equal scope (lo = hi = v > 0): the registered reading's length; no announced position (owner
+    // ruling Q1).
+    const r = allEqualReading!
+    // No axis is drawn (all-positive, automatic): the all-positive layout must be enabled, as for any such bar.
+    if (!layout.allPositive) return unmeasured()
+    if (r === 'none') return { kind: 'no-match' }
+    const end = r === 'full' ? length(1) : r === 'half' || r === 'half-ltr' ? length(0.5) : r === 'half-span' ? 0.5
+      : r === 'half-min' ? def.minLength / 200 + ((def.maxLength - def.minLength) / 100) * 0.5 : Number.NaN
+    return finish(def, checkEvidence, { axisFraction: 0, startFraction: 0, endFraction: end, valueFraction: undefined, isNegative: false, axisColor: undefined, direction: r === 'half-ltr' ? 'leftToRight' : direction })
+  }
+  const valueFraction = safeFraction(v, lo, hi)
+  if (valueFraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+  // Distinct bounds over an all-equal scope: the registered reading's effective value replaces v in the geometry (and the
+  // sign); the announced position stays the real value's.
+  if (allEqualReading === 'none') return { kind: 'no-match' }
+  const ve = allEqualReading === 'full' ? (v < 0 ? lo : hi) : allEqualReading === 'degenerate-half' ? lo / 2 + hi / 2 : v
+  if (!Number.isFinite(ve)) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+  return evaluateGeometry(def, checkEvidence, layout, ve, lo, hi, valueFraction, fullLengths, length, direction)
+}
+
+/** The geometry of a resolved bar at the (effective) value `v`, with `valueFraction` the announced position. */
+function evaluateGeometry(
+  def: CfDataBarDefinition,
+  checkEvidence: (cap: string) => boolean,
+  layout: CfBarLayout,
+  v: number,
+  lo: number,
+  hi: number,
+  valueFraction: number,
+  fullLengths: boolean,
+  length: (f: number) => number,
+  direction: 'leftToRight' | 'rightToLeft',
+): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
+  const isNegative = v < 0
 
   // All-negative thresholds under `automatic` (bar:lengths-all-negative, the oracle's `axis` hypothesis): the bar grows
   // from the trailing edge, longest at v_min, as a share of the whole span. Measured at 0/100 lengths only; the capture
@@ -280,13 +335,6 @@ export function evaluateDataBar(
   }
 
   return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, valueFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
-}
-
-/** The end fraction of a statistical all-equal bar under its reading (`half`: half of the span). */
-function allEqualLength(reading: CfBarAllEqualReading): number {
-  switch (reading) {
-    case 'half': return 0.5
-  }
 }
 
 /**
