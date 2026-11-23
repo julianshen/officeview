@@ -137,14 +137,17 @@ interface CopiedState {
 type CfWireBar = NonNullable<CfCellStateWire['bar']>
 /** Wire form of a descriptor (`direction` as `rtl`), the shape every copy is priced in. */
 const wireBar = (d: CfBarDescriptor): CfWireBar => ({
-  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor, valueFraction: d.valueFraction,
+  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor, ...(d.valueFraction !== undefined ? { valueFraction: d.valueFraction } : {}),
   ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
   ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
   isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
 })
 /** The descriptor a wire bar encodes: the copy owns plain fields only, never the received object. */
 const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
-  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor, valueFraction: w.valueFraction,
+  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor,
+  // Absent only when the value has no position (lo = hi, owner ruling Q1); a key that is present keeps its value, so a
+  // malformed one (undefined included) still fails closed in barPaintable.
+  ...('valueFraction' in w ? { valueFraction: w.valueFraction } : {}),
   ...(w.borderColor !== undefined ? { borderColor: w.borderColor } : {}),
   isGradient: w.isGradient, isNegative: w.isNegative,
   ...(w.axisColor !== undefined ? { axisColor: w.axisColor } : {}),
@@ -185,7 +188,8 @@ const winKey = (
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
-  const barKey = bar ? `|bar:${Math.round(bar.valueFraction * 100)}` : ''
+  // A bar with no value position (lo = hi, owner ruling Q1) announces none: its own key.
+  const barKey = bar ? `|bar:${bar.valueFraction !== undefined ? Math.round(bar.valueFraction * 100) : '-'}` : ''
   // A painted icon keys by its bucket position (its label), never its glyph.
   const iconKey = icon ? `|icon:${icon.bucket}/${icon.buckets}` : ''
   return `${paths}|${writes}${scaleKey}${barKey}${iconKey}`

@@ -74,6 +74,50 @@ const DELEGATED_THRESHOLD_CHECKS: ReadonlySet<string> = new Set([
   'scale:thresholds-min-max', 'scale:thresholds-num-bounds', 'scale:thresholds-percent', 'scale:thresholds-percentile-inc-exc',
 ])
 
+/** The delegated checks over an all-equal scope (two or more numeric cells, v_min = v_max): the equal-values check is
+ * allowed so the thresholds resolve; `evaluateDataBar` then paints only a shape a registered all-equal reading covers. */
+const DELEGATED_ALL_EQUAL_CHECKS: ReadonlySet<string> = new Set([...DELEGATED_THRESHOLD_CHECKS, 'scale:degenerate-equal-values'])
+
+/**
+ * The bar all-equal follow-up (brief cf-bar-allequal; owner rulings 2026-11-23, docs/validation/xlsx-cf.md §14.z.19): what
+ * a bar draws over an all-equal scope (two or more numeric cells, v_min = v_max), per capability and shape. Each id names
+ * exactly one shape (`barAllEqualShape`); a cell of that shape paints only when the id's reading is registered here AND its
+ * capability is evidenced, else it stays `cf-degenerate-scope` (Ruling S3-E), as on main.
+ * - `bar:degenerate-equal-values` (stage3-bar-degenerate B, verified and published: Excel 86..174, 89 of 177 px, matched
+ *   `half`): min/max bounds, x14 paired, 0/100, solid, no border, `context` on an LTR sheet, automatic axis, values > 0.
+ *   Registered `half`: the bar spans 0..0.5 of the span. Owner ruling Q1: it announces no position (no `valueFraction`).
+ */
+export const CF_BAR_ALL_EQUAL_READINGS = {
+  'bar:degenerate-equal-values': ['half'],
+} as const satisfies Readonly<Record<string, readonly string[]>>
+export type CfBarAllEqualCap = keyof typeof CF_BAR_ALL_EQUAL_READINGS
+export type CfBarAllEqualReading = (typeof CF_BAR_ALL_EQUAL_READINGS)[CfBarAllEqualCap][number]
+/** The reading production implements per id. 2a registers the verified evidence's `half` on its own shape only. */
+export const CF_BAR_ALL_EQUAL_PRODUCTION_READINGS: Readonly<Partial<Record<string, string>>> = Object.freeze({ 'bar:degenerate-equal-values': 'half' })
+let proposedAllEqualReadings: Readonly<Partial<Record<string, string>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfBarAllEqualReadings(readings: Readonly<Partial<Record<string, string>>> | null): void {
+  proposedAllEqualReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The registered all-equal reading of one id (undefined: unregistered, or not one of the id's readings), a proposed one first. */
+export function cfBarAllEqualReading(capability: string): CfBarAllEqualReading | undefined {
+  const table = proposedAllEqualReadings && Object.prototype.hasOwnProperty.call(proposedAllEqualReadings, capability) ? proposedAllEqualReadings : CF_BAR_ALL_EQUAL_PRODUCTION_READINGS
+  const r = table[capability]
+  const allowed = (CF_BAR_ALL_EQUAL_READINGS as Readonly<Record<string, readonly string[]>>)[capability]
+  return r !== undefined && allowed !== undefined && allowed.includes(r) ? r as CfBarAllEqualReading : undefined
+}
+
+/** The all-equal shape id a definition falls in, or undefined (withheld). `equalThresholds`: lo = hi (statistical bounds). */
+export function barAllEqualShape(def: CfDataBarDefinition, equalThresholds: boolean, lo: number): CfBarAllEqualCap | undefined {
+  if (!equalThresholds) return undefined
+  const [b0, b1] = def.bounds
+  if (b0.type !== 'min' || b1.type !== 'max') return undefined
+  if (def.pairing !== 'x14' || def.gradient || def.border || def.axisPosition !== 'automatic' || !(lo > 0)) return undefined
+  const contextLtr = def.direction === 'context' && def.sheetRightToLeft === false
+  if (def.minLength === 0 && def.maxLength === 100 && contextLtr) return 'bar:degenerate-equal-values'
+  return undefined
+}
+
 /**
  * Resolves `[low, high]` for a bar. `autoMin`/`autoMax` are bar-specific: each resolves to the rule its capability
  * verified (`barAutoBoundEvidence`: `min(0, v_min)`/`max(0, v_max)` or `v_min`/`v_max`), else it is unresolved; every other bound is resolved by the shared
@@ -104,11 +148,15 @@ export function resolveBarThresholds(
       delegated.push({ bound: b })
     }
   }
-  const out = resolveScaleThresholds(delegated, stats, { hasEvidence: cap => DELEGATED_THRESHOLD_CHECKS.has(cap) })
+  // An all-equal scope resolves its thresholds (equal for statistical bounds); evaluateDataBar decides whether a
+  // registered all-equal reading covers the shape, else withholds it (cf-degenerate-scope, Ruling S3-E).
+  const allEqual = stats.numericCount >= 2 && stats.min !== undefined && stats.min === stats.max
+  const checks = allEqual ? DELEGATED_ALL_EQUAL_CHECKS : DELEGATED_THRESHOLD_CHECKS
+  const out = resolveScaleThresholds(delegated, stats, { hasEvidence: cap => checks.has(cap) })
   if (out.kind !== 'ready') return out
   const [lo, hi] = out.value as readonly [number, number]
-  // resolveScaleThresholds already refuses inverted and equal thresholds under the denied degenerate gates.
-  return lo < hi ? { kind: 'ready', value: [lo, hi] } : { kind: 'unresolved', reason: 'cf-degenerate-scope' }
+  // resolveScaleThresholds already refuses inverted thresholds, and equal ones except over an all-equal scope.
+  return lo < hi || (lo === hi && allEqual) ? { kind: 'ready', value: [lo, hi] } : { kind: 'unresolved', reason: 'cf-degenerate-scope' }
 }
 
 /** `|v| / (hi - lo)` without overflowing the span (Lesson 6). */
@@ -128,7 +176,7 @@ export function evaluateDataBar(
   value: CfLiteral | number,
   def: CfDataBarDefinition,
   thresholds: readonly [number, number],
-  stats: Pick<CfRangeStatistics, 'min' | 'max'>,
+  stats: Pick<CfRangeStatistics, 'min' | 'max'> & Partial<Pick<CfRangeStatistics, 'numericCount'>>,
   options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout; lengthsRule?: CfBarDefaultLengths } = {},
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
@@ -140,7 +188,17 @@ export function evaluateDataBar(
   if (direction === undefined) return unmeasured()
 
   const [lo, hi] = thresholds
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(lo < hi)) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(lo <= hi)) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
+  // The all-equal follow-up: an all-equal scope (two or more numeric cells, v_min = v_max), or equal thresholds, paints
+  // only in a shape whose all-equal reading is registered and evidenced; anything else is withheld (Ruling S3-E).
+  const allEqual = stats.min !== undefined && stats.min === stats.max
+  let allEqualReading: CfBarAllEqualReading | undefined
+  if (lo === hi || allEqual) {
+    if (!allEqual || !((stats.numericCount ?? 0) >= 2)) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
+    const cap = barAllEqualShape(def, lo === hi, lo)
+    allEqualReading = cap !== undefined && checkEvidence(cap) ? cfBarAllEqualReading(cap) : undefined
+    if (allEqualReading === undefined) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
+  }
   // S3-E: a scope with cells beyond the bounds is unresolved for the whole rule, never clamped.
   if (stats.min === undefined || stats.max === undefined || stats.min < lo || stats.max > hi) {
     return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
@@ -155,6 +213,11 @@ export function evaluateDataBar(
   }
   if (!Number.isFinite(v)) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   if (v < lo || v > hi) return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
+
+  if (lo === hi) {
+    // A statistical all-equal scope (lo = hi = v): the registered reading's length; owner ruling Q1: no announced position.
+    return finish(def, checkEvidence, { axisFraction: 0, startFraction: 0, endFraction: allEqualLength(allEqualReading!), valueFraction: undefined, isNegative: false, axisColor: undefined, direction })
+  }
 
   // Ruling S3-P: what the bar announces is the VALUE's position between the resolved thresholds, whatever the geometry
   // (default lengths and an axis move the painted endpoint, never the value). Under a mixed-sign axis the axis value
@@ -219,6 +282,13 @@ export function evaluateDataBar(
   return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, valueFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
 }
 
+/** The end fraction of a statistical all-equal bar under its reading (`half`: half of the span). */
+function allEqualLength(reading: CfBarAllEqualReading): number {
+  switch (reading) {
+    case 'half': return 0.5
+  }
+}
+
 /**
  * Where a non-0/100 bar's length starts (as a share of the span) under the selected rule (`BAR_LENGTH_RULES`,
  * scripts/cf-refs/verify.ts): `linear` at minLength, `half-min` at minLength / 2 (the slope is maxLength - minLength
@@ -245,7 +315,7 @@ function defaultLengthsStart(def: CfDataBarDefinition, selected: CfBarDefaultLen
 function finish(
   def: CfDataBarDefinition,
   checkEvidence: (cap: string) => boolean,
-  g: { axisFraction: number; startFraction: number; endFraction: number; valueFraction: number; isNegative: boolean; axisColor: number | undefined; direction: 'leftToRight' | 'rightToLeft' },
+  g: { axisFraction: number; startFraction: number; endFraction: number; valueFraction: number | undefined; isNegative: boolean; axisColor: number | undefined; direction: 'leftToRight' | 'rightToLeft' },
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
   const { axisFraction, startFraction, endFraction, valueFraction, isNegative, axisColor, direction } = g
   // S3-L negative colours, each under its own evidence; colours never default (S3-F).
@@ -269,13 +339,13 @@ function finish(
   }
   if (fillColor === undefined || (def.border && borderColor === undefined)) return unmeasured()
 
-  for (const n of [axisFraction, startFraction, endFraction, valueFraction]) {
+  for (const n of [axisFraction, startFraction, endFraction, ...(valueFraction !== undefined ? [valueFraction] : [])]) {
     if (!Number.isFinite(n) || n < 0 || n > 1) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   }
   return {
     kind: 'ready',
     value: Object.freeze({
-      axisFraction, startFraction, endFraction, valueFraction, fillColor,
+      axisFraction, startFraction, endFraction, ...(valueFraction !== undefined ? { valueFraction } : {}), fillColor,
       ...(borderColor !== undefined ? { borderColor } : {}),
       isGradient: def.gradient, isNegative,
       ...(axisColor !== undefined ? { axisColor } : {}),

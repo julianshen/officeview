@@ -278,7 +278,11 @@ describe('published bars agree on the resident and the paged worker paths', () =
         for (let row = part.firstRow; row <= part.lastRow; row++) for (let col = part.firstCol; col <= part.lastCol; col++) {
           const o = lease.value.at(row, col)
           const bar = o.kind === 'ready' ? o.value.visual?.dataBar : undefined
-          if (bar) expect(bar.valueFraction, `${c.id} ${row},${col} valueFraction`).toBeGreaterThanOrEqual(0)
+          // A statistical all-equal bar (stage3-bar-degenerate B, lo = hi) announces no position (owner ruling Q1): no valueFraction.
+          if (bar) {
+            if (c.id === 'stage3-bar-degenerate' && col === 1) expect('valueFraction' in bar, `${c.id} ${row},${col} valueFraction`).toBe(false)
+            else expect(bar.valueFraction, `${c.id} ${row},${col} valueFraction`).toBeGreaterThanOrEqual(0)
+          }
           if (bar) resident.set(`${row},${col}`, { value: bar.valueFraction, start: bar.startFraction, end: bar.endFraction, axis: bar.axisFraction, fill: bar.fillColor, neg: bar.isNegative, border: bar.borderColor, axisColor: bar.axisColor, gradient: bar.isGradient, show: bar.showValue, rtl: bar.direction === 'rightToLeft' })
         }
         lease.release()

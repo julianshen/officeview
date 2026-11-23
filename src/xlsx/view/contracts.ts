@@ -405,8 +405,9 @@ export interface CfCellStateWire {
   readonly scale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
   /** Ruling S3-S: the per-cell resolved bar descriptor, numbers and booleans only; `rtl` encodes the direction. */
   readonly bar?: Readonly<{ ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
-    /** The value's position between min and max, 0..1 (Ruling S3-P); the announced percentage, never the geometry. */
-    valueFraction: number
+    /** The value's position between min and max, 0..1 (Ruling S3-P); the announced percentage, never the geometry.
+     * Absent when the value has no position (lo = hi, owner ruling Q1): nothing is announced. */
+    valueFraction?: number
     borderColor?: number; axisColor?: number; isGradient: boolean; isNegative: boolean; showValue: boolean; rtl: boolean }>
   /** Ruling S4-Q: the per-cell evaluated icon, numbers and booleans only; `set` indexes the frozen `CF_ICON_SET_NAMES`. */
   readonly icon?: Readonly<{ ruleId: number; set: number; iconId: number; bucket: number; buckets: number; showValue: boolean }>
@@ -504,8 +505,10 @@ export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & P
     if (cell.scale.fraction !== undefined) bytes += 16 + 8
   }
   if (cell.bar !== undefined) {
-    // 16 prop slot + 24 bar object + ten required number/boolean fields at (16 + 8) each, plus each optional colour.
-    bytes += 16 + 24 + 10 * (16 + 8)
+    // 16 prop slot + 24 bar object + nine required number/boolean fields at (16 + 8) each, plus the optional value
+    // position and each optional colour.
+    bytes += 16 + 24 + 9 * (16 + 8)
+    if (cell.bar.valueFraction !== undefined) bytes += 16 + 8
     if (cell.bar.borderColor !== undefined) bytes += 16 + 8
     if (cell.bar.axisColor !== undefined) bytes += 16 + 8
   }

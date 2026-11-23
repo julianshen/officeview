@@ -87,8 +87,9 @@ export type CfIconDescriptor = Readonly<{ ruleId: number; set: CfIconSetName | '
 export type CfBarDescriptor = Readonly<{
   ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
   /** The value's own position between the resolved min and max thresholds, 0..1: what the bar announces (Ruling S3-P).
-   * Separate from the painted geometry, which default lengths and an axis shift away from the value. */
-  valueFraction: number
+   * Separate from the painted geometry, which default lengths and an axis shift away from the value. Absent when the value
+   * has no position (a statistical all-equal scope, lo = hi: owner ruling Q1, 2026-11-23): the bar announces none. */
+  valueFraction?: number
   borderColor?: number; isGradient: boolean; isNegative: boolean; axisColor?: number; showValue: boolean
   direction: 'leftToRight' | 'rightToLeft'
 }>

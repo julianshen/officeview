@@ -1204,7 +1204,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
     const BAR_FINDINGS: Record<string, Finding> = {
       'stage3-bar-lengths:G': { outcome: 'withheld', reason: 'percentile 10/90 leaves values beyond the bounds: S3-E keeps the rule unresolved (Excel clamps; bar:degenerate-beyond-bounds lifts nothing in the evaluator yet)' },
-      'stage3-bar-degenerate:B': { outcome: 'withheld', reason: 'all values equal: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
+      // stage3-bar-degenerate B (all 42 under min/max) paints since the all-equal follow-up registered the verified half
+      // length of bar:degenerate-equal-values on its evidence shape (docs/validation/xlsx-cf.md §14.z.19).
       'stage3-bar-degenerate:C': { outcome: 'withheld', reason: 'single numeric cell: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
       // Since the bar:bounds-num follow-up (stage3-bar-bounds-num verified num) the num-bounded bars of rendering, geometry
       // and showvalue paint and are checked against Excel's px below; these two stay withheld by S3-E itself.
@@ -1329,7 +1330,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
     // 555/498/27/250 since the bar:bounds-num follow-up (was 472/428/84/246): the num-bounded bars now paint, each at Excel's px.
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 555, measuredPainted: 498, withheldFound: 27, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
+    // 560/503/22 since the all-equal follow-up (stage3-bar-degenerate B2:B6 paint the verified half length).
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 560, measuredPainted: 503, withheldFound: 22, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     // Run 8 adds stage3-bar-auto-bounds J and K: ten more explicit black axes.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(38)

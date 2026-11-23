@@ -27,13 +27,12 @@ let census: AllEqualCensus
 const get = async (): Promise<AllEqualCensus> => (census ??= await barAllEqualCensus(manifest))
 
 describe('bar all-equal census (every measured capture)', () => {
-  it('scans every measured case with a bar; the cf-degenerate-scope refusals are exactly the all-equal rules plus num 0/0', async () => {
+  it('scans every measured case with a bar; the cf-degenerate-scope refusals are exactly the all-equal rules (but the verified B, since 2a) plus num 0/0', async () => {
     const c = await get()
     const withBars = manifest.cases.filter(x => x.status === 'measured' && x.markers.some(m => m.ruleType === 'dataBar')).map(x => x.id).sort()
     expect(Object.keys(c.scanned).sort()).toEqual(withBars)
     expect(Object.values(c.scanned).reduce((a, b) => a + b, 0)).toBe(133)
     expect(c.degenerate.map(d => `${d.caseId} ${d.sqref} ${d.shape} ${d.position}`)).toEqual([
-      'stage3-bar-degenerate B2:B6 all-equal statistical (lo = hi = v)',
       'stage3-bar-degenerate C2 single-cell statistical (lo = hi = v)',
       'stage3-bar-geometry H2:H6 all-equal at hi',
       'stage3-bar-geometry I2:I6 all-equal at hi',
@@ -42,7 +41,7 @@ describe('bar all-equal census (every measured capture)', () => {
     ])
   }, 300_000)
 
-  it('records each all-equal rule: shape, Excel px and production (cf-degenerate-scope at every cell today)', async () => {
+  it('records each all-equal rule: shape, Excel px and production (B paints the verified half since 2a; the rest cf-degenerate-scope)', async () => {
     const c = await get()
     expect(c.rules.map(r => [r.caseId, r.sqref, r.shape, r.pairing, r.bounds, r.lengths, r.gradient, r.border, r.direction, r.axis, r.value])).toEqual([
       ['stage3-bar-degenerate', 'B2:B6', 'all-equal', 'paired', 'min / max', '0/100', false, false, 'context', 'automatic', 42],
@@ -55,7 +54,8 @@ describe('bar all-equal census (every measured capture)', () => {
     expect(px('C2')).toEqual(['C2 266..354 89/177'])
     expect(px('H2:H6')).toEqual(['H2', 'H3', 'H4', 'H5', 'H6'].map(r => `${r} 1459..1467 9/9`))
     expect(px('I2:I6')).toEqual(['I2', 'I3', 'I4', 'I5', 'I6'].map(r => `${r} 1471..1647 177/177`))
-    for (const r of c.rules) for (const x of r.cells) expect(x.production, `${r.caseId}:${x.ref}`).toBe('cf-degenerate-scope')
+    // Before 2a every cell here was cf-degenerate-scope (fa933300); B2:B6 now paint 0..0.5 of the span (the 89 px Excel drew).
+    for (const r of c.rules) for (const x of r.cells) expect(x.production, `${r.caseId}:${x.ref}`).toBe(r.sqref === 'B2:B6' ? 'painted 0..0.5' : 'cf-degenerate-scope')
   }, 300_000)
 
   it('closed rules against every captured cell (+-1 px): half fits only the statistical scopes; evaluate and full fit only num 0/100', async () => {
