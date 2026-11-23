@@ -47,11 +47,12 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { copyArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
 import { sessionLayout, type ServerSheetLayout } from './sheet/layout'
+import { runSheetCopy } from './sheet/copy-turn'
 import { SessionViews, ViewStateLedger, type WireSizes } from './sheet/view-state'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
@@ -1119,6 +1120,41 @@ export function createStreamServer(o: StreamServerOptions) {
     }
   }
 
+  /**
+   * Stage 4b (P7, P8): `sheet-copy {reqId, token, sheetId, viewGen, selection}` on a `sheet-view@1` session. In order:
+   * the token (`textOp`); `copyArgs` (the P7 interval-only selection), else `policy-refused` (uncharged: no rate, no
+   * paragraphs); the `'text'` rate (refuse-only); the fingerprint (else close `layout-changed`). Then `runSheetCopy`
+   * queues it on the sid's copy queue: the caps in force (off ⇒ `text-unavailable`), `stale-view` when the sheet's
+   * viewGen is no longer the request's (ruling F8: after the token and the charge, before any count or audit row), the
+   * pool's copy job over the text view at that viewGen's sizes, the 4 MiB cap, the per-copy and session caps, the
+   * audit row (`sheetId`, the bounding `rect`, the sheet index as the unit range), the shared counter and the
+   * `copy-result` chunks. A queued copy re-charges the document ledger when it runs.
+   */
+  async function onSheetCopy(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = copyArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    const i = args.sheetIndex
+    await runSheetCopy({
+      slot: sd, reqId, sheetIndex: i, sheetId: args.sheetId, viewGen: args.viewGen, selection: args.selection,
+      view: () => ({ viewGen: sd.views.viewGen(i), sizes: sd.views.canonical(i) }),
+      caps: () => sd.policy.copy,
+      job: (sizes, maxBytes) => {
+        // A queued copy can outlive the parse: charge it when it runs.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'copy', sheetIndex: i, selection: args.selection, sizes, maxBytes }, undefined, ws.data.gone.signal)
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'copy', ...r }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
+    })
+  }
+
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
    * audited and charged before `print-start`; everything after the token
    * await up to `print-start` is synchronous, so two prints cannot both pass
@@ -1721,6 +1757,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'sheet-resize') return onSheetResize(ws, m)
     if (m.type === 'sheet-fit') return onSheetFit(ws, m)
     if (m.type === 'sheet-find') return onSheetFind(ws, m)
+    if (m.type === 'sheet-copy') return onSheetCopy(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)

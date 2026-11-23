@@ -746,3 +746,19 @@ export async function manyHits(): Promise<Uint8Array> {
   const rows: XlsxSheetSpec['rows'] = Array.from({ length: MANY_HITS }, (_, i) => ({ r: i + 1, cells: [textCell(st, `A${i + 1}`, `hit-${i + 1}`)] }))
   return sheetWorkbook(rows, st.list)
 }
+
+/** `bigText`: its cells (A1:A{BIG_TEXT.rows}), each `BIG_TEXT.chars` copies of U+6587 (3 UTF-8 bytes, 1 UTF-16 unit). */
+export const BIG_TEXT = Object.freeze({ rows: 200, chars: 9_000 })
+/**
+ * Task 7: about 5.15 MiB of UTF-8 cell text (200 × 9,000 × 3 bytes + 199 newlines) that local `serializeSelection`
+ * still serializes (1.8M UTF-16 units, under its 8 MiB clipboard cap), so the server's 4 MiB UTF-8 copy cap is what
+ * refuses it. Each cell's text is distinct by its leading row number.
+ */
+export async function bigText(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: BIG_TEXT.rows }, (_, i) => {
+    const prefix = String(i + 1)
+    return { r: i + 1, cells: [textCell(st, `A${i + 1}`, prefix + '文'.repeat(BIG_TEXT.chars - prefix.length))] }
+  })
+  return sheetWorkbook(rows, st.list)
+}

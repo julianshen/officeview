@@ -1,7 +1,7 @@
 /**
  * Stage 4b (plan P2, P6–P10): the `sheet-text` pool job. Each op runs a local engine over the text view (Task 1), so
- * parity with local mode holds by construction: `fit` (`autoFitSize`) and `find` (`WorkbookFind`) here; `copy` and
- * `a11y` in Tasks 7–8.
+ * parity with local mode holds by construction: `fit` (`autoFitSize`), `find` (`WorkbookFind`) and `copy`
+ * (`serializeSelection`) here; `a11y` in Task 8.
  *
  * `textInputs` is the one place the ops get the local viewer's inputs (`InteractiveSheetDoc.tsx` find ~1814–1857 and
  * copy ~2611–2659): the row order, the row and column visibility, the store and the scope-aware display text. Fit
@@ -13,6 +13,8 @@ import { autoFitSize, createFitMeasure } from '../../../src/xlsx/view/autoFit'
 import type { Measure } from '../../../src/xlsx/view/axisSizes'
 import type { RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
 import { withUnavailableFormulas } from '../../../src/xlsx/view/unavailableFormulas'
+import { serializeSelection } from '../../../src/xlsx/view/copy'
+import type { GridSelection } from '../../../src/xlsx/view/contracts'
 import { WorkbookFind } from '../../../src/xlsx/view/find'
 import type { EffectiveFormatScope, FormatBudget } from '../../../src/xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../../src/xlsx/view/source'
@@ -188,6 +190,54 @@ export async function findAnswer(view: TextView, job: Extract<SheetTextJob, { op
   return { hits: hits.slice(0, job.limit), more: hits.length > job.limit }
 }
 
+/** The local selection of a validated wire selection (P7): each range's rows rebuilt as `{kind: 'intervals'}`. */
+export function gridSelectionOf(s: WireSelection): GridSelection {
+  return {
+    active: s.active ? { row: s.active[0], col: s.active[1] } : null,
+    anchor: s.anchor ? { row: s.anchor[0], col: s.anchor[1] } : null,
+    ranges: s.ranges.map((r) => ({ rows: { kind: 'intervals' as const, intervals: r.rows.map(([r0, r1]) => ({ r0, r1 })) }, cols: r.cols.map(([c0, c1]) => ({ c0, c1 })) })),
+  }
+}
+
+const COPY_DOC_ID = 'sheet-copy'
+
+/**
+ * One sheet's copy (P8): local `serializeSelection` over an object source of the text document, with the local copy's
+ * inputs (`textInputs`): the plain store (local copy does not mark unavailable formulas; such a cell refuses the copy
+ * as locally), the identity order, the authored row visibility, the zero-width columns hidden, the CF-effective
+ * `textOf`, and the view's CF scope (lent: the engine disposes each batch's scope). A withheld cell is blank in the view,
+ * so it is an empty field. `paragraphs` counts the non-empty fields (each selected cell is read and formatted once).
+ *
+ * The local engine's own size refusal (`resource-limit`, before or while serializing) is `{refused: 'too-large', bytes:
+ * 0}` (no byte count is known); text over `job.maxBytes` UTF-8 bytes is `{refused: 'too-large', bytes}`. Any other
+ * outcome fails the job (answered `policy-refused`).
+ */
+export async function copyAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'copy' }>, workbook: XlsxDocument): Promise<Extract<SheetTextReply, { op: 'copy' }>> {
+  const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), COPY_DOC_ID)
+  const inputs = textInputs(view, source)
+  const store = inputs.store()
+  const owner = initialWorkbookOwner(COPY_DOC_ID, source.sheets)
+  const v = owner.sheetVector.find((e) => e.sheetId === inputs.sheetId)!
+  const identity = { docId: COPY_DOC_ID, sheetId: inputs.sheetId, valueGen: v.valueGen, fontGen: owner.fontGen, viewGen: v.revision }
+  const scope = view.scope
+  let paragraphs = 0
+  const result = await serializeSelection({
+    store, owner: identity, currentOwner: () => identity, allowed: () => true, signal: new AbortController().signal,
+    selection: gridSelectionOf(job.selection), order: inputs.order, visibility: inputs.visibility, columns: inputs.columns,
+    format: (cell, allocation, s) => {
+      const text = inputs.textOf(cell, allocation, s)
+      if (text !== '') paragraphs++
+      return text
+    },
+    ...(scope ? { prepareScope: () => Promise.resolve(borrowed(scope)) } : {}),
+  })
+  if (result.kind === 'refused' && result.code === 'resource-limit') return { op: 'copy', refused: 'too-large', bytes: 0 }
+  if (result.kind !== 'ready') throw new Error(`sheet-copy: ${result.kind}${result.kind === 'refused' ? ` (${result.code})` : ''}`)
+  const bytes = Buffer.byteLength(result.text, 'utf8')
+  if (bytes > job.maxBytes) return { op: 'copy', refused: 'too-large', bytes }
+  return { op: 'copy', text: result.text, paragraphs }
+}
+
 /** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views;
  * `workbook`: the servable workbook the text document is built over). */
 export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; measureText: Measure }): Promise<SheetTextReply> {
@@ -197,8 +247,11 @@ export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetI
       const view = await deps.viewOf(job.sheetIndex, job.sizes)
       return { op: 'find', ...await findAnswer(view, job, deps.workbook()) }
     }
-    // Tasks 7–8 replace these.
-    case 'copy':
+    case 'copy': {
+      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      return await copyAnswer(view, job, deps.workbook())
+    }
+    // Task 8 replaces this.
     case 'a11y':
       throw new Error(`sheet-text: op '${job.op}' is not implemented`)
     default: {
