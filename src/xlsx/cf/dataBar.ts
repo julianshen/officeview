@@ -95,8 +95,9 @@ const DELEGATED_ALL_EQUAL_CHECKS: ReadonlySet<string> = new Set([...DELEGATED_TH
  *   through the verified half-min@x14 rule: 0.05 + 0.8 · 0.5 = 0.45), `none`, `full` (t = 1 through that rule: 0.85);
  *   these twins too announce no position;
  * - `bar:all-equal-distinct-bounds`: two literal num bounds with lo < hi over an all-equal scope whose value lies within
- *   them (stage3-bar-geometry H and I, a recorded finding: Excel drew full bars at hi), x14 paired, solid, no border,
- *   automatic axis, `context` on an LTR sheet, 0/100 or 10/90: the cell is evaluated as usual at an effective value
+ *   them (stage3-bar-geometry H and I, a recorded finding: Excel drew full bars at hi), not of mixed sign (no zero cell
+ *   locates the axis, so it cannot be measured), x14 paired, solid, no border, automatic axis, `context` on an LTR sheet,
+ *   0/100 or 10/90: the cell is evaluated as usual at an effective value
  *   `evaluate` (v), `full` (hi, or lo for a negative value), `degenerate-half` (the bounds' midpoint, the statistical
  *   answer's t = 0.5), or `none` (no bar). It announces the real value's position (lo < hi, Ruling S3-P).
  */
@@ -126,16 +127,17 @@ export function cfBarAllEqualReading(capability: string): CfBarAllEqualReading |
 }
 
 /** The all-equal shape id a definition falls in, or undefined (withheld). `equalThresholds`: lo = hi (statistical bounds). */
-export function barAllEqualShape(def: CfDataBarDefinition, equalThresholds: boolean, lo: number): CfBarAllEqualCap | undefined {
+export function barAllEqualShape(def: CfDataBarDefinition, equalThresholds: boolean, lo: number, hi: number = lo): CfBarAllEqualCap | undefined {
   if (def.pairing !== 'x14' || def.gradient || def.border || def.axisPosition !== 'automatic') return undefined
   const [b0, b1] = def.bounds
   const contextLtr = def.direction === 'context' && def.sheetRightToLeft === false
   const full = def.minLength === 0 && def.maxLength === 100
   const d1090 = def.minLength === 10 && def.maxLength === 90
   if (!equalThresholds) {
-    // Two literal num bounds (a formula-resolved one was never captured in this shape).
+    // Two literal num bounds (a formula-resolved one was never captured in this shape), not of mixed sign: an all-equal
+    // scope has no zero cell to locate the automatic axis, so the case cannot measure that layout (stage3-bar-all-equal).
     const literal = (b: CfBarBound): boolean => b.type === 'num' && !('resolved' in b && b.resolved !== undefined)
-    return literal(b0) && literal(b1) && contextLtr && (full || d1090) ? 'bar:all-equal-distinct-bounds' : undefined
+    return literal(b0) && literal(b1) && contextLtr && (full || d1090) && !(lo < 0 && hi > 0) ? 'bar:all-equal-distinct-bounds' : undefined
   }
   if (b0.type !== 'min' || b1.type !== 'max' || !(lo > 0)) return undefined
   if (full && contextLtr) return 'bar:degenerate-equal-values'
@@ -222,7 +224,7 @@ export function evaluateDataBar(
   let allEqualReading: CfBarAllEqualReading | undefined
   if (lo === hi || allEqual) {
     if (!allEqual || !((stats.numericCount ?? 0) >= 2)) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
-    const cap = barAllEqualShape(def, lo === hi, lo)
+    const cap = barAllEqualShape(def, lo === hi, lo, hi)
     allEqualReading = cap !== undefined && checkEvidence(cap) ? cfBarAllEqualReading(cap) : undefined
     if (allEqualReading === undefined) return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
   }

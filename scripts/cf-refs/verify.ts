@@ -2347,7 +2347,10 @@ export const BAR_MODEL_KNOBS = {
   inverted: ['swap', 'literal', 'none'],
   beyond: ['clamp', 'none'],
   percentDomain: ['literal', 'clamp', 'none'],
-  equal: ['half', 'none', 'full'],
+  // The all-equal follow-up adds the statistical twins' readings (half-span, half-min, half-ltr) after the first three.
+  equal: ['half', 'none', 'full', 'half-span', 'half-min', 'half-ltr'],
+  // Distinct bounds (lo < hi) over an all-equal scope (stage3-bar-all-equal): the effective value of the cell.
+  allEqual: ['evaluate', 'full', 'degenerate-half', 'none'],
   hidden: ['include', 'exclude'],
   filtered: ['include', 'exclude'],
   ranges: ['union', 'per-range'],
@@ -2437,6 +2440,14 @@ export const BAR_CAPABILITY_HYPOTHESES: Readonly<Record<string, BarCapabilitySpe
   'bar:lengths-all-negative': { knob: 'negLayout', values: ['axis', 'from-min'] },
   'bar:degenerate-equal-values': { knob: 'equal', values: ['half', 'none', 'full'] },
   'bar:degenerate-single-cell': { knob: 'equal', values: ['half', 'none', 'full'] },
+  // The all-equal follow-up (stage3-bar-all-equal, pre-registered; owner rulings 2026-11-23). The twins of the verified
+  // statistical shape: explicit leftToRight, rightToLeft (half is mirrored by the authored direction; half-ltr is not), and
+  // 10/90 lengths (half-span: 0.5 of the span; half-min: t = 0.5 through the verified half-min@x14 rule; full: t = 1 there).
+  'bar:degenerate-equal-ltr': { knob: 'equal', values: ['half', 'none', 'full'] },
+  'bar:degenerate-equal-rtl': { knob: 'equal', values: ['half', 'half-ltr', 'none', 'full'] },
+  'bar:degenerate-equal-10-90': { knob: 'equal', values: ['half-span', 'half-min', 'none', 'full'], knobs: { lengthRule: 'half-min@x14' } },
+  // Distinct literal bounds over an all-equal scope; its non-equal controls predict the same under every reading.
+  'bar:all-equal-distinct-bounds': { knob: 'allEqual', values: ['evaluate', 'full', 'degenerate-half', 'none'], knobs: { lengthRule: 'half-min@x14' } },
   'bar:degenerate-inverted': { knob: 'inverted', values: ['swap', 'literal', 'none'], nuisance: ['beyond'] },
   'bar:degenerate-beyond-bounds': { knob: 'beyond', values: ['clamp', 'none'] },
   'bar:bounds-out-of-domain': { knob: 'percentDomain', values: ['literal', 'clamp', 'none'] },
@@ -2670,6 +2681,12 @@ function predictBarCell(
     if (k.inverted === 'none') return { kind: 'none', text }
     if (k.inverted === 'swap') [lo, hi] = [hi, lo]
   }
+  // The all-equal follow-up: distinct bounds over an all-equal scope (two or more numeric cells, v_min = v_max, the value
+  // within the bounds) evaluate at the reading's effective value; `evaluate` (the first value) is every earlier prediction.
+  if (k.allEqual !== 'evaluate' && lo < hi && nums.length >= 2 && nmin === nmax && v >= lo && v <= hi) {
+    if (k.allEqual === 'none') return { kind: 'none', text }
+    v = k.allEqual === 'full' ? (v < 0 ? lo : hi) : lo / 2 + hi / 2
+  }
   // Geometry of the cell (a merged host uses the merged rect unless the host-column hypothesis holds).
   let cellW = box.w
   if (merge && k.merged === 'host-column-all') cellW = Math.round(geom.colWidthsPt[merge.minCol - geom.minCol] ?? box.w)
@@ -2745,6 +2762,7 @@ function predictBarCell(
     let t: number
     if (hi === lo) {
       if (k.equal === 'none') return { kind: 'none', text }
+      if (k.equal === 'half-ltr') rtl = false
       t = k.equal === 'full' ? 1 : 0.5
     } else t = (v - lo) / (hi - lo)
     if (t < 0 || t > 1) {
@@ -2757,6 +2775,9 @@ function predictBarCell(
     const applies = !fullLengths && form !== 'linear' &&
       (cls === 'all' || (cls === 'x14' && rule.pairing !== 'base-only' && !useBase) || (cls === 'solid' && fillMode === 'solid'))
     if (applies && form === 'half-min') frac = (minL / 2 + (maxL - minL) * t) / 100
+    // The statistical twins' 10/90 readings name their length outright, whatever the length rule.
+    if (hi === lo && k.equal === 'half-span') frac = 0.5
+    if (hi === lo && k.equal === 'half-min') frac = (minL / 2 + (maxL - minL) * 0.5) / 100
     segLen = len(frac, S)
     if (applies && form === 'offset-9pt') segLen = Math.max(0, segLen - 9)
     segStart = 0

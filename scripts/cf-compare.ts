@@ -588,7 +588,9 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     // A data bar is no cell style (Ruling S3-I) and Excel's DisplayFormat records no fill for it, so on a bar cell only
     // the style counts as applied (Task 39 fix round 1, F2: E2/G2/Y2 zero-length bars at the column minimum).
     const barCell = c.markers.some(m => m.ruleType === 'dataBar' && isCellInSqref(a1Of(row, col), m.sqref))
-    const applied = hasStyle || (hasWinningDesc && !(barCell && c.stage === 5))
+    // A bar over a statistical all-equal scope announces no position (owner ruling Q1, 2026-11-23), so it has no
+    // descriptor: its ready bar outcome is the applied evidence there.
+    const applied = hasStyle || (hasWinningDesc && !(barCell && c.stage === 5)) || (c.stage !== 5 && outcome?.kind === 'ready' && outcome.bar != null)
     const unresolved = outcome === undefined
       || outcome.kind === 'unresolved'
       || (outcome.writes && outcome.writes.length > 0)

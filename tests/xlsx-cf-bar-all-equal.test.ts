@@ -219,11 +219,8 @@ describe('2b: the pre-registered all-equal readings are implemented, selectable 
       expect(geo(at('degenerate-half', 30, n1090))).toEqual([0, 0.45, 'leftToRight', 0.3])
       expect(geo(at('full', 30, n1090))).toEqual([0, 0.85, 'leftToRight', 0.3])
       // Mixed-sign bounds (automatic axis at 40/140), and all-negative bounds (grows from the right edge).
-      const mixed = NUM(-40, 100, { axisArgb: 0xff000000 })
-      const m = at('evaluate', 20, mixed) as { kind: 'ready'; value: CfBarDescriptor }
-      expect([+m.value.axisFraction.toFixed(12), +(m.value.endFraction - m.value.axisFraction).toFixed(12)]).toEqual([+(40 / 140).toFixed(12), +((100 / 140) * 0.2).toFixed(12)])
-      const mh = at('degenerate-half', 20, mixed) as { kind: 'ready'; value: CfBarDescriptor }
-      expect(+(mh.value.endFraction - mh.value.axisFraction).toFixed(12)).toBe(+((100 / 140) * 0.3).toFixed(12))
+      // Mixed-sign bounds stay withheld under every reading (no zero cell locates the axis: unmeasurable).
+      for (const r of ['evaluate', 'full', 'degenerate-half', 'none']) expect(at(r, 20, NUM(-40, 100, { axisArgb: 0xff000000 })), r).toEqual(DEGENERATE)
       const neg = NUM(-100, -20)
       const e = at('evaluate', -40, neg) as { kind: 'ready'; value: CfBarDescriptor }
       expect([+e.value.startFraction.toFixed(12), e.value.endFraction, e.value.isNegative]).toEqual([0.75, 1, true])
@@ -239,9 +236,10 @@ describe('2b: the pre-registered all-equal readings are implemented, selectable 
         expect(ev(30, evidenceShape({ bounds: [{ type: 'num', value: 0, resolved: 'formula' } as never, { type: 'num', value: 100 }] }), [30, 30, 30])).toEqual(DEGENERATE)
       })
       expect(geo(ev(30, n0100, [30, 60, 90]))).toEqual([0, 0.3, 'leftToRight', 0.3])
-      // Overflow-safe midpoint; a non-finite intermediate fails closed.
+      // Overflow-safe midpoint: bounds whose span overflows still give a finite half.
       injectCfBarAllEqualReadings({ 'bar:all-equal-distinct-bounds': 'degenerate-half' })
-      expect(geo(ev(0, NUM(-1e308, 1e308, { axisArgb: 0xff000000 }), [0, 0, 0])).slice(0, 1)).toEqual([0.5])
+      expect(geo(ev(1e308, NUM(0, 1.5e308), [1e308, 1e308, 1e308])).slice(0, 2)).toEqual([0, 0.5])
+      expect(geo(ev(-1e308, NUM(-1.5e308, 0), [-1e308, -1e308, -1e308])).slice(0, 2)).toEqual([0.5, 1])
     })
   })
 })

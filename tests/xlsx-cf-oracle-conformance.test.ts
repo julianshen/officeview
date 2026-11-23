@@ -723,7 +723,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
 
     const stage3 = manifest.cases.filter(c => c.stage === 3)
-    expect(stage3.map(c => c.id)).toHaveLength(16)
+    expect(stage3.map(c => c.id)).toHaveLength(17) // 17 since stage3-bar-all-equal (recipe-pending)
     let checked = 0
     let barCells = 0
     let painted = 0
@@ -739,6 +739,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       // Since the bar:bounds-num follow-up these num-bounded bars need only verified capabilities.
       'stage3-bar-geometry:G': 'bar:geometry-min-visible-width is non-discriminating; the saved num 0/100 bar\'s bounds and lengths are verified',
       'stage3-bar-showvalue:C': 'bar:showvalue-copy-text is a clipboard observation, not paint; the saved num 0/100 bar\'s bounds and lengths are verified',
+      // The all-equal follow-up: the non-equal controls of bar:all-equal-distinct-bounds (pre-registered, recipe-pending, so
+      // not yet in the Lesson 1 test): a non-equal scope needs only the verified num bounds and lengths.
+      'stage3-bar-all-equal:J': 'bar:all-equal-distinct-bounds applies to all-equal scopes only; the non-equal num 0/100 control needs only verified capabilities',
+      'stage3-bar-all-equal:K': 'bar:all-equal-distinct-bounds applies to all-equal scopes only; the non-equal num 0/100, 10/90 control needs only verified capabilities',
     }
     const markerOnlyPainted = new Set<string>()
     for (const c of stage3) {

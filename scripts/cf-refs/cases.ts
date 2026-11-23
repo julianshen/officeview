@@ -6016,6 +6016,44 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       rules: [bar('bar:bounds-num', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } })],
     },
   ),
+  // 18. stage3-bar-all-equal (the all-equal follow-up, brief cf-bar-allequal; owner rulings 2026-11-23): pre-registered
+  // before its capture. Appended last: a Stage 3 bar GUID carries its fixture's index, so an insertion would change every
+  // later input. Every column is 32.51 characters (195 px measured in stage3-bar-geometry F: a 192 px span, so a half
+  // length is a whole 96 px) and holds three replicate cells.
+  rect(
+    'stage3-bar-all-equal',
+    'Data bars over all-equal scopes. bar:all-equal-distinct-bounds: two literal num bounds with lo < hi over all-equal data (stage3-bar-geometry H and I drew full bars at hi): the value at hi (B, H), at lo (C, F), interior (D, E, G), under 0/100 and 10/90, and all-negative num -100/-20 (I); readings evaluate / full / degenerate-half / none; non-equal controls J and K under the same bounds predict the same under every reading. Mixed-sign bounds are not asked: an all-equal scope has no zero cell to locate the automatic axis, so the measurer refuses (bar-edge-unstable). The statistical twins of the verified bar:degenerate-equal-values (owner ruling Q2): its own shape as a control (L), explicit leftToRight (M), rightToLeft (N) and 10/90 lengths (O). Paired solid bars, no border, automatic axis.',
+    {
+      n: 3,
+      cols: [
+        col('B', 'NumAtHi', [100, 100, 100], SNAP_WIDTH_B),
+        col('C', 'NumAtLo', [0, 0, 0], SNAP_WIDTH_B),
+        col('D', 'NumInt30', [30, 30, 30], SNAP_WIDTH_B),
+        col('E', 'NumInt70', [70, 70, 70], SNAP_WIDTH_B),
+        col('F', 'Num1090AtLo', [0, 0, 0], SNAP_WIDTH_B),
+        col('G', 'Num1090Int30', [30, 30, 30], SNAP_WIDTH_B),
+        col('H', 'Num1090AtHi', [100, 100, 100], SNAP_WIDTH_B),
+        col('I', 'NumNegative', [-40, -40, -40], SNAP_WIDTH_B),
+        col('J', 'CtrlNum', [30, 60, 90], SNAP_WIDTH_B),
+        col('K', 'CtrlNum1090', [0, 30, 100], SNAP_WIDTH_B),
+        col('L', 'StatContext', [42, 42, 42], SNAP_WIDTH_B),
+        col('M', 'StatLtr', [42, 42, 42], SNAP_WIDTH_B),
+        col('N', 'StatRtl', [42, 42, 42], SNAP_WIDTH_B),
+        col('O', 'Stat1090', [42, 42, 42], SNAP_WIDTH_B),
+      ],
+      rules: [
+        ...(['B', 'C', 'D', 'E'] as const).map((c, i) => bar('bar:all-equal-distinct-bounds', `${c}2:${c}4`, 1 + i, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } })),
+        ...(['F', 'G', 'H'] as const).map((c, i) => bar('bar:all-equal-distinct-bounds', `${c}2:${c}4`, 5 + i, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } })),
+        bar('bar:all-equal-distinct-bounds', 'I2:I4', 8, { baseCfvo: [{ type: 'num', val: '-100' }, { type: 'num', val: '-20' }], x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:all-equal-distinct-bounds', 'J2:J4', 9, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:all-equal-distinct-bounds', 'K2:K4', 10, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:degenerate-equal-values', 'L2:L4', 11, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:degenerate-equal-ltr', 'M2:M4', 12, { x14Attrs: { ...SOLID_0_100, direction: 'leftToRight' }, colors: { fill: BLUE } }),
+        bar('bar:degenerate-equal-rtl', 'N2:N4', 13, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE } }),
+        bar('bar:degenerate-equal-10-90', 'O2:O4', 14, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -6198,7 +6236,11 @@ const S3_RULINGS: Record<string, string> = {
   'bar:bounds-automax': 'S3-C and S3-AUTO-BOUNDS (autoMax resolves only on x14 cfvo, only with this capability, and only to the rule it verified: zero-anchored or min-max)',
   'bar:bounds-positional': 'S3-D (positional and legacy cfvo shapes are unresolved)',
   'bar:bounds-out-of-domain': 'S3-E (percent/percentile outside 0..100 is unresolved, never clamped)',
-  'bar:degenerate-equal-values': 'S3-E (v_min = v_max is unresolved)',
+  'bar:degenerate-equal-values': 'S3-E (v_min = v_max is unresolved); the all-equal follow-up registers its verified half on its evidence shape only (owner ruling Q2, 2026-11-23), with no announced position (Q1)',
+  'bar:degenerate-equal-ltr': 'S3-E and owner ruling Q2 (2026-11-23): the verified statistical shape with direction="leftToRight" stays withheld until stage3-bar-all-equal matches a pre-registered reading',
+  'bar:degenerate-equal-rtl': 'S3-E and owner ruling Q2 (2026-11-23): the verified statistical shape with direction="rightToLeft" stays withheld until stage3-bar-all-equal matches a pre-registered reading',
+  'bar:degenerate-equal-10-90': 'S3-E and owner ruling Q2 (2026-11-23): the verified statistical shape with the default 10/90 lengths stays withheld until stage3-bar-all-equal matches a pre-registered reading',
+  'bar:all-equal-distinct-bounds': 'S3-E (an all-equal scope is unresolved even under distinct literal bounds) until stage3-bar-all-equal matches a pre-registered reading',
   'bar:degenerate-single-cell': 'S3-E (a single numeric cell is unresolved)',
   'bar:degenerate-inverted': 'S3-E (inverted num bounds are unresolved)',
   'bar:degenerate-beyond-bounds': 'S3-E (cells beyond num bounds are unresolved, never clamped)',
@@ -6277,6 +6319,15 @@ export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo.',
   'bar:negative-border-same-as-positive':
     'With negativeBarBorderColorSameAsPositive="1" Excel\'s canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel\'s default negative border colour is known.',
+  // The all-equal follow-up (stage3-bar-all-equal): pre-registered questions awaiting their capture (as Stage 2's are).
+  'bar:all-equal-distinct-bounds':
+    'Pre-registered (stage3-bar-all-equal, readings evaluate / full / degenerate-half / none), awaiting its capture: distinct literal bounds over an all-equal scope stay withheld (cf-degenerate-scope) until a matched reading is registered.',
+  'bar:degenerate-equal-ltr':
+    'Pre-registered (stage3-bar-all-equal, readings half / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with direction="leftToRight" stays withheld until a matched reading is registered.',
+  'bar:degenerate-equal-rtl':
+    'Pre-registered (stage3-bar-all-equal, readings half (mirrored) / half-ltr / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with direction="rightToLeft" stays withheld until a matched reading is registered.',
+  'bar:degenerate-equal-10-90':
+    'Pre-registered (stage3-bar-all-equal, readings half-span / half-min / none / full; owner ruling Q2), awaiting its capture: the statistical all-equal shape with 10/90 lengths stays withheld until a matched reading is registered.',
   'bar:showvalue-copy-text':
     'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
 }
