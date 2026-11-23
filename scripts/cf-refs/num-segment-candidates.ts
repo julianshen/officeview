@@ -97,10 +97,10 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
 /** Every captured colour-scale cell of every measured case, mapped to its segment through production's own pipeline. */
 /**
  * The captures the pre-registration search ran on: every measured case but stage2-scale-num-segment itself (its own
- * confirmation case, captured after the readings were fixed) and the later stage2-scale-upper-whole (54fc3388) and
- * stage2-scale-upper-window (ed0fccb6). Pass `{ include: 'all' }` to add them.
+ * confirmation case, captured after the readings were fixed) and the later stage2-scale-upper-whole (54fc3388),
+ * stage2-scale-upper-window (ed0fccb6) and stage2-scale-raw-floor (ce3f701d). Pass `{ include: 'all' }` to add them.
  */
-export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window']
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor']
 
 export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }
@@ -158,9 +158,12 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
         else out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' })
         continue
       }
-      // Withheld only by the later guard-boundary rule (owner ruling after stage2-scale-upper-window): a 2-colour or 3-colour
-      // lower-segment cell production painted at its guarded truncation before; evaluated as it was when the searches ran.
-      if (prod === undefined && (seg.colours === 2 || seg.segment === 0) && guardBoundaryProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+      // Withheld by the later guard-boundary rule (owner ruling after stage2-scale-upper-window), or painted at raw floor
+      // since the raw-floor registration (stage2-scale-raw-floor, ce3f701d): a 2-colour or 3-colour lower-segment cell
+      // production painted at its guarded truncation before; evaluated as it was when the searches ran. A painted fill that
+      // is not Excel's is a harness fault.
+      if (prod !== truncate && (seg.colours === 2 || seg.segment === 0) && guardBoundaryProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+        if (prod !== undefined && prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
         out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: truncate === excel ? 'confirmed' : 'withheld' })
         continue
       }

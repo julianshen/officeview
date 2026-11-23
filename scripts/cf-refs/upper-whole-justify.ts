@@ -16,10 +16,13 @@
  * class of a segment not bounded by two literal num cfvo, so that class is justified no longer: only the `integer` class
  * (an IEEE-integer product on some channel) and the literal-num segments stay justified.
  * The guard-boundary withhold (owner ruling after capture ed0fccb6): `guardBoundaryShapeAt`, a 2-colour or 3-colour
- * lower-segment cell whose step product lies within the guard strictly below a whole number.
+ * lower-segment cell whose step product lies within the guard strictly below a whole number. The raw-floor follow-up
+ * (stage2-scale-raw-floor): once a guard-boundary reading is registered with its evidence (`cfGuardBoundaryReading`, the
+ * registration table only), production paints that shape where neither bounding cfvo is a formula, so it is justified no
+ * longer there; formula-bounded segments stay justified.
  */
 import { isCellInSqref } from './verify'
-import { CF_UPPER_WINDOW_CAP, cfUpperWindowReading } from '../../src/xlsx/cf/colorScale'
+import { CF_GUARD_BOUNDARY_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfUpperWindowReading } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -71,6 +74,9 @@ export function independentProductClass(from: string, to: string, f: number): 'i
 /** Whether a window reading is registered with its evidence (production then paints the window class of statistical segments). */
 const windowReadingRegistered = (): boolean => cfUpperWindowReading(CF_UPPER_WINDOW_CAP) !== undefined && hasEvidence(CF_UPPER_WINDOW_CAP)
 const literalNumCfvo = (x: UpperWholeCfvo): boolean => x.type === 'num' && x.f === undefined
+/** Whether a guard-boundary reading is registered with its evidence (production then paints the shape of non-formula segments). */
+const guardReadingRegistered = (): boolean => cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) !== undefined && hasEvidence(CF_GUARD_BOUNDARY_CAP)
+const formulaCfvo = (x: UpperWholeCfvo): boolean => x.type === 'formula' || x.f !== undefined
 
 /**
  * Whether `ref` (value `value`) is in the shape under `marker`. `values` holds the numeric cells of the sheet (the scope's
@@ -151,8 +157,10 @@ export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, valu
   const t = independentThresholds(marker, ref, values, formulaBound)
   if (!t) return false
   let lo: number, hi: number
+  let bounds: UpperWholeCfvo[]
   if (n === 2) {
     [lo, hi] = t[0]! <= t[1]! ? [t[0]!, t[1]!] : [t[1]!, t[0]!]
+    bounds = [...marker.scale.cfvo]
   } else {
     const [t0, t1, t2] = t as [number, number, number]
     const mid = t1 > t2 ? t2 : t1
@@ -160,9 +168,11 @@ export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, valu
     if (!(t0 < mid && mid < top)) return false
     const midCfvo = marker.scale.cfvo[t1 > t2 ? 2 : 1]!
     lo = t0; hi = mid
+    bounds = [marker.scale.cfvo[0]!, midCfvo]
     if (literalNumCfvo(marker.scale.cfvo[0]!) && literalNumCfvo(midCfvo) && value > lo && value < hi && !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)) return false
   }
   if (!(value > lo && value < hi)) return false
   const f = independentFraction(value, lo, hi)
-  return f !== undefined && independentGuardBoundary(marker.scale.colors[0]!, marker.scale.colors[1]!, f)
+  if (f === undefined || !independentGuardBoundary(marker.scale.colors[0]!, marker.scale.colors[1]!, f)) return false
+  return !(guardReadingRegistered() && !bounds.some(formulaCfvo))
 }
