@@ -123,7 +123,7 @@ async function copy(c: Client, body: Record<string, unknown>, reqId = ++rq): Pro
   c.send({ token: c.manifest!.session.token, reqId, type: 'sheet-copy', viewGen: 0, ...body })
   const parts: CopyAnswer['parts'] = []
   for (;;) {
-    const m = await c.next((m) => 'text' in m && m.text.reqId === reqId, 60_000) as { text: Record<string, any>; bytes: number }
+    const m = await c.next((m) => 'text' in m && m.text.reqId === reqId, 30_000) as { text: Record<string, any>; bytes: number }
     if (m.text.type !== 'copy-result') return { parts, end: m.text }
     parts.push(m)
     if (m.text.last === true) return { parts, end: m.text, text: parts.map((p) => p.text.text as string).join('') }
@@ -346,7 +346,7 @@ describe('sheet-copy (P8)', () => {
       expect(b.store.copies(b.m.session.sid)).toEqual([])
       expect(b.c.ws.readyState).toBe(WebSocket.OPEN)
     } finally { await b.stop() }
-  }, 60_000)
+  }, 30_000)
 
   test('cfHiddenFormat copies as painted', async () => {
     const bytes = await cfHiddenFormat()
@@ -414,5 +414,5 @@ describe('sheet-copy (P8)', () => {
       t += 100
       expect((await copy(c, { sheetId: '2', selection: ok })).text).toBe('P-1-1')
     } finally { await stop() }
-  }, 60_000)
+  }, 30_000)
 })
