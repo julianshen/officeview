@@ -4395,6 +4395,8 @@ export const S2_UPPER_SEGMENT_ID = 'stage2-scale-upper-segment'
 export const S2_UPPER_SEGMENT_CAP = 'scale:upper-segment'
 /** The twins (the P-line twin line and the endpoint twins): comparison references only. */
 export const S2_UPPER_SEGMENT_TWIN = 'scale:upper-segment-twin'
+/** The near-top sub-shape (orchestrator ruling before the capture): its own question, registrable only with the same reading as the main one. */
+export const S2_UPPER_NEAR_TOP_CAP = 'scale:upper-segment-near-top'
 /** The pre-registered readings (brief cf-upper-segment: index-position the search's survivor, truncate the control). */
 export const S2_UPPER_SEGMENT_READINGS = ['index-position', 'truncate'] as const
 export type S2UpperSegmentReading = (typeof S2_UPPER_SEGMENT_READINGS)[number]
@@ -4413,6 +4415,8 @@ export interface S2UpperSegmentBlock {
   kind: S2UpperSegmentKind
   bounds: 'literal' | 'statistical'
   col: string
+  /** A near-top block: its interior cells lie within 1e-11 below the full span on some channel; its own question (S2_UPPER_NEAR_TOP_CAP). */
+  nearTop?: true
   /** cfvo in authored order (the re-sort block authors lo / top / mid). */
   cfvo: readonly S2UpperSegmentCfvo[]
   /** Colours in authored order. */
@@ -4431,7 +4435,7 @@ const S2US_X0 = 'FF0A5A0A', S2US_X1 = 'FFF40C24'
 /** Distinct spans 198 (up), 66 (down), 22 (up) from Z0. */
 const S2US_Z0 = 'FF0A6E14', S2US_Z1 = 'FFD02C2A'
 
-/** The blocks (columns A..I, rows 2..13). Product classes and outcomes per cell are pinned in the case test and listed in recipe §13.3. */
+/** The blocks (columns A..L, rows 2..13; J..L the near-top sub-shape). Product classes and outcomes per cell are pinned in the case test and listed in recipe §13.3. */
 export function s2UpperSegmentBlocks(): S2UpperSegmentBlock[] {
   return [
     { id: 'pl-qp-210', kind: 'p-line', bounds: 'literal', col: 'A', cfvo: s2usNum('7', '217', '427'), colors: [S2US_P, S2US_Q, S2US_P],
@@ -4452,6 +4456,14 @@ export function s2UpperSegmentBlocks(): S2UpperSegmentBlock[] {
       values: [...s2usV('decisive', '68', '86', '102', '104'), ...s2usV('kept', '92')] },
     { id: 'ds-z-stat', kind: 'distinct', bounds: 'statistical', col: 'I', cfvo: S2US_STAT, colors: [S2US_Z1, S2US_Z0, S2US_Z1],
       values: [...s2usV('decisive', '70', '84', '106', '110'), ...s2usV('control', '0', '132')] },
+    // The near-top sub-shape: values 1, 7 and 60 ulps below the maximum (spans 210 and 420, both P-line orders), and over
+    // -1 / 0 / 1 on the distinct 210 / 105 / 30 palette 1 - 2^-53 (kept: (1 + f) - 1 = 1), 1 - 2^-52 and 1 - 1e-14.
+    { id: 'nt-qp-210', kind: 'p-line', bounds: 'literal', nearTop: true, col: 'J', cfvo: s2usNum('7', '217', '427'), colors: [S2US_P, S2US_Q, S2US_P],
+      values: s2usV('decisive', '426.99999999999994', '426.9999999999996', '426.9999999999966') },
+    { id: 'nt-pq-420', kind: 'p-line', bounds: 'literal', nearTop: true, col: 'K', cfvo: s2usNum('-210', '210', '630'), colors: [S2US_Q, S2US_P, S2US_Q],
+      values: s2usV('decisive', '629.9999999999999', '629.9999999999992', '629.9999999999932') },
+    { id: 'nt-dd-1', kind: 'distinct', bounds: 'literal', nearTop: true, col: 'L', cfvo: s2usNum('-1', '0', '1'), colors: [S2US_DD1, S2US_DD0, S2US_DD1],
+      values: [...s2usV('kept', '0.9999999999999999'), ...s2usV('decisive', '0.9999999999999998', '0.99999999999999')] },
   ]
 }
 
@@ -4505,7 +4517,7 @@ export function s2UpperSegmentCells(): S2UpperSegmentCell[] {
       const value = Number(x.text)
       const segment: 0 | 1 = value <= mid ? 0 : 1
       const [lo, hi] = segment === 0 ? [t[0]!, mid] : [mid, top]
-      const configuration = x.role === 'control' ? 'controls' : b.id
+      const configuration = x.role === 'control' ? 'controls' : b.nearTop ? 'near-top' : b.id
       return { ref: `${b.col}${S2_UPPER_SEGMENT.firstRow + i}`, block: b, text: x.text, value, role: x.role, segment, configuration, lo, hi, from: b.colors[segment]!, to: b.colors[segment + 1]! }
     })
   })
@@ -4513,6 +4525,12 @@ export function s2UpperSegmentCells(): S2UpperSegmentCell[] {
 
 /** f = (v − lo)/(hi − lo), clamped to [0, 1]: production's `safeFraction` for these finite spans, restated. */
 export const s2UpperSegmentFraction = (c: Pick<S2UpperSegmentCell, 'value' | 'lo' | 'hi'>): number => Math.max(0, Math.min(1, (c.value - c.lo) / (c.hi - c.lo)))
+
+/** Whether some RGB channel with d != 0 has f·d within 1e-11 below the full span d (the near-top sub-shape, independently restated). */
+export function s2UpperSegmentNearTop(c: Pick<S2UpperSegmentCell, 'value' | 'lo' | 'hi' | 'from' | 'to'>): boolean {
+  const f = s2UpperSegmentFraction(c)
+  return [2, 4, 6].some(i => { const d = Math.abs(parseInt(c.to.slice(i, i + 2), 16) - parseInt(c.from.slice(i, i + 2), 16)); return d !== 0 && d - f * d <= 1e-11 })
+}
 
 /** Each RGB channel with d != 0 at a cell: `integer`, `below` / `above` (within 1e-11 of a whole k, 0 < k < d), `clear`. */
 export function s2UpperSegmentClasses(c: Pick<S2UpperSegmentCell, 'value' | 'lo' | 'hi' | 'from' | 'to'>): Array<'below' | 'above' | 'integer' | 'clear'> {
@@ -4549,7 +4567,7 @@ export function s2UpperSegmentPrediction(c: S2UpperSegmentCell, reading: S2Upper
   return s2UpperSegmentColour(c.segment === 1 ? reading : 'lower', c.from, c.to, s2UpperSegmentFraction(c))
 }
 
-const S2US_CONFIGURATIONS: ReadonlyArray<{ id: string; role?: 'negative-control'; note: string }> = [
+const S2US_CONFIGURATIONS: ReadonlyArray<{ id: string; role?: 'negative-control'; cap?: string; replicateBy?: 'column'; note: string }> = [
   { id: 'pl-qp-210', note: 'P-line, literal num 7 / 217 / 427: the upper segment 217 .. 427 (span 210), Q to P.' },
   { id: 'pl-pq-420', note: 'P-line, literal num -210 / 210 / 630: the upper segment 210 .. 630 (span 420), P to Q.' },
   { id: 'pl-pq-dec', note: 'P-line, decimal literal num 0.7 / 2.1 / 3.5: the upper segment 2.1 .. 3.5 (span 1.4), P to Q; f off the rational by ulps.' },
@@ -4559,6 +4577,7 @@ const S2US_CONFIGURATIONS: ReadonlyArray<{ id: string; role?: 'negative-control'
   { id: 'ds-x-mixed', note: 'Distinct spans 234 / 78 / 26 (up, down, up), literal num 0 / 78 / 156: index-position moves some channels of a cell and keeps others.' },
   { id: 'ds-z-mixed', note: 'Distinct spans 198 / 66 / 22 (up, down, up), literal num 0 / 66 / 132.' },
   { id: 'ds-z-stat', note: 'Distinct spans 198 / 66 / 22, min / percent 50 / max over 0 .. 132 (the midpoint 66).' },
+  { id: 'near-top', cap: S2_UPPER_NEAR_TOP_CAP, replicateBy: 'column', note: 'The near-top sub-shape, its own question: upper-segment cells within 1e-11 below the full span on some channel (values ulps below the maximum), spans 210 (Q to P), 420 (P to Q) and 1 (distinct 210 / 105 / 30, descending); replicated per column.' },
   { id: 'controls', role: 'negative-control', note: 'Negative controls: endpoints and the statistical blocks\' minimum and maximum, where both readings predict the endpoint colour; Excel must match it, never evidence.' },
 ]
 
@@ -4627,8 +4646,10 @@ export function s2UpperSegmentLayout(): { configurations: S5Configuration[]; pos
     const [a, b] = S2_UPPER_SEGMENT_READINGS.map(r => s2UpperSegmentPrediction(c, r))
     const interior = c.segment === 1 && c.value > c.lo && c.value < c.hi
     const near = s2UpperSegmentClasses(c).some(x => x !== 'clear')
+    if (interior && s2UpperSegmentNearTop(c) !== (c.block.nearTop === true)) throw new Error(`${S2_UPPER_SEGMENT_ID}: ${c.ref} (${c.text}) is ${c.block.nearTop ? 'not ' : ''}a near-top cell`)
+    if (Number(String(c.value)) !== c.value || String(c.value) !== c.text) throw new Error(`${S2_UPPER_SEGMENT_ID}: ${c.ref} text ${c.text} is not its double's shortest form`)
     const ok = c.role === 'decisive' ? interior && a !== b
-      : c.role === 'kept' ? interior && near && a === b
+      : c.role === 'kept' ? interior && (near || s2UpperSegmentNearTop(c)) && a === b
         : c.role === 'clear' ? interior && !near && a === b
           : !interior && a === b
     if (!ok) throw new Error(`${S2_UPPER_SEGMENT_ID}: ${c.ref} (${c.text}) is not a ${c.role} cell (${a} / ${b})`)
@@ -4648,8 +4669,9 @@ export function s2UpperSegmentLayout(): { configurations: S5Configuration[]; pos
     const hypotheses = Object.fromEntries(S2_UPPER_SEGMENT_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2UpperSegmentPrediction(c, h))]))]))
     const twinRefs = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)).filter(t => t.startsWith('twin:')))].map(t => t.slice('twin:'.length)).sort()
     return {
-      id: cfg.id, capabilityId: S2_UPPER_SEGMENT_CAP, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      id: cfg.id, capabilityId: cfg.cap ?? S2_UPPER_SEGMENT_CAP, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
       ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(cfg.replicateBy ? { replicateBy: cfg.replicateBy } : {}),
       ...(twinRefs.length > 0 ? { twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])) } : {}),
       ...(cfg.id === 'controls' ? { positiveControls: Object.fromEntries(positiveControls.map(p => [p.ref, p.token])) } : {}),
     }
@@ -4669,7 +4691,7 @@ export function s2UpperSegmentMarkers(): CfPartMarker[] {
   const { twins } = s2UpperSegmentLayout()
   const rules = [...new Map(twins.map(t => [t.rule.sqref, t.rule])).values()]
   return [
-    ...s2UpperSegmentBlocks().map(b => ({ cap: S2_UPPER_SEGMENT_CAP, sqref: s2llSqref(b.col, S2_UPPER_SEGMENT.firstRow, S2_UPPER_SEGMENT.firstRow + b.values.length - 1), cfvo: b.cfvo.map(c => ({ ...c })), colors: [...b.colors] })),
+    ...s2UpperSegmentBlocks().map(b => ({ cap: b.nearTop ? S2_UPPER_NEAR_TOP_CAP : S2_UPPER_SEGMENT_CAP, sqref: s2llSqref(b.col, S2_UPPER_SEGMENT.firstRow, S2_UPPER_SEGMENT.firstRow + b.values.length - 1), cfvo: b.cfvo.map(c => ({ ...c })), colors: [...b.colors] })),
     ...rules.map(r => ({ cap: S2_UPPER_SEGMENT_TWIN, sqref: r.sqref, cfvo: r.cfvo.map(val => ({ type: 'num', val })), colors: [...r.colors] })),
   ].map((m, i) => s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1))
 }
@@ -4701,7 +4723,7 @@ function stage2UpperSegmentCase(): CfOracleCase {
     id: S2_UPPER_SEGMENT_ID,
     stage: 2,
     question:
-      `The upper-segment follow-up (brief cf-upper-segment; registrable): an interior cell of a 3-colour UPPER segment that production withholds today (the literal num-segment shape in segment 1, the integer and window classes of the whole-product shape): does Excel draw it at index-position (l = (1 + f) − 1, then floor(l·|d|) per channel: the one survivor class of the search over all 302 captured upper-segment interior cells) or at production's truncation (floor(f·|d| + 1e-11), the control)? ${count('decisive')} decisive cells in ${groups} replication groups (P line in both colour orders, spans 105 / 210 / 420, decimal bounds, the midpoint-above-max re-sort; distinct spans per channel, all descending and with mixed directions, where index-position moves some channels of a cell and keeps others; literal and min / percent 50 / max bounds), ${count('kept')} near-whole cells where both readings keep truncation, ${count('clear')} clear cells and ${count('control')} endpoint controls. A P-line twin line and endpoint twins with IEEE-integer products show every predicted fill; two literal cellIs positive controls check the readback.`,
+      `The upper-segment follow-up (brief cf-upper-segment; registrable): an interior cell of a 3-colour UPPER segment that production withholds today (the literal num-segment shape in segment 1, the integer and window classes of the whole-product shape): does Excel draw it at index-position (l = (1 + f) − 1, then floor(l·|d|) per channel: the one survivor class of the search over all 302 captured upper-segment interior cells) or at production's truncation (floor(f·|d| + 1e-11), the control)? ${count('decisive')} decisive cells in ${groups} replication groups (P line in both colour orders, spans 105 / 210 / 420, decimal bounds, the midpoint-above-max re-sort; distinct spans per channel, all descending and with mixed directions, where index-position moves some channels of a cell and keeps others; literal and min / percent 50 / max bounds), ${count('kept')} near-whole cells where both readings keep truncation, ${count('clear')} clear cells and ${count('control')} endpoint controls; the near-top sub-shape (within 1e-11 below the full span) is its own question (scale:upper-segment-near-top) in columns J..L. A P-line twin line and endpoint twins with IEEE-integer products show every predicted fill; two literal cellIs positive controls check the readback.`,
     input: `tests/fixtures/xlsx-cf/inputs/${S2_UPPER_SEGMENT_ID}.xlsx`,
     saved: `tests/fixtures/xlsx-cf/${S2_UPPER_SEGMENT_ID}.xlsx`,
     sheet: 'Sheet1',
@@ -6072,6 +6094,8 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   // published only by removing this entry and registering it in CF_UPPER_SEGMENT_PRODUCTION_READINGS); the twins are comparisons.
   'scale:upper-segment':
     'Pre-registered and registrable (stage2-scale-upper-segment, two readings: index-position, truncate), awaiting its capture: interior cells of a 3-colour upper segment in the literal num-segment shape or the whole-product shape stay withheld (cf-unmeasured-num-segment-fraction, cf-unmeasured-upper-segment-whole-product) until a matched reading is registered in CF_UPPER_SEGMENT_PRODUCTION_READINGS.',
+  'scale:upper-segment-near-top':
+    'Pre-registered and registrable (stage2-scale-upper-segment, its near-top configuration, the readings index-position and truncate), awaiting its capture: upper-segment interior cells within 1e-11 below the full span stay withheld (cf-unmeasured-upper-near-top) unless CF_UPPER_NEAR_TOP_PRODUCTION_READINGS registers the same reading as scale:upper-segment; the main reading can be registered with this sub-shape still withheld.',
   'scale:upper-segment-twin':
     'The twins of stage2-scale-upper-segment (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
 }

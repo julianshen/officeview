@@ -28,6 +28,7 @@ import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
   CF_STAGE2_NONDISCRIMINATING,
+  S2_UPPER_NEAR_TOP_CAP,
   S2_UPPER_SEGMENT,
   S2_UPPER_SEGMENT_CAP,
   S2_UPPER_SEGMENT_ID,
@@ -37,6 +38,7 @@ import {
   s2UpperSegmentClasses,
   s2UpperSegmentFraction,
   s2UpperSegmentLayout,
+  s2UpperSegmentNearTop,
   s2UpperSegmentPrediction,
   s2UwLine,
   type CfManifest,
@@ -52,7 +54,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_UPPER_SEGMENT_CAP, CF_UPPER_SEGMENT_READINGS, injectCfUpperSegmentReadings, safeFraction } from '../src/xlsx/cf/colorScale'
+import { CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_SEGMENT_READINGS, injectCfUpperNearTopReadings, injectCfUpperSegmentReadings, safeFraction } from '../src/xlsx/cf/colorScale'
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 
@@ -60,9 +62,10 @@ const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_UPPER_SEGMENT_ID
 const CAP = S2_UPPER_SEGMENT_CAP
 const TWIN = S2_UPPER_SEGMENT_TWIN
+const NEAR = S2_UPPER_NEAR_TOP_CAP
 const HEAVY = 300_000
 
-afterEach(() => injectCfUpperSegmentReadings(null))
+afterEach(() => { injectCfUpperSegmentReadings(null); injectCfUpperNearTopReadings(null) })
 
 const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
 const caseOf = (): CfOracleCase => {
@@ -88,15 +91,20 @@ const decisive = (c: S2UpperSegmentCell): boolean => s2UpperSegmentPrediction(c,
 const EVIDENCE = ['pl-qp-210', 'pl-pq-420', 'pl-pq-dec', 'pl-qp-resort', 'pl-qp-stat', 'ds-dd-desc', 'ds-x-mixed', 'ds-z-mixed', 'ds-z-stat']
 const interior = (c: S2UpperSegmentCell): boolean => c.segment === 1 && c.value > c.lo && c.value < c.hi
 const literal = (c: S2UpperSegmentCell): boolean => c.block.bounds === 'literal'
-/** The upper-segment cells production withholds today: the literal num-segment shape (f·2^20 not an integer), and any near-whole product. */
+/** The upper-segment cells production withholds today: the literal num-segment shape (f·2^20 not an integer), any near-whole product, the near-top sub-shape. */
 const withheldToday = (c: S2UpperSegmentCell): boolean =>
-  interior(c) && ((literal(c) && !Number.isInteger(s2UpperSegmentFraction(c) * 1048576)) || s2UpperSegmentClasses(c).some(x => x !== 'clear'))
+  interior(c) && ((literal(c) && !Number.isInteger(s2UpperSegmentFraction(c) * 1048576)) || s2UpperSegmentClasses(c).some(x => x !== 'clear') || s2UpperSegmentNearTop(c))
+const nearTopRefs = designated.filter(c => c.configuration === 'near-top').map(c => c.ref)
 const shapeRefs = designated.filter(withheldToday).map(c => c.ref)
 
-/** Rehearse a registration: the reading selected through the seam and the id's evidence held, around `fn`. */
-async function withRegistration<T>(reading: S2UpperSegmentReading, fn: () => Promise<T>): Promise<T> {
+/**
+ * Rehearse a registration: the reading selected through the seam for the main id (and, `nearTop`, for the near-top id: by
+ * default the same reading, or another), with the evidence of each registered id held, around `fn`.
+ */
+async function withRegistration<T>(reading: S2UpperSegmentReading, fn: () => Promise<T>, nearTop: S2UpperSegmentReading | false = reading): Promise<T> {
   injectCfUpperSegmentReadings({ [CF_UPPER_SEGMENT_CAP]: reading })
-  try { return await withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP], fn) } finally { injectCfUpperSegmentReadings(null) }
+  injectCfUpperNearTopReadings(nearTop ? { [CF_UPPER_NEAR_TOP_CAP]: nearTop } : null)
+  try { return await withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP, ...(nearTop ? [CF_UPPER_NEAR_TOP_CAP] : [])], fn) } finally { injectCfUpperSegmentReadings(null); injectCfUpperNearTopReadings(null) }
 }
 
 /** A synthetic world: each designated cell's fill by `world` (a reading or a function), twins as fixed, positive controls as fixed, controls white. */
@@ -131,48 +139,51 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 }
 
 describe('stage2-scale-upper-segment: the case', () => {
-  it('is appended last; owns its two ids, both registered non-discriminating until its capture; the readings are production\'s, registered nowhere', async () => {
+  it('is appended last; owns its three ids, all registered non-discriminating until its capture; the readings are production\'s, registered nowhere', async () => {
     expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
     expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-literal-lower', ID])
-    for (const id of [CAP, TWIN]) {
+    for (const id of [CAP, NEAR, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
     }
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toMatch(/registrable/)
+    expect(CF_STAGE2_NONDISCRIMINATING[NEAR]).toMatch(/registrable/)
     expect(CAP).toBe(CF_UPPER_SEGMENT_CAP)
+    expect(NEAR).toBe(CF_UPPER_NEAR_TOP_CAP)
     expect([...S2_UPPER_SEGMENT_READINGS]).toEqual([...CF_UPPER_SEGMENT_READINGS])
     const c = caseOf()
     expect(c.status).toBe('recipe-pending')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
     expect(c.scaleReadings!.map(x => [x.id, x.capabilityId, Object.keys(x.hypotheses), x.role ?? (x.record ? 'record' : 'evidence')])).toEqual([
       ...EVIDENCE.map(id => [id, CAP, ['index-position', 'truncate'], 'evidence']),
+      ['near-top', NEAR, ['index-position', 'truncate'], 'evidence'],
       ['controls', CAP, ['index-position', 'truncate'], 'negative-control'],
     ])
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    for (const id of [CAP, TWIN]) {
+    for (const id of [CAP, NEAR, TWIN]) {
       expect(Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, id), id).toBe(false)
       expect(VERIFIED_CAPABILITIES.has(id), id).toBe(false)
     }
   })
 
-  it('192 cells: 77 designated (40 decisive, 25 kept, 5 clear, 7 controls), 102 twins, 2 positive controls, 11 unformatted controls; A1:T14, 28 colour rules', () => {
+  it('207 cells: 86 designated (48 decisive, 26 kept, 5 clear, 7 controls; 9 of them near-top), 105 twins, 2 positive controls, 14 unformatted controls; A1:X14, 32 colour rules', () => {
     const c = caseOf()
-    expect(c.range).toBe('A1:T14')
-    expect(c.expected.cells.length).toBe(192)
-    expect(c.scaleReadings!.map(x => x.refs.length)).toEqual([10, 11, 11, 9, 10, 5, 5, 5, 4, 7])
+    expect(c.range).toBe('A1:X14')
+    expect(c.expected.cells.length).toBe(207)
+    expect(c.scaleReadings!.map(x => x.refs.length)).toEqual([10, 11, 11, 9, 10, 5, 5, 5, 4, 9, 7])
     const count = (role: string): number => designated.filter(x => x.role === role).length
-    expect([designated.length, count('decisive'), count('kept'), count('clear'), count('control')]).toEqual([77, 40, 25, 5, 7])
-    expect(layout.twins.length).toBe(102)
+    expect([designated.length, count('decisive'), count('kept'), count('clear'), count('control')]).toEqual([86, 48, 26, 5, 7])
+    expect(layout.twins.length).toBe(105)
     expect(c.expected.cells.filter(e => e.matched && !e.scaleApplied).length).toBe(2)
-    expect(c.expected.negativeRefs.length).toBe(11)
-    expect(c.markers.length).toBe(28)
+    expect(c.expected.negativeRefs.length).toBe(14)
+    expect(c.markers.length).toBe(32)
     for (const e of c.expected.cells) expect(c.markers.filter(m => isCellInSqref(e.ref, m.sqref)).length, e.ref).toBeLessThanOrEqual(1)
     for (const ref of c.scaleReadings!.flatMap(x => x.refs)) expect(c.expected.cells.find(e => e.ref === ref)!.controlRef, ref).toBe(`${colOf(ref)}14`)
     for (const ref of c.expected.negativeRefs) expect(c.markers.some(m => isCellInSqref(ref, m.sqref)), ref).toBe(false)
     for (const m of c.markers) expect(m.sqref, m.sqref).not.toMatch(/^([A-Z]+\d+):\1$/)
     // Every block rule is 3-colour (literal num, or min / percent 50 / max); every twin rule is num 0 / 1 (the line) or num 0 / 1 / 2.
     for (const m of c.markers) {
-      if (m.capabilityId === CAP) expect([['num', 'num', 'num'], ['min', 'percent', 'max']], m.sqref).toContainEqual(m.scale!.cfvo.map(v => v.type))
+      if (m.capabilityId === CAP || m.capabilityId === NEAR) expect([['num', 'num', 'num'], ['min', 'percent', 'max']], m.sqref).toContainEqual(m.scale!.cfvo.map(v => v.type))
       else {
         expect(m.capabilityId, m.sqref).toBe(TWIN)
         expect([[{ type: 'num', val: '0' }, { type: 'num', val: '1' }], [{ type: 'num', val: '0' }, { type: 'num', val: '1' }, { type: 'num', val: '2' }]], m.sqref).toContainEqual(m.scale!.cfvo)
@@ -182,9 +193,10 @@ describe('stage2-scale-upper-segment: the case', () => {
 
   it('the text scope admits the whole range in one batch, well under the 8,388,608-byte cap', async () => {
     const { sheet } = await sheetOf(caseOf())
-    const bytes = estimateCfPrepareBytes(sheet.conditionalFormatting!, [{ firstRow: 0, lastRow: 13, firstCol: 0, lastCol: 19 }])
-    expect(bytes).toBe(3653568)
-    expect(bytes!).toBeLessThan(8388608 * 0.45)
+    const bytes = estimateCfPrepareBytes(sheet.conditionalFormatting!, [{ firstRow: 0, lastRow: 13, firstCol: 0, lastCol: 23 }])
+    // 58.7% of the cap since the near-top columns J..L (three rules, their twins); one batch admits it.
+    expect(bytes).toBe(4920160)
+    expect(bytes!).toBeLessThan(8388608 * 0.6)
   })
 
   it('the workbook: the catalogue values, twins at their values, positive controls on their dxf fills; no hidden rows, merges or errors', () => {
@@ -209,16 +221,18 @@ describe('stage2-scale-upper-segment: the case', () => {
       // The model's fraction is production's double.
       expect(Object.is(f, safeFraction(c.value, c.lo, c.hi)), c.ref).toBe(true)
       if (c.role === 'decisive') expect([interior(c), decisive(c)], c.ref).toEqual([true, true])
-      else if (c.role === 'kept') expect([interior(c), decisive(c), s2UpperSegmentClasses(c).some(x => x !== 'clear')], c.ref).toEqual([true, false, true])
+      else if (c.role === 'kept') expect([interior(c), decisive(c), s2UpperSegmentClasses(c).some(x => x !== 'clear') || s2UpperSegmentNearTop(c)], c.ref).toEqual([true, false, true])
       else if (c.role === 'clear') expect([interior(c), decisive(c), s2UpperSegmentClasses(c).every(x => x === 'clear')], c.ref).toEqual([true, false, true])
       else expect([interior(c), decisive(c)], c.ref).toEqual([false, false])
     }
     const dec = (id: string): number => { const cfg = layout.configurations.find(x => x.id === id)!; return cfg.refs.filter(r => cfg.hypotheses['index-position']![r] !== cfg.hypotheses.truncate![r]).length }
-    expect(Object.fromEntries([...EVIDENCE, 'controls'].map(id => [id, dec(id)]))).toEqual({
-      'pl-qp-210': 5, 'pl-pq-420': 5, 'pl-pq-dec': 5, 'pl-qp-resort': 4, 'pl-qp-stat': 5, 'ds-dd-desc': 4, 'ds-x-mixed': 4, 'ds-z-mixed': 4, 'ds-z-stat': 4, controls: 0,
+    // The near-top configuration: every cell within 1e-11 below the full span on some channel; no other cell is.
+    for (const c of designated.filter(interior)) expect(s2UpperSegmentNearTop(c), c.ref).toBe(c.configuration === 'near-top')
+    expect(Object.fromEntries([...EVIDENCE, 'near-top', 'controls'].map(id => [id, dec(id)]))).toEqual({
+      'pl-qp-210': 5, 'pl-pq-420': 5, 'pl-pq-dec': 5, 'pl-qp-resort': 4, 'pl-qp-stat': 5, 'ds-dd-desc': 4, 'ds-x-mixed': 4, 'ds-z-mixed': 4, 'ds-z-stat': 4, 'near-top': 8, controls: 0,
     })
     const spans = [...new Set(designated.filter(c => c.role !== 'control').map(c => `${c.block.id} ${c.lo}..${c.hi}`))]
-    expect(spans).toEqual(['pl-qp-210 217..427', 'pl-pq-420 210..630', 'pl-pq-dec 2.1..3.5', 'pl-qp-resort 210..420', 'pl-qp-stat 210..420', 'ds-dd-desc 105..315', 'ds-x-mixed 78..156', 'ds-z-mixed 66..132', 'ds-z-stat 66..132'])
+    expect(spans).toEqual(['pl-qp-210 217..427', 'pl-pq-420 210..630', 'pl-pq-dec 2.1..3.5', 'pl-qp-resort 210..420', 'pl-qp-stat 210..420', 'ds-dd-desc 105..315', 'ds-x-mixed 78..156', 'ds-z-mixed 66..132', 'ds-z-stat 66..132', 'nt-qp-210 217..427', 'nt-pq-420 210..630', 'nt-dd-1 0..1'])
     const dirs = (c: S2UpperSegmentCell): string => [2, 4, 6].map(i => (Number.parseInt(c.to.slice(i, i + 2), 16) > Number.parseInt(c.from.slice(i, i + 2), 16) ? '+' : '-')).join('')
     expect(Object.fromEntries(EVIDENCE.map(id => [id, dirs(designated.find(c => c.configuration === id)!)]))).toEqual({
       'pl-qp-210': '-+-', 'pl-pq-420': '+-+', 'pl-pq-dec': '+-+', 'pl-qp-resort': '-+-', 'pl-qp-stat': '-+-', 'ds-dd-desc': '---', 'ds-x-mixed': '+-+', 'ds-z-mixed': '+-+', 'ds-z-stat': '+-+',
@@ -241,7 +255,7 @@ describe('stage2-scale-upper-segment: the case', () => {
     const bits = (x: number): string => { const b = new Float64Array([x]); return new BigUint64Array(b.buffer)[0]!.toString(16).padStart(16, '0') }
     const near = designated.filter(c => c.role === 'decisive' || c.role === 'kept')
     const fresh = near.filter(c => !captured.has(bits(s2UpperSegmentFraction(c))))
-    expect([near.length, fresh.length]).toEqual([65, 55])
+    expect([near.length, fresh.length]).toEqual([74, 64])
   }, HEAVY)
 
   it('the twins: every live prediction is a twin (or a literal positive control in the controls), and every twin\'s product is an IEEE integer on every channel (recomputed)', () => {
@@ -276,20 +290,23 @@ describe('stage2-scale-upper-segment: the case', () => {
       expect(got, e.ref).toBe(!e.matched ? undefined : cell ? s2UpperSegmentPrediction(cell, 'truncate') : twinFill.get(e.ref) ?? e.fillRgb)
     }
     expect(withheld.sort()).toEqual([...shapeRefs].sort())
-    expect(shapeRefs.length).toBe(69)
+    expect(shapeRefs.length).toBe(78)
     // With the id's evidence but nothing registered: the same.
     const ev = await withExactCfEvidence([...VERIFIED_CAPABILITIES, CAP], () => productionFills(c, c.expected.cells.map(e => e.ref)))
     expect(ev).toEqual(fills)
   }, HEAVY)
 
   for (const reading of S2_UPPER_SEGMENT_READINGS) {
-    it(`the independent model is production under the ${reading} registration: every upper-segment cell paints the reading; nothing else moves`, async () => {
+    it(`the independent model is production under the ${reading} registration: with the near-top id at the same reading every upper-segment cell paints it; with the main id alone, or the near-top id at the other reading, the near-top cells stay withheld; nothing else moves`, async () => {
       const c = caseOf()
-      const fills = await withRegistration(reading, () => productionFills(c, c.expected.cells.map(e => e.ref)))
-      for (const e of c.expected.cells) {
-        const cell = cellAt.get(e.ref)
-        const want = !e.matched ? undefined : cell ? s2UpperSegmentPrediction(cell, reading) : twinFill.get(e.ref) ?? e.fillRgb
-        expect(fills.get(e.ref), e.ref).toBe(want)
+      const other = S2_UPPER_SEGMENT_READINGS.find(x => x !== reading)!
+      for (const nearTop of [reading, false, other] as const) {
+        const fills = await withRegistration(reading, () => productionFills(c, c.expected.cells.map(e => e.ref)), nearTop)
+        for (const e of c.expected.cells) {
+          const cell = cellAt.get(e.ref)
+          const want = !e.matched || (nearTop !== reading && nearTopRefs.includes(e.ref)) ? undefined : cell ? s2UpperSegmentPrediction(cell, reading) : twinFill.get(e.ref) ?? e.fillRgb
+          expect(fills.get(e.ref), `${e.ref} near-top ${nearTop}`).toBe(want)
+        }
       }
     }, HEAVY)
   }
@@ -319,6 +336,17 @@ describe('stage2-scale-upper-segment: the evaluator on synthetic observations', 
       if (!target) continue
       const r = judge(c, plantedFills(c, x => (x === target ? stepped(s2UpperSegmentPrediction(x, 'index-position'), x.from, x.to, -1) : s2UpperSegmentPrediction(x, 'index-position'))))
       expect([r[CAP]!.status, r[CAP]!.code], `${target.ref} one step smaller`).toEqual(['refused', 'formula-hypothesis-none'])
+    }
+  })
+
+  it('the near-top question is judged on its own: index-position everywhere but the near-top probes at truncate matches index-position for the main id and truncate for the near-top id (production then keeps the near-top cells withheld); one near-top probe off both readings refuses only the near-top id', () => {
+    const c = caseOf()
+    const split = judge(c, plantedFills(c, x => s2UpperSegmentPrediction(x, x.configuration === 'near-top' ? 'truncate' : 'index-position')))
+    expect([split[CAP]!.status, split[CAP]!.matched, split[NEAR]!.status, split[NEAR]!.matched]).toEqual(['discriminating', 'index-position', 'discriminating', 'truncate'])
+    for (const col of ['J', 'K', 'L']) {
+      const target = designated.find(x => x.configuration === 'near-top' && x.ref.startsWith(col) && decisive(x))!
+      const r = judge(c, plantedFills(c, x => (x === target ? stepped(s2UpperSegmentPrediction(x, 'index-position'), x.from, x.to, -1) : s2UpperSegmentPrediction(x, 'index-position'))))
+      expect([r[CAP]!.status, r[CAP]!.matched, r[NEAR]!.status, r[NEAR]!.code], target.ref).toEqual(['discriminating', 'index-position', 'refused', 'formula-hypothesis-none'])
     }
   })
 
@@ -393,13 +421,13 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   const disposition = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }, id: string) => r.perCapability.find(p => p.capabilityId === id)!.disposition
   const before = [...VERIFIED_STAGE2_CAPABILITIES].sort()
   const kept = CF_STAGE2_NONDISCRIMINATING
-  const removed = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
+  const removed = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP && id !== NEAR))
 
   it('the real manifest: Stage 2 audits ok; both ids unverified-nondiscriminating; the verified set unchanged', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect(r.ok).toBe(true)
-    for (const id of [CAP, TWIN]) expect(disposition(r, id), id).toBe('unverified-nondiscriminating')
+    for (const id of [CAP, NEAR, TWIN]) expect(disposition(r, id), id).toBe('unverified-nondiscriminating')
     expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(before)
   }, HEAVY)
 
@@ -410,14 +438,17 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
       const res = verifyCfCase(m.cases.find(x => x.id === ID)!, { rootDir: root })
       expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
       if (res.kind !== 'verified') return
-      expect(res.matchedHypotheses).toEqual({ [CAP]: reading })
+      expect(res.matchedHypotheses).toEqual({ [CAP]: reading, [NEAR]: reading })
       const k = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: kept })
       expect(k.ok).toBe(true)
-      for (const id of [CAP, TWIN]) expect(disposition(k, id), id).toBe('unverified-nondiscriminating')
+      for (const id of [CAP, NEAR, TWIN]) expect(disposition(k, id), id).toBe('unverified-nondiscriminating')
       expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed }), CAP)).toBe('supported-structural')
-      const registered = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } })
-      expect(disposition(registered, CAP)).toBe('verified')
-      expect(registered.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...before, CAP].sort())
+      const registered = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading, [NEAR]: reading } })
+      for (const id of [CAP, NEAR]) expect(disposition(registered, id), id).toBe('verified')
+      expect(registered.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...before, CAP, NEAR].sort())
+      // The main id alone (the pre-committed narrowing): verified, the near-top id withheld.
+      const main = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } })
+      expect([disposition(main, CAP), disposition(main, NEAR)]).toEqual(['verified', 'supported-structural'])
       const other = S2_UPPER_SEGMENT_READINGS.find(x => x !== reading)!
       expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: other } }), CAP)).toBe('supported-structural')
     }, HEAVY)
@@ -431,11 +462,12 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
     expect(res.kind).toBe('verified')
     if (res.kind !== 'verified') return
     expect((res.refusedCapabilities ?? []).map(x => [x.capabilityId, x.code])).toEqual([[CAP, 'formula-hypothesis-none']])
+    expect(res.matchedHypotheses).toEqual({ [NEAR]: 'index-position' })
     for (const reading of S2_UPPER_SEGMENT_READINGS) expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } }), CAP), reading).toBe('supported-structural')
     // Production as committed on that world: every upper-segment cell of the shapes withheld and justified; nothing disagrees.
     const r = await stage2Conformance(m, root, [ID])
     expect(r.violations).toEqual([])
-    expect([r.total, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([192, 69, 55, 14, 0])
+    expect([r.total, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([207, 78, 64, 14, 0])
   }, HEAVY)
 })
 
@@ -483,10 +515,13 @@ describe('the rehearsal: each registration against every committed capture, and 
       const c = m.cases.find(x => x.id === ID)!
       const unregistered = await stage2Conformance(m, root, [ID])
       expect(unregistered.violations, reading).toEqual([])
-      expect([unregistered.total, unregistered.withheld], reading).toEqual([192, shapeRefs.length])
+      expect([unregistered.total, unregistered.withheld], reading).toEqual([207, shapeRefs.length])
       const registered = await withRegistration(reading, () => stage2Conformance(m, root, [ID]))
       expect(registered.violations, reading).toEqual([])
-      expect([registered.total, registered.withheld], `${reading} registered`).toEqual([192, 0])
+      expect([registered.total, registered.withheld], `${reading} registered`).toEqual([207, 0])
+      // The main id alone: the near-top cells withheld and justified.
+      const narrowed = await withRegistration(reading, () => stage2Conformance(m, root, [ID]), false)
+      expect([narrowed.violations.length, narrowed.withheld], `${reading} main only`).toEqual([0, nearTopRefs.length])
       for (const mode of ['interactive', 'paged'] as const) {
         const a = await compareCfCase(c, mode, { rootDir: root })
         expect(`${reading} ${mode}: ${a.outcome} ${a.outcome === 'pass' ? '' : a.reason}`).toBe(`${reading} ${mode}: pass `)
@@ -495,7 +530,7 @@ describe('the rehearsal: each registration against every committed capture, and 
       }
       const other = S2_UPPER_SEGMENT_READINGS.find(x => x !== reading)!
       const wrong = await withRegistration(other, () => stage2Conformance(m, root, [ID]))
-      expect(wrong.violations.length, `${other} on a ${reading} world`).toBe(40)
+      expect(wrong.violations.length, `${other} on a ${reading} world`).toBe(48)
     }
   }, 900_000)
 

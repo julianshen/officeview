@@ -3268,7 +3268,7 @@ describe('CF oracle verifier', () => {
     // finding, control and twin-line ids (stage2-scale-upper-whole), and the window follow-up's question, literal-twin and
     // twin-line ids (stage2-scale-upper-window), and the raw-floor follow-up's question, literal-lower and twin-line ids
     // (stage2-scale-raw-floor, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(65)
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(66)
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(15)
     // Stage 4 (Task 24) appends its own registry after Stage 3's.
@@ -4158,7 +4158,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // finding, control and twin-line ids (stage2-scale-upper-whole), and the window follow-up's question, literal-twin and
     // twin-line ids (stage2-scale-upper-window), and the raw-floor follow-up's question, literal-lower and twin-line ids
     // (stage2-scale-raw-floor, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(65)
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(66)
     // 77 since the all-equal follow-up's four pre-registered questions (stage3-bar-all-equal).
     expect(CF_STAGE3_CAPABILITIES).toHaveLength(77)
     expect(CF_STAGE1_CASES).toHaveLength(13)
@@ -5471,7 +5471,7 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const manifest = loadManifest()
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
-    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 65, 77, 145])
+    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 66, 77, 145])
     expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 15, 17, 20])
     expect(CF_CASES.slice(0, 65).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
     expect(CF_CASES.slice(65).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))

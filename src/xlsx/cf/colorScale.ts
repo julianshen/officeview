@@ -777,11 +777,44 @@ export function upperSegmentPositionColour(argb0: number, argb1: number, fractio
   return out >>> 0
 }
 
+/**
+ * The near-top sub-shape (orchestrator ruling before the capture of stage2-scale-upper-segment): an interior cell of a 3-colour
+ * UPPER segment where some RGB channel with d = |c1 − c0| != 0 has p = f·d within CF_TRUNCATION_GUARD below the full span
+ * (d − p <= 1e-11, the value within about 1e-13 of the maximum). Guarded truncation paints d there (the maximum's colour),
+ * `index-position` one step less; no capture holds such a cell. Withheld (`cf-unmeasured-upper-near-top`) unless the near-top
+ * id is registered with the SAME reading as `scale:upper-segment`, both with their evidence (pre-committed narrowing: the
+ * upper-segment reading can be registered with this sub-shape still withheld).
+ */
+export function upperSegmentNearTop(c0: number, c1: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  if (!(value > tLo && value < tHi)) return false
+  for (const shift of [16, 8, 0]) {
+    const d = Math.abs(((c1 >>> shift) & 0xff) - ((c0 >>> shift) & 0xff))
+    if (d !== 0 && d - fraction * d <= CF_TRUNCATION_GUARD) return true
+  }
+  return false
+}
+/** The capability the near-top sub-shape's reading is registered under (stage2-scale-upper-segment, its own configuration). */
+export const CF_UPPER_NEAR_TOP_CAP = 'scale:upper-segment-near-top'
+/** The near-top reading production implements: none (withheld) until a capture matches it and it is registered here. */
+export const CF_UPPER_NEAR_TOP_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({})
+let proposedUpperNearTopReadings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null = null
+/** Test seam: rehearse a proposed near-top registration as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfUpperNearTopReadings(readings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null): void {
+  proposedUpperNearTopReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The near-top reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfUpperNearTopReading(capability: string = CF_UPPER_NEAR_TOP_CAP): CfUpperSegmentReading | undefined {
+  const r = proposedUpperNearTopReadings && Object.prototype.hasOwnProperty.call(proposedUpperNearTopReadings, capability) ? proposedUpperNearTopReadings[capability] : CF_UPPER_NEAR_TOP_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_UPPER_SEGMENT_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
 /** The colour of the registered upper-segment reading, if any (with its evidence, sRGB / truncate, no formula-resolved bound). */
-function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): number | undefined {
+function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, nearTop = false): number | undefined {
   if (seg.segment !== 1 || colorSpace !== 'sRGB' || rounding !== 'truncate' || formulaResolvedBound(lo) || formulaResolvedBound(hi)) return undefined
   const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
   if (r === undefined || !checkEvidence(CF_UPPER_SEGMENT_CAP)) return undefined
+  // The near-top sub-shape: only with its own registration, the same reading, and its evidence.
+  if (nearTop && (cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) !== r || !checkEvidence(CF_UPPER_NEAR_TOP_CAP))) return undefined
   return r === 'index-position' ? upperSegmentPositionColour(seg.c0, seg.c1, seg.fraction) : interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding)
 }
 
@@ -798,6 +831,11 @@ function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfSc
  */
 function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
   const literal = literalNumBound(lo) && literalNumBound(hi)
+  // The near-top sub-shape (before every other upper-segment rule): withheld unless its own registration matches.
+  if (seg.segment === 1 && upperSegmentNearTop(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+    const upper = upperSegmentReadingColour(lo, hi, seg, checkEvidence, colorSpace, rounding, true)
+    return upper !== undefined ? { kind: 'ready', value: upper } : { kind: 'unresolved', reason: 'cf-unmeasured-upper-near-top' }
+  }
   if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) {
     const r = seg.segment === 0 && colorSpace === 'sRGB' && rounding === 'truncate' ? cfLiteralLowerReading(CF_LITERAL_LOWER_CAP) : undefined
     if (r !== undefined && checkEvidence(CF_LITERAL_LOWER_CAP)) {

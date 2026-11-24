@@ -84,7 +84,7 @@ import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
-import { CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
+import { CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
 import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
 import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
@@ -265,7 +265,8 @@ export type Stage2AuditReport = Stage1AuditReport
  * (`CF_GUARD_BOUNDARY_PRODUCTION_READINGS`: `raw-floor`, matched by stage2-scale-raw-floor's capture, ce3f701d).
  * The literal-lower id spreads `CF_LITERAL_LOWER_PRODUCTION_READINGS` (`lower-arithmetic`, matched by
  * stage2-scale-literal-lower's capture, a3f85309), and the upper-segment id `CF_UPPER_SEGMENT_PRODUCTION_READINGS` (empty
- * until stage2-scale-upper-segment's capture matches a reading and it is registered there).
+ * until stage2-scale-upper-segment's capture matches a reading and it is registered there), and its near-top sub-shape's
+ * `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS` (production paints it only when both register the same reading).
  * A capability whose matched reading differs, or has no entry, stays withheld.
  */
 export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
@@ -274,6 +275,7 @@ export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
   ...(CF_GUARD_BOUNDARY_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_LITERAL_LOWER_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_UPPER_SEGMENT_PRODUCTION_READINGS as Readonly<Record<string, string>>),
+  ...(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS as Readonly<Record<string, string>>),
 }
 
 export function auditStage2Manifest(

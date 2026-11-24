@@ -10,7 +10,7 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, literalLowerPaints, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, literalLowerPaints, upperNearTopShapeAt, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -105,7 +105,8 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
  * Stage 2 holds no formula bound: a formula bound justifies nothing here.
  */
 export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
-  return markers.some(m => upperWholeShapeAt(m, ref, value, values))
+  // The near-top sub-shape (`upperNearTopShapeAt`, reason cf-unmeasured-upper-near-top) is counted with it.
+  return markers.some(m => upperWholeShapeAt(m, ref, value, values) || upperNearTopShapeAt(m, ref, value, values))
 }
 
 /**

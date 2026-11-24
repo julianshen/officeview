@@ -13,24 +13,28 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  CF_UPPER_NEAR_TOP_CAP,
+  CF_UPPER_NEAR_TOP_PRODUCTION_READINGS,
   CF_UPPER_SEGMENT_CAP,
   CF_UPPER_SEGMENT_PRODUCTION_READINGS,
   CF_UPPER_SEGMENT_READINGS,
   CF_UPPER_WINDOW_CAP,
   cfUpperSegmentReading,
+  injectCfUpperNearTopReadings,
   injectCfUpperSegmentReadings,
   injectCfUpperWindowReadings,
   interpolateScaleColor,
   scaleColorAt,
+  upperSegmentNearTop,
   upperSegmentPositionColour,
   type CfUpperSegmentReading,
 } from '../src/xlsx/cf/colorScale'
 import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
-import { upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
+import { upperNearTopShapeAt, upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
 import { stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
 
-afterEach(() => { injectCfUpperSegmentReadings(null); injectCfUpperWindowReadings(null) })
+afterEach(() => { injectCfUpperSegmentReadings(null); injectCfUpperNearTopReadings(null); injectCfUpperWindowReadings(null) })
 
 const hex = (n: number): string => (n >>> 0).toString(16).toUpperCase().padStart(8, '0')
 const P = 0xff14f028, Q = 0xffe61efa // P + 210·(1, −1, 1)
@@ -186,4 +190,57 @@ describe('the justifications narrow with the registration plus its evidence, and
       })
     })
   }
+})
+
+describe('the near-top sub-shape (orchestrator ruling before the capture): withheld unless both ids register the same reading', () => {
+  const NEARTOP = 'cf-unmeasured-upper-near-top'
+  const top = 426.99999999999994 // one ulp below 427 in num 7 / 217 / 427 (upper Q -> P, span 210): f·210 = 209.99999999999994
+  const NT = [num(7, P), num(217, Q), num(427, P)], NTT = [7, 217, 427]
+  const st = [mn(P), pct(50, Q), mx(P)]
+  const allNear = (cap: string): boolean => cap.length > 0
+  it('the predicate: within 1e-11 below the full span on some channel, strictly inside; not 1e-9 below, not the endpoint, not the lower segment', () => {
+    const f = (v: number): number => (v - 217) / 210
+    expect(upperSegmentNearTop(Q, P, top, 217, 427, f(top))).toBe(true)
+    expect(upperSegmentNearTop(Q, P, 427 - 1e-9, 217, 427, f(427 - 1e-9))).toBe(false)
+    expect(upperSegmentNearTop(Q, P, 427, 217, 427, 1)).toBe(false)
+    expect(upperSegmentNearTop(Q, P, 0.9999999999999999, -1, 1, 0.9999999999999999)).toBe(true)
+    expect(CF_UPPER_NEAR_TOP_CAP).toBe('scale:upper-segment-near-top')
+    expect(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS).toEqual({})
+  })
+  it('unregistered: withheld (it was painted at the maximum colour before the ruling); with the main id alone or a different near-top reading: still withheld; with both at the same reading: the reading', () => {
+    expect(at(top, NT, NTT)).toBe(NEARTOP)
+    expect(at(top, st, [0, 210, 420].map(x => x + 7))).toBe(NEARTOP)
+    for (const reading of CF_UPPER_SEGMENT_READINGS) {
+      const other = CF_UPPER_SEGMENT_READINGS.find(x => x !== reading)!
+      register(reading)
+      expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(NEARTOP)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: other })
+      expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(NEARTOP)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: reading })
+      const f = (top - 217) / 210
+      expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(hex(reading === 'index-position' ? upperSegmentPositionColour(Q, P, f)! : interpolateScaleColor(Q, P, f)))
+      expect(at(top, NT, NTT, { hasEvidence: without(CF_UPPER_NEAR_TOP_CAP) })).toBe(NEARTOP)
+      expect(at(top, [num(7, P), numF(217, Q), num(427, P)], NTT, { hasEvidence: allNear })).toBe(NEARTOP)
+      injectCfUpperNearTopReadings(null)
+    }
+    // index-position one step below the maximum colour, truncate the maximum colour.
+    expect(hex(upperSegmentPositionColour(Q, P, (top - 217) / 210)!)).toBe('FF15EF29')
+    expect(hex(interpolateScaleColor(Q, P, (top - 217) / 210))).toBe('FF14F028')
+  })
+  it('the justification: the shape is justified unless both ids register the same reading with their evidence and no bound is a formula', () => {
+    const m: UpperWholeMarker = { ruleType: 'colorScale', sqref: 'A2:A9', scale: { cfvo: [{ type: 'num', val: '7' }, { type: 'num', val: '217' }, { type: 'num', val: '427' }], colors: ['FF14F028', 'FFE61EFA', 'FF14F028'] } }
+    const vals = new Map([['A3', top]])
+    const caps = [...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP, CF_UPPER_NEAR_TOP_CAP]
+    withExactCfEvidence(caps, () => {
+      expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true)
+      expect(upperNearTopShapeAt(m, 'A3', 300, vals)).toBe(false)
+      register('index-position')
+      expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'truncate' })
+      expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
+      expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(false)
+    })
+    withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP], () => expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true))
+  })
 })
