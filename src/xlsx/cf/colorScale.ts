@@ -584,7 +584,8 @@ export const CF_GUARD_BOUNDARY_CAP = 'scale:guard-boundary-raw-floor'
  * The reading production implements per id: `raw-floor` for scale:guard-boundary-raw-floor, matched by the capture of
  * stage2-scale-raw-floor (ce3f701d). With its evidence, production paints the guard-boundary shape at raw floor where the
  * default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved; a formula-bounded segment, and a
- * 3-colour lower segment bounded by two literal num cfvo (the num-segment withhold, first), stay withheld. Without the
+ * 3-colour lower segment bounded by two literal num cfvo (the num-segment withhold, first, unless a literal-lower reading
+ * hands the cell here), stay withheld. Without the
  * evidence the shape stays withheld (`cf-unmeasured-guard-boundary`). The audit's CF_STAGE2_PRODUCTION_READINGS spreads this
  * table.
  */
@@ -667,15 +668,79 @@ export function upperWindowReadingColor(reading: CfUpperWindowReading | CfGuardB
 }
 
 /**
- * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`; an upper-segment cell in the
- * `integer` class is withheld; one in the `window` class follows the window reading when it is registered with its evidence,
- * the segment is not bounded by two literal num cfvo and the default sRGB / truncate variants hold, else is withheld; a
- * lower-segment cell in the guard-boundary shape is withheld (`guardBoundaryProduct`); every other cell is production's
- * interpolation.
+ * The literal-lower follow-up (brief cf-literal-lower, Phase 1 task 2): the readings of an interior cell of a 3-colour LOWER
+ * segment in the num-segment shape (`numSegmentUnmeasured`: bounded by two literal num cfvo, f·2^20 not an integer). Every
+ * captured such cell (64, the census scripts/cf-refs/literal-lower-census.ts) was drawn at production's lower-segment
+ * arithmetic; the founding anomaly T4/V3 (e448d831) is in the UPPER segment. Readings:
+ * - `lower-arithmetic`: the cell is painted exactly as a lower segment not bounded by two literal num cfvo is today
+ *   (`guardedInterpolation`: truncation, the guard-boundary shape at its registered reading with its evidence, else withheld);
+ * - `step-plus-one`: T4/V3 transplanted: per ARGB channel with d != 0, the step from the segment's start colour is production's
+ *   guarded truncation step floor(f·|d| + 1e-11) minus one (`literalLowerStepColour`). It reproduces T4 and V3 and the literal
+ *   upper-segment cells F12, F15, F16, F18, F19 of 54fc3388 (where raw floor minus one does not).
+ * Pre-registered by stage2-scale-literal-lower. The UPPER segment is not a reading's: it stays withheld whatever is registered.
+ */
+export const CF_LITERAL_LOWER_READINGS = ['lower-arithmetic', 'step-plus-one'] as const
+export type CfLiteralLowerReading = (typeof CF_LITERAL_LOWER_READINGS)[number]
+/** The capability a literal-lower reading is registered under (stage2-scale-literal-lower). */
+export const CF_LITERAL_LOWER_CAP = 'scale:num-segment-literal-lower'
+/**
+ * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
+ * (with its evidence), the literal-num lower segment stays withheld (`cf-unmeasured-num-segment-fraction`), as on main. The
+ * audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_LITERAL_LOWER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfLiteralLowerReading>>> = Object.freeze({})
+let proposedLiteralLowerReadings: Readonly<Partial<Record<string, CfLiteralLowerReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfLiteralLowerReadings(readings: Readonly<Partial<Record<string, CfLiteralLowerReading>>> | null): void {
+  proposedLiteralLowerReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The literal-lower reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfLiteralLowerReading(capability: string = CF_LITERAL_LOWER_CAP): CfLiteralLowerReading | undefined {
+  const r = proposedLiteralLowerReadings && Object.prototype.hasOwnProperty.call(proposedLiteralLowerReadings, capability) ? proposedLiteralLowerReadings[capability] : CF_LITERAL_LOWER_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_LITERAL_LOWER_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/**
+ * `step-plus-one`'s colour between `argb0` (at f = 0) and `argb1`: per ARGB channel with d = |c1 − c0| != 0, the start colour
+ * moved toward the end colour by floor(f·d + CF_TRUNCATION_GUARD) − 1 (f clamped to [0, 1]); a channel with d = 0 keeps its
+ * value. Undefined (the caller withholds) on any non-finite intermediate, or where some channel's truncation step is 0 (the
+ * reading would step past the start colour: T4/V3 say nothing there).
+ */
+export function literalLowerStepColour(argb0: number, argb1: number, fraction: number): number | undefined {
+  if (!Number.isFinite(fraction)) return undefined
+  const f = Math.max(0, Math.min(1, fraction))
+  let out = 0
+  for (const shift of [24, 16, 8, 0]) {
+    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
+    const d = Math.abs(c1 - c0)
+    if (d === 0) { out |= c0 << shift; continue }
+    const k = Math.floor(f * d + CF_TRUNCATION_GUARD) - 1
+    if (!Number.isFinite(k) || k < 0) return undefined
+    out |= (c1 >= c0 ? c0 + k : c0 - k) << shift
+  }
+  return out >>> 0
+}
+
+/**
+ * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`, except a LOWER-segment cell
+ * when a literal-lower reading is registered with its evidence under the default sRGB / truncate variants (`lower-arithmetic`
+ * paints it as a non-literal lower segment, `guardedInterpolation`; `step-plus-one` paints `literalLowerStepColour`, else
+ * withheld); an upper-segment cell in the `integer` class is withheld; one in the `window` class follows the window reading
+ * when it is registered with its evidence, the segment is not bounded by two literal num cfvo and the default sRGB / truncate
+ * variants hold, else is withheld; a lower-segment cell in the guard-boundary shape is withheld (`guardBoundaryProduct`)
+ * unless its reading is registered; every other cell is production's interpolation.
  */
 function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
   const literal = literalNumBound(lo) && literalNumBound(hi)
-  if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) {
+    const r = seg.segment === 0 && colorSpace === 'sRGB' && rounding === 'truncate' ? cfLiteralLowerReading(CF_LITERAL_LOWER_CAP) : undefined
+    if (r !== undefined && checkEvidence(CF_LITERAL_LOWER_CAP)) {
+      if (r === 'lower-arithmetic') return guardedInterpolation(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction, colorSpace, rounding, checkEvidence, [lo, hi])
+      const argb = literalLowerStepColour(seg.c0, seg.c1, seg.fraction)
+      if (argb !== undefined) return { kind: 'ready', value: argb }
+    }
+    return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  }
   const cls = seg.segment === 1 ? upperSegmentProductClass(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) : undefined
   if (cls === 'window' && !literal && colorSpace === 'sRGB' && rounding === 'truncate') {
     const r = cfUpperWindowReading(CF_UPPER_WINDOW_CAP)

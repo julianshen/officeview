@@ -10,7 +10,7 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, literalLowerPaints, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -69,7 +69,8 @@ type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { 
  * The num-segment finding (production's `numSegmentUnmeasured`, recomputed independently from the marker): a 3-colour
  * scale cell whose value lies strictly inside a segment bounded by two literal num cfvo (after the midpoint-above-max
  * re-sort), where f*2^20 is not an integer. Excel 16.115 drew T4 and V3 of stage2-scale-scope-disjoint one unit HIGHER per
- * RGB channel than production (the descending step one unit smaller in magnitude), by a rule not yet explained.
+ * RGB channel than production (the descending step one unit smaller in magnitude), by a rule not yet explained. The lower
+ * segment narrows only once a literal-lower reading is registered with its evidence (`literalLowerPaints`).
  */
 export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
@@ -82,9 +83,14 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
     const idx = t[1] !== undefined && t[2] !== undefined && t[1] > t[2] ? [0, 2, 1] : [0, 1, 2]
     const [a, b, c] = idx.map(i => t[i])
     if (b === undefined) return false
-    const [lo, hi] = value <= b ? [a, b] : [b, c]
+    const lower = value <= b
+    const [lo, hi] = lower ? [a, b] : [b, c]
     if (lo === undefined || hi === undefined || !(value > lo && value < hi)) return false
-    return !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)
+    const f = (value - lo) / (hi - lo)
+    if (Number.isInteger(f * 1048576)) return false
+    // The literal-lower follow-up: a registered literal-lower reading (with its evidence) paints the LOWER segment (colours 1 -> 2,
+    // positional), so it is justified no longer there; the upper segment always is.
+    return !(lower && literalLowerPaints(m.scale.colors[0]!, m.scale.colors[1]!, f))
   })
 }
 
