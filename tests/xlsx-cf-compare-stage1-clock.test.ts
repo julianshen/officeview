@@ -4,8 +4,12 @@
  * whatever the host's day and zone. The resident (interactive) adapter parsed Stage 1-4 cases with no clock pin, so the
  * load-time recalculation of a `ca` TODAY() cell (stage1-timeperiod-today-clock B15, stage1-timeperiod-today-clock-2 B7)
  * read the host's day while the rules read the anchor serial through `dateContext`: from the day after the anchor both
- * cases failed "expected matched: true, but no CF formatting applied". Production parses and paints at one instant, so
- * the two always agree there; only the validation clock was split.
+ * cases failed "expected matched: true, but no CF formatting applied". Excel measured one viewer at one instant, so the
+ * harness pins both the parse and the rules to that instant.
+ *
+ * Not covered here (open production edge): the resident viewer's local-midnight tick (InteractiveSheetDoc clockGen)
+ * re-evaluates clock-dependent CF for the new day without recalculating TODAY() cells, so a viewer who crosses midnight
+ * can see the cell and the rule on different days. Excel's behaviour across midnight is unmeasured.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
