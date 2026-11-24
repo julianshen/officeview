@@ -522,8 +522,9 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   const { cfRulesVersion } = await import('../src/xlsx/view/pagedSource')
   const savedAbs = resolve(rootDir, c.saved)
   const pkg = await OfficePackage.load(new Uint8Array(readFileSync(savedAbs)))
-  // Final review F2: a Stage 5 clock case is parsed and prepared at its anchor instant in its required zone (case-clock.ts).
-  const doc = await parseXlsx(pkg, c.stage === 5 ? caseParseOptionsOf(c) : {})
+  // Final review F2: a clock case (any stage) is parsed at its anchor instant in its required zone (case-clock.ts), so a
+  // load-time TODAY() recalculation reads the same day as the rules; a no-op for a case with no clock requirement.
+  const doc = await parseXlsx(pkg, caseParseOptionsOf(c))
   const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]
   if (!sheet) return fail(`Sheet ${c.sheet} missing`)
   const rect = parseRangeA1(c.range)
