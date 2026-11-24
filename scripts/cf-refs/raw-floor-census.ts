@@ -113,12 +113,17 @@ export function rawFloorCensus(collection: SegmentCollection): { rows: CensusRow
  * reproducing the numbers of recipe §11.1 as they were when the case was designed; the default includes it (recipe §11.7).
  */
 export const RAW_FLOOR_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-raw-floor']
+/**
+ * Captures after this census's own follow-up, left out in every mode: the census is recorded as of ce3f701d (recipe §11.7).
+ * stage2-scale-literal-lower (a3f85309) is counted by scripts/cf-refs/literal-lower-census.ts.
+ */
+export const RAW_FLOOR_LATER_CASES: readonly string[] = ['stage2-scale-literal-lower']
 
 /** Every captured cell of the manifest's measured colour-scale cases, through production's own pipeline. */
 export async function rawFloorCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof rawFloorCensus>> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
   const all = await collectSegmentCells(m, rootDir, { include: 'all' })
-  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'all') === 'all' || !RAW_FLOOR_POST_CAPTURE_CASES.includes(x.caseId)
+  const keep = (x: { caseId: string }): boolean => !RAW_FLOOR_LATER_CASES.includes(x.caseId) && ((opts.include ?? 'all') === 'all' || !RAW_FLOOR_POST_CAPTURE_CASES.includes(x.caseId))
   const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, ...rawFloorCensus(collection) }
 }

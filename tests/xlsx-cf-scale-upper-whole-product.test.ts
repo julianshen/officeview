@@ -164,7 +164,9 @@ describe('the capture (stage2-scale-num-segment): every moved cell is in the sha
     paint!.dispose()
     for (const ref of ['B17', 'B18', 'B21', 'B24', 'B28', 'C17', 'C18', 'C21', 'C24', 'C28', 'D7', 'D8', 'D12', 'D13', 'E17', 'E18', 'E21', 'E24', 'E28']) expect(withheld, ref).toContain(ref)
     // 96 literal-num cells (the num-segment withhold) and 13 by the new rule: B26, C26 (literal halves) and E17..E26, E28.
-    expect(withheld.length).toBe(109)
+    // Since the literal-lower registration (stage2-scale-literal-lower, a3f85309) the 48 lower-segment literal-num cells paint
+    // Excel's fill (checked above): 48 upper-segment num-segment cells and the 13 remain.
+    expect(withheld.length).toBe(109 - 48)
   }, 300_000)
 })
 

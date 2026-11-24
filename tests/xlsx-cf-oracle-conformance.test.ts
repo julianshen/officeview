@@ -190,6 +190,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-upper-whole',
     'stage2-scale-upper-window',
     'stage2-scale-raw-floor',
+    'stage2-scale-literal-lower',
   ]
 
 
@@ -612,15 +613,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(checkedCount).toBe(1138)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 12 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 14 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
     expect(r.violations).toEqual([])
     for (const caseId of STAGE2_MEASURED_CASES) expect(r.caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment
     // + the 195 of stage2-scale-upper-whole (54fc3388).
-    // + the 147 of stage2-scale-upper-window (ed0fccb6) + the 201 of stage2-scale-raw-floor (ce3f701d).
-    expect(r.total).toBe(1310)
+    // + the 147 of stage2-scale-upper-window (ed0fccb6) + the 201 of stage2-scale-raw-floor (ce3f701d)
+    // + the 180 of stage2-scale-literal-lower (a3f85309).
+    expect(r.total).toBe(1490)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
     // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
@@ -636,9 +638,13 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // stage2-scale-raw-floor (raw-floor matched and registered, §14.z.18): its 67 guard-boundary cells and the 14 of
     // stage2-scale-upper-window are painted at raw floor, exactly; 4 literal cells stay withheld by the num-segment finding
     // and 9 W3 probes by the upper-segment whole-product withhold; 188 exact (13 of them unformatted).
-    expect([r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([258, 59, 0])
-    expect(r.exact).toBe(364 + 77 - 6 + 172 + 73 + (77 + 14) + 188 + r.stubCompared)
-    expect(r.withheld).toBe(34 + 11 + 6 + 109 + 122 + (70 - 14) + 13 - r.stubCompared)
+    // stage2-scale-literal-lower (lower-arithmetic matched and registered, §14.z.21): every literal-num LOWER-segment cell of
+    // the num-segment shape now paints exactly: 6 of stage2-scale-scope-disjoint, 48 of stage2-scale-num-segment, 6 of
+    // stage2-scale-upper-whole, 4 of stage2-scale-raw-floor (F6..F9) and this capture's 50; its 16 upper probes stay
+    // withheld by the num-segment finding; 164 exact (10 of them unformatted).
+    expect([r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([210, 59, 0])
+    expect(r.exact).toBe(364 + (77 + 6) - 6 + (172 + 48) + (73 + 6) + (77 + 14) + (188 + 4) + 164 + r.stubCompared)
+    expect(r.withheld).toBe(34 + (11 - 6) + 6 + (109 - 48) + (122 - 6) + (70 - 14) + (13 - 4) + 16 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

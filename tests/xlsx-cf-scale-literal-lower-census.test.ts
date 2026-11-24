@@ -5,7 +5,8 @@
  * (scripts/cf-refs/literal-lower-census.ts; docs/validation/xlsx-cf-recipes-stage2.md §12.1). Production's lower-segment
  * arithmetic as now registered (raw floor at guard-boundary products, `interpolateScaleColor` truncation elsewhere) equals
  * Excel's DisplayFormat fill at every one of them, the 64 the num-segment withhold covers (f·2^20 not an integer) included.
- * This checks the census, not Excel.
+ * This checks the census, not Excel. The census as run before stage2-scale-literal-lower was captured is pinned first
+ * (recipe §12.1); with that capture (a3f85309) included it is pinned at the end (recipe §12.7): still exact.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 import { countBy, literalLowerCensusOf, productionLowerColour, type LiteralLowerRow } from '../scripts/cf-refs/literal-lower-census'
@@ -15,7 +16,8 @@ let census: Awaited<ReturnType<typeof literalLowerCensusOf>>
 let rows: LiteralLowerRow[] = []
 let withheld: LiteralLowerRow[] = []
 beforeAll(async () => {
-  census = await literalLowerCensusOf()
+  // The census as run before stage2-scale-literal-lower was captured (recipe §12.1); the capture is pinned separately below.
+  census = await literalLowerCensusOf(undefined, undefined, { include: 'pre-capture' })
   rows = census.rows
   withheld = rows.filter(r => !r.f20)
 }, HEAVY)
@@ -53,5 +55,26 @@ describe('the literal-lower census (every captured interior cell of a literal-nu
   it('productionLowerColour: raw floor at a guard-boundary product (57/210 on the P line), truncation elsewhere', () => {
     expect(productionLowerColour(0xff14f028, 0xffe61efa, 57, 0, 210, 57 / 210)).toBe('FF4CB860') // 57/210·210 = 56.99999999999999: step 56
     expect(productionLowerColour(0xff14f028, 0xffe61efa, 105, 0, 210, 0.5)).toBe('FF7D8791')
+  })
+})
+
+describe('after the capture of stage2-scale-literal-lower (a3f85309): the census on every capture (recipe §12.7)', () => {
+  let post: Awaited<ReturnType<typeof literalLowerCensusOf>>
+  beforeAll(async () => { post = await literalLowerCensusOf() }, HEAVY)
+
+  it('1589 segment cells, no harness fault; 130 literal-num lower-segment interior cells (60 from the capture), 114 in the num-segment shape (50 from it)', () => {
+    expect(post.collection.cells.length).toBe(1589)
+    expect(post.collection.faults).toEqual([])
+    expect(post.rows.length).toBe(130)
+    expect(post.rows.filter(r => r.caseId === 'stage2-scale-literal-lower').length).toBe(60)
+    expect(post.rows.filter(r => !r.f20).length).toBe(114)
+    expect(post.rows.filter(r => !r.f20 && r.caseId === 'stage2-scale-literal-lower').length).toBe(50)
+  })
+
+  it('production\'s lower-segment arithmetic still equals Excel\'s fill at all 130; the 114 of the shape by palette kind and class', () => {
+    expect(post.rows.filter(r => r.lower !== r.excel)).toEqual([])
+    const shape = post.rows.filter(r => !r.f20)
+    expect(table(shape, r => `${r.kind} ${r.cls}`)).toEqual(['distinct above 4 4', 'distinct below 3 3', 'distinct clear 11 11', 'distinct integer 6 6', 'p-line above 12 12', 'p-line below 8 8', 'p-line clear 29 29', 'p-line integer 41 41'])
+    expect(table(shape, r => r.order)).toEqual(['asc 14 14', 'both 90 90', 'desc 10 10'])
   })
 })

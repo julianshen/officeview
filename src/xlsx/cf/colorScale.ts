@@ -677,18 +677,21 @@ export function upperWindowReadingColor(reading: CfUpperWindowReading | CfGuardB
  * - `step-plus-one`: T4/V3 transplanted: per ARGB channel with d != 0, the step from the segment's start colour is production's
  *   guarded truncation step floor(f·|d| + 1e-11) minus one (`literalLowerStepColour`). It reproduces T4 and V3 and the literal
  *   upper-segment cells F12, F15, F16, F18, F19 of 54fc3388 (where raw floor minus one does not).
- * Pre-registered by stage2-scale-literal-lower. The UPPER segment is not a reading's: it stays withheld whatever is registered.
+ * Pre-registered by stage2-scale-literal-lower; its capture (a3f85309) matched `lower-arithmetic`, which is registered. The UPPER
+ * segment is not a reading's: it stays withheld whatever is registered.
  */
 export const CF_LITERAL_LOWER_READINGS = ['lower-arithmetic', 'step-plus-one'] as const
 export type CfLiteralLowerReading = (typeof CF_LITERAL_LOWER_READINGS)[number]
 /** The capability a literal-lower reading is registered under (stage2-scale-literal-lower). */
 export const CF_LITERAL_LOWER_CAP = 'scale:num-segment-literal-lower'
 /**
- * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
- * (with its evidence), the literal-num lower segment stays withheld (`cf-unmeasured-num-segment-fraction`), as on main. The
- * audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ * The reading production implements per id: `lower-arithmetic` for scale:num-segment-literal-lower, matched by the capture of
+ * stage2-scale-literal-lower (Excel 16.115, a3f85309) at all 46 decisive cells of its eight groups. With its evidence,
+ * production paints the literal-num LOWER segment as a non-literal lower segment (sRGB / truncate); without it the shape stays
+ * withheld (`cf-unmeasured-num-segment-fraction`). The upper segment stays withheld whatever is registered. The audit's
+ * CF_STAGE2_PRODUCTION_READINGS spreads this table.
  */
-export const CF_LITERAL_LOWER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfLiteralLowerReading>>> = Object.freeze({})
+export const CF_LITERAL_LOWER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfLiteralLowerReading>>> = Object.freeze({ [CF_LITERAL_LOWER_CAP]: 'lower-arithmetic' })
 let proposedLiteralLowerReadings: Readonly<Partial<Record<string, CfLiteralLowerReading>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfLiteralLowerReadings(readings: Readonly<Partial<Record<string, CfLiteralLowerReading>>> | null): void {

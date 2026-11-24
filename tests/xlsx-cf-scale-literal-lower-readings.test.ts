@@ -6,9 +6,11 @@
  * - `lower-arithmetic`: the cell is painted exactly as a non-literal lower segment is (`guardedInterpolation`: truncation,
  *   raw floor at a guard-boundary product under its registration, every fail-closed condition kept);
  * - `step-plus-one`: T4/V3's behaviour (e448d831) transplanted: per channel the guarded truncation step minus one.
- * Default production is exactly main: the shape stays withheld (`cf-unmeasured-num-segment-fraction`). The UPPER segment and
- * every other shape are untouched under every reading. The justifications (stage2NumSegmentShape, guardBoundaryShapeAt)
- * narrow only with the registration plus its evidence. This checks production, not Excel.
+ * Unregistered, the shape stays withheld (`cf-unmeasured-num-segment-fraction`). The UPPER segment and every other shape are
+ * untouched under every reading. The justifications (stage2NumSegmentShape, guardBoundaryShapeAt) narrow only with the
+ * registration plus its evidence. This checks production, not Excel. Since the capture of stage2-scale-literal-lower
+ * (a3f85309) matched lower-arithmetic, it is registered and published (docs/validation/xlsx-cf.md §14.z.21): the unregistered
+ * state is pinned through an invalid proposal (`unregister`), and the registered one as committed.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -44,6 +46,8 @@ const colour = (o: ReturnType<typeof scaleColorAt>): string => (o.kind === 'read
 const NUMSEG = 'cf-unmeasured-num-segment-fraction'
 const GUARD = 'cf-unmeasured-guard-boundary'
 const register = (reading: CfLiteralLowerReading): void => injectCfLiteralLowerReadings({ [CF_LITERAL_LOWER_CAP]: reading })
+/** The pre-capture state: no valid reading registered for the id. */
+const unregister = (): void => injectCfLiteralLowerReadings({ [CF_LITERAL_LOWER_CAP]: 'unregistered' as CfLiteralLowerReading })
 
 /** T4/V3 transplanted to the lower segment: num 0 / 30 / 60, Y / G / Y. 10 and 20 are f = 1/3 and 2/3 (the doubles of T4/V3). */
 const TV = [num(0, Y), num(30, G), num(60, Y)]
@@ -53,19 +57,19 @@ const PL = [num(0, P), num(210, Q), num(420, P)]
 const PLT = [0, 210, 420]
 const at = (v: number, points: readonly CfScalePoint[], t: readonly number[], opts: Parameters<typeof scaleColorAt>[3] = { hasEvidence: all }): string => colour(scaleColorAt(v, points, t, opts))
 
-describe('the readings: implemented, selectable, registered nowhere', () => {
-  it('lower-arithmetic and step-plus-one, the only readings; production registers none', () => {
+describe('the readings: implemented, selectable; lower-arithmetic registered (a3f85309)', () => {
+  it('lower-arithmetic and step-plus-one, the only readings; production registers lower-arithmetic for the question and nothing else', () => {
     expect([...CF_LITERAL_LOWER_READINGS]).toEqual(['lower-arithmetic', 'step-plus-one'])
     expect(CF_LITERAL_LOWER_CAP).toBe('scale:num-segment-literal-lower')
-    expect(CF_LITERAL_LOWER_PRODUCTION_READINGS).toEqual({})
+    expect(CF_LITERAL_LOWER_PRODUCTION_READINGS).toEqual({ [CF_LITERAL_LOWER_CAP]: 'lower-arithmetic' })
     expect(Object.isFrozen(CF_LITERAL_LOWER_PRODUCTION_READINGS)).toBe(true)
-    expect(cfLiteralLowerReading()).toBeUndefined()
+    expect(cfLiteralLowerReading()).toBe('lower-arithmetic')
     register('step-plus-one')
     expect(cfLiteralLowerReading()).toBe('step-plus-one')
     injectCfLiteralLowerReadings({ [CF_LITERAL_LOWER_CAP]: 'nonsense' as CfLiteralLowerReading })
     expect(cfLiteralLowerReading()).toBeUndefined()
-    injectCfLiteralLowerReadings({ 'scale:other': 'lower-arithmetic' })
-    expect(cfLiteralLowerReading()).toBeUndefined()
+    injectCfLiteralLowerReadings({ 'scale:other': 'step-plus-one' })
+    expect(cfLiteralLowerReading()).toBe('lower-arithmetic')
   })
 
   it('step-plus-one reproduces T4/V3 (e448d831) and the literal upper-segment cells of 54fc3388 from their segments; guarded − 1, not raw floor − 1', () => {
@@ -85,7 +89,8 @@ describe('the readings: implemented, selectable, registered nowhere', () => {
 })
 
 describe('scaleColorAt: default unchanged; a registered reading paints only the literal-num lower segment', () => {
-  it('unregistered (the default): the lower-segment shape stays withheld whatever the evidence; painted cells and the upper segment as before', () => {
+  it('unregistered (the state before a3f85309): the lower-segment shape stays withheld whatever the evidence; painted cells and the upper segment as before', () => {
+    unregister()
     for (const ev of [all, without(CF_LITERAL_LOWER_CAP)]) {
       expect(at(10, TV, TVT, { hasEvidence: ev })).toBe(NUMSEG)
       expect(at(70, PL, PLT, { hasEvidence: ev })).toBe(NUMSEG)
@@ -136,7 +141,15 @@ describe('scaleColorAt: default unchanged; a registered reading paints only the 
     expect(at(15, TV, TVT)).toBe('FFB1D580')
   })
 
+  it('as committed (lower-arithmetic registered, with evidence): T4/V3\'s lower-segment doubles paint truncation; without the id\'s evidence withheld', () => {
+    expect(at(10, TV, TVT)).toBe('FFCBDC81')
+    expect(at(70, PL, PLT)).toBe('FF5AAA6E')
+    expect(at(10, TV, TVT, { hasEvidence: without(CF_LITERAL_LOWER_CAP) })).toBe(NUMSEG)
+    expect(at(40, TV, TVT)).toBe(NUMSEG)
+  })
+
   it('the registration is per id: the guard-boundary and upper-window ids never select it', () => {
+    unregister()
     injectCfGuardBoundaryReadings({ [CF_GUARD_BOUNDARY_CAP]: 'raw-floor', [CF_LITERAL_LOWER_CAP]: 'raw-floor' } as never)
     injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'guarded' })
     expect(at(10, TV, TVT)).toBe(NUMSEG)
@@ -152,6 +165,7 @@ describe('the justifications narrow with the registration plus its evidence, and
   const shape = (m: typeof tv, v: number): boolean => stage2NumSegmentShape([m], 'A3', v)
 
   it('unregistered: every literal-num interior cell with f·2^20 not an integer is justified, lower and upper; f = 1/2 never', () => {
+    unregister()
     withExactCfEvidence(caps, () => {
       for (const v of [10, 20, 1, 40, 50]) expect(shape(tv, v), String(v)).toBe(true)
       expect(shape(tv, 15)).toBe(false)
@@ -178,7 +192,7 @@ describe('the justifications narrow with the registration plus its evidence, and
         expect(shape(pl, 57)).toBe(false)
         expect(guardBoundaryShapeAt(pl, 'A3', 57, values)).toBe(reading === 'lower-arithmetic')
       })
-      withExactCfEvidence([...VERIFIED_CAPABILITIES], () => {
+      withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(c => c !== CF_LITERAL_LOWER_CAP), () => {
         expect(shape(tv, 10)).toBe(true)
         expect(guardBoundaryShapeAt(pl, 'A3', 57, values)).toBe(false)
       })

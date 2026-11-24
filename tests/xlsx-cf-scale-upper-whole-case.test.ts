@@ -44,7 +44,10 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { percentileOrderStatistic, resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
-import { VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+
+/** As recorded at 54fc3388: before the literal-lower registration (a3f85309), whose evidence is withheld here. */
+const asRecorded = <T>(fn: () => Promise<T>): Promise<T> => withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:num-segment-literal-lower'), fn)
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 
 const REPO_ROOT = resolve(__dirname, '..')
@@ -179,9 +182,9 @@ describe('stage2-scale-upper-whole: the case (exploratory)', () => {
     expect(Object.is(percentileOrderStatistic(sorted, 30, 'inc'), 2.2)).toBe(true)
   })
 
-  it('the independent model is production: painted cells are the truncate prediction; withheld ones are the two existing withholds', async () => {
+  it('the independent model is production (as recorded, before the literal-lower registration): painted cells are the truncate prediction; withheld ones are the two existing withholds', async () => {
     const c = caseOf()
-    const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
+    const fills = await asRecorded(() => productionFills(c, c.expected.cells.map(e => e.ref)))
     const want = plantedFills(c, 'truncate')
     const withheld: string[] = []
     for (const e of c.expected.cells) {
@@ -315,11 +318,11 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
     const { compareCfCase } = await import('../scripts/cf-compare')
     for (const world of ['truncate', 'minus-one-except-D19'] as const) {
       const { root, manifest: m } = syntheticRoot(plantedFills(caseOf(), world))
-      const r = await stage2Conformance(m, root, [ID])
+      const r = await asRecorded(() => stage2Conformance(m, root, [ID]))
       expect(r.violations, world).toEqual([])
       expect([r.total, r.withheld], world).toEqual([195, 122])
       for (const mode of ['interactive', 'paged'] as const) {
-        const res = await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })
+        const res = await asRecorded(() => compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root }))
         expect(`${world} ${mode}:${res.outcome} ${res.outcome === 'pass' ? '' : res.reason}`).toBe(`${world} ${mode}:pass `)
       }
     }
@@ -332,10 +335,10 @@ describe('the rehearsal on a synthetic measured capture: nothing is ever registe
       const fills = plantedFills(caseOf(), world)
       expect(fills.get('D19'), world).toBe(predictions.get('D19')!.minusOne)
       const { root, manifest: m } = syntheticRoot(fills)
-      const r = await stage2Conformance(m, root, [ID])
+      const r = await asRecorded(() => stage2Conformance(m, root, [ID]))
       expect(r.violations, world).toEqual([])
       expect([r.total, r.withheld, r.upperWholeWithheld], world).toEqual([195, 122, 2])
-      for (const mode of ['interactive', 'paged'] as const) expect((await compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root })).outcome, `${world} ${mode}`).toBe('pass')
+      for (const mode of ['interactive', 'paged'] as const) expect((await asRecorded(() => compareCfCase(m.cases.find(x => x.id === ID)!, mode, { rootDir: root }))).outcome, `${world} ${mode}`).toBe('pass')
     }
   }, 900_000)
 })
@@ -391,10 +394,13 @@ describe('the capture (Excel 16.115, 54fc3388): recorded, nothing registered, pr
     expect([excel.get('D19'), excel.get('D20')]).toEqual([thFill('E4'), thFill('E5')])
   })
 
-  it('the shared conformance pass on the capture: no violation; 73 exact, 122 withheld and justified (120 num-segment; D19 and D20 upper whole product)', async () => {
-    const r = await stage2Conformance(manifest, REPO_ROOT, [ID])
+  it('the shared conformance pass on the capture: no violation; as recorded 73 exact, 122 withheld and justified (120 num-segment; D19 and D20 upper whole product); since the literal-lower registration 6 lower-segment cells more paint Excel\'s fill', async () => {
+    const r = await asRecorded(() => stage2Conformance(manifest, REPO_ROOT, [ID]))
     expect(r.violations).toEqual([])
     expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([195, 73, 122, 120, 2])
+    const live = await stage2Conformance(manifest, REPO_ROOT, [ID])
+    expect(live.violations).toEqual([])
+    expect([live.total, live.exact, live.withheld, live.numSegmentWithheld, live.upperWholeWithheld]).toEqual([195, 79, 116, 114, 2])
   }, HEAVY)
 
   it('the interactive and paged comparisons (scripts/cf-compare.ts) pass on the capture', async () => {

@@ -98,9 +98,10 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
 /**
  * The captures the pre-registration search ran on: every measured case but stage2-scale-num-segment itself (its own
  * confirmation case, captured after the readings were fixed) and the later stage2-scale-upper-whole (54fc3388),
- * stage2-scale-upper-window (ed0fccb6) and stage2-scale-raw-floor (ce3f701d). Pass `{ include: 'all' }` to add them.
+ * stage2-scale-upper-window (ed0fccb6), stage2-scale-raw-floor (ce3f701d) and stage2-scale-literal-lower (a3f85309). Pass
+ * `{ include: 'all' }` to add them.
  */
-export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor']
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower']
 
 export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }
@@ -151,6 +152,13 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
       const prod = production.get(ref)
       const truncate = hex(interpolateScaleColor(seg.c0, seg.c1, seg.fraction))
       if (prod === undefined && withheldShape(seg)) { out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' }); continue }
+      // Painted since the literal-lower registration (stage2-scale-literal-lower, a3f85309): a literal-num LOWER-segment cell of
+      // the num-segment shape, withheld when the searches ran; evaluated as then. A painted fill that is not Excel's is a fault.
+      if (prod !== undefined && seg.segment === 0 && withheldShape(seg)) {
+        if (prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
+        out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' })
+        continue
+      }
       // Withheld only by the later upper-segment whole-product rule (owner ruling A): before it, production painted the
       // truncation here; the cell is evaluated as it was when the search ran.
       if (prod === undefined && seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {

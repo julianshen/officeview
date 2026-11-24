@@ -129,8 +129,10 @@ describe('scaleColorAt: default unchanged; a registered reading paints only the 
       // A formula-resolved bound was never measured in this shape: withheld (fail closed).
       expect(colour(scaleColorAt(57, [numF(0, P), num(210, Q)], [0, 210], { hasEvidence: all }))).toBe(GUARD)
       expect(colour(scaleColorAt(0.13, [min(P), { bound: { type: 'percentile', value: 50, resolved: 'formula' }, argb: Q }, max(P)], [0.1, 0.4, 1], { hasEvidence: all }))).toBe(GUARD)
-      // The literal num-segment withhold keeps precedence on a 3-colour lower segment.
-      expect(colour(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], { hasEvidence: all }))).toBe('cf-unmeasured-num-segment-fraction')
+      // The literal num-segment withhold keeps precedence on a 3-colour lower segment without the literal-lower evidence; with it
+      // (lower-arithmetic, registered since a3f85309) the cell is this shape and paints the reading.
+      expect(colour(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], { hasEvidence: without('scale:num-segment-literal-lower') }))).toBe('cf-unmeasured-num-segment-fraction')
+      expect(colour(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], { hasEvidence: all }))).toBe(reading === 'raw-floor' ? SHAPES.A3.excel : SHAPES.A3.guarded)
       // Upper-segment cells keep their own rules: the window class (F12's double) and the integer class stay withheld.
       expect(colour(scaleColorAt(0.6, [min(P), pctl(50, Q), max(P)], [0.1, 0.4, 1], { hasEvidence: all }))).toBe('cf-unmeasured-upper-segment-whole-product')
       expect(colour(scaleColorAt(267, [min(P), pctl(50, Q), max(P)], [0, 210, 420], { hasEvidence: all }))).toBe('cf-unmeasured-upper-segment-whole-product')

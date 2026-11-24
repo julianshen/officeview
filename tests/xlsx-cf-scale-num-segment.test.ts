@@ -19,6 +19,8 @@ import type { CfScalePoint } from '../src/xlsx/cf/model'
 const RED = 0xfff8696b, YELLOW = 0xffffeb84, GREEN = 0xff63be7b
 const num = (value: number, argb: number, resolved?: 'formula'): CfScalePoint => ({ bound: { type: 'num', value, ...(resolved ? { resolved } : {}) }, argb })
 const all = { hasEvidence: () => true }
+/** Without the literal-lower registration's evidence (the state before a3f85309): the lower segment is withheld too. */
+const unpublished = { hasEvidence: (id: string) => id !== 'scale:num-segment-literal-lower' }
 const NUM3 = [num(0, RED), num(30, YELLOW), num(60, GREEN)]
 const WITHHELD = { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
 
@@ -28,9 +30,11 @@ describe('3-colour scale, literal num segment, f·2^20 not an integer: withheld'
     expect(scaleColorAt(50, NUM3, [0, 30, 60], all)).toEqual(WITHHELD)
   })
 
-  it('the lower segment of the same rule (values 10 and 20, f = 1/3 and 2/3) is withheld too', () => {
-    expect(scaleColorAt(10, NUM3, [0, 30, 60], all)).toEqual(WITHHELD)
-    expect(scaleColorAt(20, NUM3, [0, 30, 60], all)).toEqual(WITHHELD)
+  it('the lower segment of the same rule (values 10 and 20, f = 1/3 and 2/3) is withheld too without the literal-lower evidence; since a3f85309 (lower-arithmetic registered) it paints the truncation', () => {
+    expect(scaleColorAt(10, NUM3, [0, 30, 60], unpublished)).toEqual(WITHHELD)
+    expect(scaleColorAt(20, NUM3, [0, 30, 60], unpublished)).toEqual(WITHHELD)
+    expect(scaleColorAt(10, NUM3, [0, 30, 60], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(RED, YELLOW, 10 / 30) })
+    expect(scaleColorAt(20, NUM3, [0, 30, 60], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(RED, YELLOW, 20 / 30) })
   })
 
   it('fractions with f·2^20 an integer and endpoints are not this shape (U4 of the capture: num 30/60/100, value 70, f = 1/4, is the upper-segment whole-product shape since stage2-scale-num-segment)', () => {
@@ -56,7 +60,8 @@ describe('3-colour scale, literal num segment, f·2^20 not an integer: withheld'
     const mixed: CfScalePoint[] = [num(0, RED), num(30, YELLOW), { bound: { type: 'max' }, argb: GREEN }]
     expect(scaleColorAt(40, mixed, [0, 30, 60], all)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-upper-segment-whole-product' }) // not this shape, but the upper-segment whole-product one
     expect(scaleColorAt(41, mixed, [0, 30, 60], all).kind).toBe('ready')
-    expect(scaleColorAt(10, mixed, [0, 30, 60], all)).toEqual(WITHHELD)
+    expect(scaleColorAt(10, mixed, [0, 30, 60], unpublished)).toEqual(WITHHELD) // the lower segment is literal num / num
+    expect(scaleColorAt(10, mixed, [0, 30, 60], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(RED, YELLOW, 10 / 30) })
   })
 
   it('a formula bound resolved to a number is not the shape (no capture shows it)', () => {
@@ -72,7 +77,9 @@ describe('3-colour scale, literal num segment, f·2^20 not an integer: withheld'
   it('a midpoint above the maximum (thresholds re-sorted) follows the re-sorted segment bounds', () => {
     // num 10 / num 200 / num 100: segments 10..100 (cfvo 0 and 2) and 100..200 (cfvo 2 and 1), all literal num.
     const P = [num(10, RED), num(200, YELLOW), num(100, GREEN)]
-    expect(scaleColorAt(40, P, [10, 200, 100], all)).toEqual(WITHHELD)
+    expect(scaleColorAt(40, P, [10, 200, 100], unpublished)).toEqual(WITHHELD)
+    expect(scaleColorAt(40, P, [10, 200, 100], all)).toEqual({ kind: 'ready', value: interpolateScaleColor(RED, YELLOW, 30 / 90) })
+    expect(scaleColorAt(130, P, [10, 200, 100], all)).toEqual(WITHHELD) // the upper segment 100..200 stays withheld
     expect(scaleColorAt(55, P, [10, 200, 100], all).kind).toBe('ready') // f = 1/2, lower segment
   })
 })

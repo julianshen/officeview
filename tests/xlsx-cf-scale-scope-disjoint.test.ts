@@ -177,17 +177,19 @@ describe('the capture (e448d831): union, and production against Excel', () => {
     for (const e of c.expected.cells.filter(x => !x.matched)) expect(fills.get(e.ref), e.ref).toBeUndefined()
   }, HEAVY)
 
-  it('every twin paints exactly Excel\'s fill, except the num-segment shape, which is withheld (T4 and V3 are where Excel differs)', async () => {
+  it('every twin paints exactly Excel\'s fill, except the num-segment shape\'s upper-segment cells, which are withheld (T4 and V3 are where Excel differs)', async () => {
     const c = caseOf()
     const excel = excelFills(c)
     const twins = c.expected.cells.filter(e => twinOf(c, e.ref)).map(e => e.ref)
     const fills = await productionFills(c, twins)
     const withheld = twins.filter(ref => inNumSegmentShape(c, ref))
     expect(withheld).toEqual(['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4'])
+    // Since the literal-lower registration (stage2-scale-literal-lower, a3f85309), the lower-segment ones paint Excel's fill.
+    const lower = ['R3', 'R4', 'S2', 'T3', 'U3', 'W4']
     // U4 (num 30/60/100, value 70, f = 1/4, upper segment, step 39 whole) is withheld since stage2-scale-num-segment
     // (the upper-segment whole-product withhold, owner ruling A); Excel drew it at truncation.
     for (const ref of twins) {
-      if (withheld.includes(ref) || ref === 'U4') expect(fills.get(ref), ref).toBeUndefined()
+      if ((withheld.includes(ref) && !lower.includes(ref)) || ref === 'U4') expect(fills.get(ref), ref).toBeUndefined()
       else expect(fills.get(ref), ref).toBe(excel.get(ref))
     }
     // The finding: with the shape painted (production's interpolation), T4 and V3 are one unit lower per RGB channel than Excel.
@@ -476,8 +478,8 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
   it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // The num-segment follow-up registered nothing (its capture matched no reading); the raw-floor follow-up registered its
-    // question (ce3f701d).
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor'])
+    // question (ce3f701d), and the literal-lower follow-up its question (a3f85309).
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor', 'scale:num-segment-literal-lower'])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

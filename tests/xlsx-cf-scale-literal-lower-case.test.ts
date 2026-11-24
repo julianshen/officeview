@@ -83,6 +83,9 @@ const layout = s2LiteralLowerLayout()
 const twinFill = new Map(layout.twins.map(t => [t.ref, t.fill]))
 const designated = s2LiteralLowerCells()
 const cellAt = new Map(designated.map(c => [c.ref, c]))
+/** Stage 2 conformance over every measured case, without the id's evidence and as committed (pinned from the run). */
+const BEFORE = [1490, 1077, 413, 324, 59, 0]
+const AFTER = [1490, 1191, 299, 210, 59, 0]
 const decisive = (c: S2LiteralLowerCell): boolean => s2LiteralLowerPrediction(c, 'lower-arithmetic') !== s2LiteralLowerPrediction(c, 'step-plus-one')
 const EVIDENCE = ['pl-pq-210', 'pl-qp-420', 'pl-pq-105', 'pl-qp-150', 'pl-resort-210', 'ds-yg-30', 'ds-dd-210', 'ds-da-105']
 const evidenceRefs = designated.filter(c => c.role === 'evidence').map(c => c.ref)
@@ -94,6 +97,11 @@ const inShapeRefs = designated.filter(c => s2LiteralLowerInShape(c)).map(c => c.
 async function withRegistration<T>(reading: S2LiteralLowerReading, fn: () => Promise<T>): Promise<T> {
   injectCfLiteralLowerReadings({ [CF_LITERAL_LOWER_CAP]: reading })
   try { return await withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_LITERAL_LOWER_CAP], fn) } finally { injectCfLiteralLowerReadings(null) }
+}
+
+/** The unpublished state: the registration in place but the id's evidence withheld, so the shape is withheld as before the capture. */
+async function withoutEvidence<T>(fn: () => Promise<T>): Promise<T> {
+  return withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== CF_LITERAL_LOWER_CAP), fn)
 }
 
 /** A synthetic world: each designated cell's fill by `pick` (default the named reading), twins as fixed, positive controls as fixed, controls white. */
@@ -123,25 +131,27 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 }
 
 describe('stage2-scale-literal-lower: the case', () => {
-  it('is appended last; owns its two ids, both registered non-discriminating until its capture; the readings are production\'s, registered nowhere', async () => {
+  it('is appended last; owns its two ids; the question is registered as lower-arithmetic (its entry removed), the twins stay recorded', async () => {
     expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
     expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-raw-floor', ID])
-    for (const id of [CAP, TWIN]) {
-      expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
-      expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
-    }
-    expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toMatch(/registrable/)
+    for (const id of [CAP, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
+    expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
+    expect(CF_STAGE2_NONDISCRIMINATING[TWIN]).toMatch(/./)
     expect(CAP).toBe(CF_LITERAL_LOWER_CAP)
     expect([...S2_LITERAL_LOWER_READINGS]).toEqual([...CF_LITERAL_LOWER_READINGS])
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
     expect(c.scaleReadings!.map(x => [x.id, x.capabilityId, Object.keys(x.hypotheses), x.role ?? (x.record ? 'record' : 'evidence')])).toEqual([
       ...EVIDENCE.map(id => [id, CAP, ['lower-arithmetic', 'step-plus-one'], 'evidence']),
       ['controls', CAP, ['lower-arithmetic', 'step-plus-one'], 'negative-control'], ['upper', CAP, ['lower-arithmetic', 'step-plus-one'], 'record'],
     ])
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    for (const id of [CAP, TWIN]) { expect(Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, id), id).toBe(false); expect(VERIFIED_CAPABILITIES.has(id), id).toBe(false) }
+    // Registered: the question as lower-arithmetic (matched by a3f85309, published); the twins never.
+    expect(CF_STAGE2_PRODUCTION_READINGS[CAP]).toBe('lower-arithmetic')
+    expect(VERIFIED_CAPABILITIES.has(CAP)).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, TWIN)).toBe(false)
+    expect(VERIFIED_CAPABILITIES.has(TWIN)).toBe(false)
   })
 
   it('180 cells: 82 designated (46 evidence, 20 controls, 16 upper probes), 86 twins, 2 positive controls, 10 controls; A1:R13, 31 colour rules', () => {
@@ -273,9 +283,9 @@ describe('stage2-scale-literal-lower: the case', () => {
     expect(S2_LITERAL_LOWER.twinSpans).toEqual([{ from: 0, to: 128 }, { from: 82, to: 210 }])
   })
 
-  it('the independent model is production as committed (nothing registered): painted cells are the truncation; every cell of the shape (evidence, the 4 below-integer controls, upper probes) is withheld', async () => {
+  it('the independent model is production without the evidence (as before the capture): painted cells are the truncation; every cell of the shape (evidence, the 4 below-integer controls, upper probes) is withheld', async () => {
     const c = caseOf()
-    const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
+    const fills = await withoutEvidence(() => productionFills(c, c.expected.cells.map(e => e.ref)))
     const withheld: string[] = []
     for (const e of c.expected.cells) {
       const got = fills.get(e.ref)
@@ -285,9 +295,25 @@ describe('stage2-scale-literal-lower: the case', () => {
     }
     expect(withheld.sort()).toEqual(inShapeRefs.sort())
     expect(inShapeRefs.length).toBe(46 + 4 + 16)
-    // With the id's evidence but nothing registered: the same.
-    const ev = await withExactCfEvidence([...VERIFIED_CAPABILITIES, CAP], () => productionFills(c, c.expected.cells.map(e => e.ref)))
-    expect(ev).toEqual(fills)
+    // With the id's evidence but no valid reading registered (the pre-capture table): the same.
+    injectCfLiteralLowerReadings({ [CF_LITERAL_LOWER_CAP]: 'unregistered' as S2LiteralLowerReading })
+    try { expect(await productionFills(c, c.expected.cells.map(e => e.ref))).toEqual(fills) } finally { injectCfLiteralLowerReadings(null) }
+  }, HEAVY)
+
+  it('the independent model is production as committed (lower-arithmetic registered and published): Excel\'s fill at every cell production paints; only the 16 upper probes are withheld', async () => {
+    const c = caseOf()
+    const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
+    const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+    const excel = new Map(sidecar.observedCells.map(o => [o.ref, o.fillRgb]))
+    const withheld: string[] = []
+    for (const e of c.expected.cells) {
+      const got = fills.get(e.ref)
+      if (got === undefined && e.matched) { withheld.push(e.ref); continue }
+      const cell = cellAt.get(e.ref)
+      expect(got, e.ref).toBe(!e.matched ? undefined : cell ? s2LiteralLowerPrediction(cell, 'lower-arithmetic') : twinFill.get(e.ref) ?? e.fillRgb)
+      if (e.matched) expect(got, `${e.ref} Excel`).toBe(excel.get(e.ref))
+    }
+    expect(withheld.sort()).toEqual([...upperRefs].sort())
   }, HEAVY)
 
   for (const reading of S2_LITERAL_LOWER_READINGS) {
@@ -397,15 +423,21 @@ function syntheticRoot(fills: Map<string, string>): { root: string; manifest: Cf
 
 describe('the audit gate on a synthetic measured capture (real verifyCfCase and auditStage2Manifest)', () => {
   const disposition = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }, id: string) => r.perCapability.find(p => p.capabilityId === id)!.disposition
-  const before = [...VERIFIED_STAGE2_CAPABILITIES].sort()
-  const removed = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
+  // The verified set without the question, and the registry with its pre-capture entry put back (the rehearsal's starting point).
+  const before = [...VERIFIED_STAGE2_CAPABILITIES].filter(id => id !== CAP).sort()
+  const removed = CF_STAGE2_NONDISCRIMINATING
+  const kept = { ...CF_STAGE2_NONDISCRIMINATING, [CAP]: 'pre-registered, awaiting its capture' }
 
-  it('the real manifest: Stage 2 audits ok and complete; both ids unverified-nondiscriminating (awaiting the capture); the verified set unchanged', async () => {
+  it('the real manifest: Stage 2 audits ok and complete; the question verified (lower-arithmetic), the twins unverified-nondiscriminating; the verified set gains exactly the question', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
-    for (const id of [CAP, TWIN]) expect(disposition(r, id), id).toBe('unverified-nondiscriminating')
-    expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(before)
+    expect(disposition(r, CAP)).toBe('verified')
+    expect(disposition(r, TWIN)).toBe('unverified-nondiscriminating')
+    expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...before, CAP].sort())
+    const k = auditStage2Manifest(manifest, { rootDir: REPO_ROOT, nonDiscriminating: kept })
+    expect(disposition(k, CAP)).toBe('unverified-nondiscriminating')
+    expect(k.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(before)
   }, HEAVY)
 
   for (const reading of S2_LITERAL_LOWER_READINGS) {
@@ -416,10 +448,11 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
       expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
       if (res.kind !== 'verified') return
       expect(res.matchedHypotheses).toEqual({ [CAP]: reading })
-      const k = auditStage2Manifest(m, { rootDir: root })
+      const k = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: kept })
       expect(k.ok).toBe(true)
       for (const id of [CAP, TWIN]) expect(disposition(k, id), id).toBe('unverified-nondiscriminating')
-      expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed }), CAP)).toBe('supported-structural')
+      const unregisteredReadings = Object.fromEntries(Object.entries(CF_STAGE2_PRODUCTION_READINGS).filter(([id]) => id !== CAP))
+      expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: unregisteredReadings }), CAP)).toBe('supported-structural')
       const registered = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } })
       expect(disposition(registered, CAP)).toBe('verified')
       expect(registered.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...before, CAP].sort())
@@ -437,36 +470,41 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
     if (res.kind !== 'verified') return
     expect((res.refusedCapabilities ?? []).map(x => [x.capabilityId, x.code])).toEqual([[CAP, 'formula-hypothesis-none']])
     for (const reading of S2_LITERAL_LOWER_READINGS) expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } }), CAP), reading).toBe('supported-structural')
-    // Production as committed on that world: every evidence cell and upper probe withheld and justified (num-segment); nothing disagrees.
-    const r = await stage2Conformance(m, root, [ID])
+    // Unpublished production on that world: every cell of the shape withheld and justified (num-segment); nothing disagrees.
+    const r = await withoutEvidence(() => stage2Conformance(m, root, [ID]))
     expect(r.violations).toEqual([])
     expect([r.total, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([180, 66, 66, 0, 0])
+    // As committed (lower-arithmetic registered and published), the conformance pass catches the 8 flipped cells.
+    const committed = await stage2Conformance(m, root, [ID])
+    expect(committed.violations.map(v => v.split(':').slice(0, 2).join(':')).sort()).toEqual([...flipped].map(x => `${ID}:${x}`).sort())
   }, HEAVY)
 })
 
 const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
-  it('as committed (nothing registered): no violation over the measured Stage 2 cases; the literal lower-segment census cells withheld', async () => {
-    expect(STAGE2_MEASURED).not.toContain(ID)
-    const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED)
+  it('without the evidence (as before the registration): no violation over the measured Stage 2 cases, this capture included; the literal lower-segment cells of the shape withheld', async () => {
+    expect(STAGE2_MEASURED).toContain(ID)
+    const r = await withoutEvidence(() => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 963, 347, 258, 59, 0])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual(BEFORE)
   }, HEAVY)
 
-  it('lower-arithmetic registered: every committed capture agrees; every census cell (the 64 literal lower-segment cells of the shape) is painted at Excel\'s fill; nothing else moves', async () => {
-    const base = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED)
-    const r = await withRegistration('lower-arithmetic', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
+  it('as committed (lower-arithmetic registered and published): every committed capture agrees; the 114 census cells of the shape (64 earlier, 50 of this capture) painted at Excel\'s fill; nothing else moves', async () => {
+    const before = await withoutEvidence(() => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
+    const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED)
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact - base.exact, base.withheld - r.withheld, base.numSegmentWithheld - r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 64, 64, 64, 59, 0])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual(AFTER)
+    expect([r.exact - before.exact, before.numSegmentWithheld - r.numSegmentWithheld]).toEqual([114, 114])
+    expect(await withRegistration('lower-arithmetic', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))).toEqual(r)
     const { rows } = await literalLowerCensusOf()
     const census = rows.filter(x => !x.f20)
-    expect(census.length).toBe(64)
+    expect([census.length, census.filter(x => x.caseId === ID).length]).toEqual([114, 50])
     const byCase = new Map<string, string[]>()
     for (const x of census) byCase.set(x.caseId, [...(byCase.get(x.caseId) ?? []), x.ref])
     for (const [caseId, refs] of byCase) {
       const c = manifest.cases.find(x => x.id === caseId)!
-      const fills = await withRegistration('lower-arithmetic', () => productionFills(c, refs))
+      const fills = await productionFills(c, refs)
       for (const x of census.filter(y => y.caseId === caseId)) expect(fills.get(x.ref), `${caseId}:${x.ref}`).toBe(x.excel)
     }
   }, 900_000)
@@ -475,9 +513,9 @@ describe('the rehearsal: each registration against every committed capture, and 
     const r = await withRegistration('step-plus-one', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
     const { rows } = await literalLowerCensusOf()
     const census = rows.filter(x => !x.f20)
-    // The 4 below-integer census cells (raw-floor F6..F9) coincide under both readings; every other one is caught.
-    const differs = census.filter(x => x.cls !== 'below')
-    expect([census.length, differs.length]).toEqual([64, 60])
+    // The below-integer P-line census cells (raw-floor F6..F9, this capture's 4 controls) coincide under both readings.
+    const differs = census.filter(x => !(x.kind === 'p-line' && x.cls === 'below'))
+    expect([census.length, differs.length]).toEqual([114, 106])
     expect(r.violations.map(v => v.split(':').slice(0, 2).join(':')).sort()).toEqual(differs.map(x => `${x.caseId}:${x.ref}`).sort())
   }, HEAVY)
 
@@ -486,14 +524,14 @@ describe('the rehearsal: each registration against every committed capture, and 
     for (const reading of S2_LITERAL_LOWER_READINGS) {
       const { root, manifest: m } = syntheticRoot(plantedFills(caseOf(), reading))
       const c = m.cases.find(x => x.id === ID)!
-      const unregistered = await stage2Conformance(m, root, [ID])
+      const unregistered = await withoutEvidence(() => stage2Conformance(m, root, [ID]))
       expect(unregistered.violations, reading).toEqual([])
       expect([unregistered.total, unregistered.withheld, unregistered.numSegmentWithheld], reading).toEqual([180, 66, 66])
       const registered = await withRegistration(reading, () => stage2Conformance(m, root, [ID]))
       expect(registered.violations, reading).toEqual([])
       expect([registered.total, registered.withheld, registered.numSegmentWithheld, registered.upperWholeWithheld, registered.guardBoundaryWithheld], `${reading} registered`).toEqual([180, 16, 16, 0, 0])
       for (const mode of ['interactive', 'paged'] as const) {
-        const a = await compareCfCase(c, mode, { rootDir: root })
+        const a = await withoutEvidence(() => compareCfCase(c, mode, { rootDir: root }))
         expect(`${reading} ${mode}: ${a.outcome} ${a.outcome === 'pass' ? '' : a.reason}`).toBe(`${reading} ${mode}: pass `)
         const b = await withRegistration(reading, () => compareCfCase(c, mode, { rootDir: root }))
         expect(`${reading} registered ${mode}: ${b.outcome} ${b.outcome === 'pass' ? '' : b.reason}`).toBe(`${reading} registered ${mode}: pass `)

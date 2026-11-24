@@ -15,7 +15,8 @@
  * - class: the worst channel product p = f·|d| (`below` / `above` / `integer` / `clear`, as raw-floor-census.ts);
  * - f20: whether f·2^20 is an integer (the num-segment withhold applies only where it is not).
  *
- * Run: `npx tsx scripts/cf-refs/literal-lower-census.ts`. Pinned by tests/xlsx-cf-scale-literal-lower-census.test.ts.
+ * Run: `npx tsx scripts/cf-refs/literal-lower-census.ts` (every capture, stage2-scale-literal-lower included: recipe §12.7);
+ * `--pre-capture` leaves that capture out (recipe §12.1). Both are pinned by tests/xlsx-cf-scale-literal-lower-census.test.ts.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -88,9 +89,17 @@ export function literalLowerCensus(collection: SegmentCollection): { rows: Liter
   return { rows, endpoints }
 }
 
-export async function literalLowerCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT): Promise<{ collection: SegmentCollection } & ReturnType<typeof literalLowerCensus>> {
+/**
+ * The capture that followed this census (stage2-scale-literal-lower, a3f85309): `{ include: 'pre-capture' }` leaves it out,
+ * reproducing the numbers of recipe §12.1 as they were when the case was designed; the default includes it (recipe §12.7).
+ */
+export const LITERAL_LOWER_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-literal-lower']
+
+export async function literalLowerCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof literalLowerCensus>> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
-  const collection = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const all = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'all') === 'all' || !LITERAL_LOWER_POST_CAPTURE_CASES.includes(x.caseId)
+  const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, ...literalLowerCensus(collection) }
 }
 
@@ -108,7 +117,7 @@ export function countBy(rows: readonly LiteralLowerRow[], key: (r: LiteralLowerR
 }
 
 async function main(): Promise<void> {
-  const { collection, rows, endpoints } = await literalLowerCensusOf()
+  const { collection, rows, endpoints } = await literalLowerCensusOf(undefined, REPO_ROOT, { include: process.argv.includes('--pre-capture') ? 'pre-capture' : 'all' })
   const withheld = rows.filter(r => !r.f20)
   console.log(`segment cells ${collection.cells.length}; harness faults ${collection.faults.length}; literal-num lower-segment interior ${rows.length} (f·2^20 not an integer ${withheld.length}); endpoints or clamped ${endpoints}`)
   const table = (title: string, key: (r: LiteralLowerRow) => string, rs: readonly LiteralLowerRow[]): void => {

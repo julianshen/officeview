@@ -5702,11 +5702,9 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings; withheld as the num-segment shape whatever a reading says, never registrable.',
   'scale:guard-boundary-twin':
     'The 2-colour twin line of stage2-scale-raw-floor (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
-  // The literal-lower follow-up (stage2-scale-literal-lower): the question is registered until its capture (a matched reading
-  // is published only by removing this entry and registering it in CF_LITERAL_LOWER_PRODUCTION_READINGS); the twins are
-  // comparisons, never questions.
-  'scale:num-segment-literal-lower':
-    'Pre-registered and registrable (stage2-scale-literal-lower, two readings: lower-arithmetic, step-plus-one), awaiting its capture: interior cells of a 3-colour lower segment bounded by two literal num cfvo with f·2^20 not an integer stay withheld (cf-unmeasured-num-segment-fraction) until a matched reading is registered in CF_LITERAL_LOWER_PRODUCTION_READINGS; the upper segment stays withheld whatever the capture shows.',
+  // The literal-lower follow-up (stage2-scale-literal-lower): the question, scale:num-segment-literal-lower, matched
+  // lower-arithmetic in its capture (Excel 16.115, a3f85309) and is registered (CF_LITERAL_LOWER_PRODUCTION_READINGS), so its
+  // entry is removed; the twins stay comparisons, never questions.
   'scale:num-segment-literal-lower-twin':
     'The twins of stage2-scale-literal-lower (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, num 0 / 1 at values 0 and 1; IEEE-integer products): comparison references, never a question themselves.',
 }

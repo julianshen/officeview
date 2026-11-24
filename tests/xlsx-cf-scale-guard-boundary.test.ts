@@ -42,6 +42,8 @@ const all = { hasEvidence: () => true }
 /** Every capability but the raw-floor registration's: the guard-boundary shape is withheld, as before ce3f701d. */
 const unpublished = { hasEvidence: (id: string) => id !== colorScale.CF_GUARD_BOUNDARY_CAP }
 const withoutEvidence = <T>(fn: () => T): T => withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== colorScale.CF_GUARD_BOUNDARY_CAP), fn)
+/** As recorded at ce3f701d: neither the guard-boundary nor the later literal-lower registration (a3f85309) held. */
+const asRecorded = <T>(fn: () => T): T => withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== colorScale.CF_GUARD_BOUNDARY_CAP && id !== colorScale.CF_LITERAL_LOWER_CAP), fn)
 /** Raw floor per ARGB channel, restated (the registered reading): c0 moved by floor(f·|d|) toward c1. */
 const rawFloor = (c0: number, c1: number, f: number): number => [24, 16, 8, 0].reduce((acc, sh) => {
   const a = (c0 >>> sh) & 0xff, b = (c1 >>> sh) & 0xff, k = Math.floor(f * Math.abs(b - a))
@@ -112,7 +114,11 @@ describe('the shape, exactly (production, src/xlsx/cf/colorScale.ts)', () => {
     expect(scaleColorAt(0.21, stat, [0.1, 0.4, 1], all)).toEqual(ready(0xff60a474)) // A4 registered: Excel's fill
     expect(scaleColorAt(0.27, stat, [0.1, 0.4, 1], all)).toEqual(ready(0xff8b799f)) // A5: 119 exactly
     expect(scaleColorAt(0.2, [min(P), { bound: { type: 'percent', value: 50 }, argb: Q }, max(P)], [0, 0.7, 1.4], all)).toEqual(ready(0xff50b464)) // C12, above
-    expect(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], all)).toEqual(LITERAL) // literal: num-segment first, registered or not
+    // literal: the num-segment withhold first, unless the literal-lower reading is held (a3f85309: lower-arithmetic hands the
+    // cell to this shape, so it paints Excel's A3 fill with both registrations, and is withheld without either).
+    expect(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], { hasEvidence: (id: string) => id !== colorScale.CF_LITERAL_LOWER_CAP })).toEqual(LITERAL)
+    expect(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], unpublished)).toEqual(GUARD)
+    expect(scaleColorAt(0.13, [num(0.1, P), num(0.4, Q), num(1, P)], [0.1, 0.4, 1], all)).toEqual(ready(0xff28dc3c))
     expect(scaleColorAt(0.6, stat, [0.1, 0.4, 1], all)).toEqual(UPPER) // the upper segment: its own rules
     // Midpoint above max: thresholds re-sort to 0.1, 0.4, 1 and the lower segment runs 0.1 .. 0.4 with colours 1 -> 2.
     expect(scaleColorAt(0.13, [min(P), pctl(90, Q), pctl(50, P)], [0.1, 1, 0.4], unpublished)).toEqual(GUARD)
@@ -200,7 +206,7 @@ describe('the capture (stage2-scale-upper-window, ed0fccb6)', () => {
 const RAW_FLOOR_CASE = 'stage2-scale-raw-floor'
 
 describe('the reach: 14 cells in stage2-scale-upper-window and the 67 evidence cells of stage2-scale-raw-floor, none anywhere else', () => {
-  it('through production\'s own segment evaluations, and the Stage 2 and Stage 5 justifications agree case by case without the evidence; registered, nothing is justified', async () => {
+  it('through production\'s own segment evaluations, and the Stage 2 and Stage 5 justifications agree case by case without the evidence (as recorded at ce3f701d, before the literal-lower registration); registered, nothing is justified', async () => {
     const { cells } = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.colours === 3 && s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)
     const inShape = cells.filter(x => (x.segment.colours === 2 || x.segment.segment === 0) && !literalWithheld(x.segment) && guardBoundaryProduct(x.segment.c0, x.segment.c1, x.segment.value, x.segment.lo, x.segment.hi, x.segment.fraction))
@@ -211,14 +217,14 @@ describe('the reach: 14 cells in stage2-scale-upper-window and the 67 evidence c
     expect(evidence.length).toBe(67)
     expect(Object.fromEntries(Object.entries(byCase).map(([k, v]) => [k, [...v].sort()]))).toEqual({ [CASE]: [...MOVED].sort(), [RAW_FLOOR_CASE]: [...evidence].sort() })
     for (const x of inShape) expect(hex(interpolateScaleColor(x.segment.c0, x.segment.c1, x.segment.fraction)), `${x.caseId}:${x.ref}`).not.toBe(x.excel)
-    for (const cs of manifest.cases.filter(x => x.status === 'measured' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
+    for (const cs of manifest.cases.filter(x => x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
       const { sheet } = await parsed(cs)
       const cellsOf = stage5SheetCells(sheet)
       const numbers = new Map([...cellsOf].filter(([, v]) => typeof v.value === 'number' && !v.error).map(([k, v]) => [k, v.value as number]))
       const justifiedNow = (): string[] => cs.expected.cells.map(e => e.ref).filter(ref => cs.stage === 5
         ? stage5JustifiedRefusals(cs, ref, undefined, cellsOf).some(j => j.refused === 'cf-unmeasured-guard-boundary')
         : !stage2NumSegmentShape(cs.markers, ref, cellsOf.get(ref)?.value) && stage2GuardBoundaryShape(cs.markers, ref, cellsOf.get(ref)?.value, numbers))
-      expect(withoutEvidence(justifiedNow).sort(), cs.id).toEqual([...(byCase[cs.id] ?? [])].sort())
+      expect(asRecorded(justifiedNow).sort(), cs.id).toEqual([...(byCase[cs.id] ?? [])].sort())
       expect(justifiedNow(), `${cs.id} registered`).toEqual([])
     }
   }, HEAVY)

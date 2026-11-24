@@ -244,9 +244,10 @@ export function windowCensus(cells: readonly SegmentCell[]): WindowCensusRow[] {
 export const UPPER_WINDOW_POST_CAPTURE_CASES: readonly string[] = [S2_UPPER_WINDOW_ID]
 /**
  * Captures after this search's own follow-up, left out in every mode: the search is recorded as of ed0fccb6 (recipe §10.6).
- * stage2-scale-raw-floor (ce3f701d) is counted by scripts/cf-refs/raw-floor-census.ts.
+ * stage2-scale-raw-floor (ce3f701d) is counted by scripts/cf-refs/raw-floor-census.ts, stage2-scale-literal-lower (a3f85309) by
+ * scripts/cf-refs/literal-lower-census.ts.
  */
-export const UPPER_WINDOW_LATER_CASES: readonly string[] = ['stage2-scale-raw-floor']
+export const UPPER_WINDOW_LATER_CASES: readonly string[] = ['stage2-scale-raw-floor', 'stage2-scale-literal-lower']
 
 export async function upperWindowCells(rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<SegmentCell[]> {
   const manifest = JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest

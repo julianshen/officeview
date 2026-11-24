@@ -86,8 +86,8 @@ const predictions = new Map(upperWindowPredictions().map(p => [p.ref, p]))
 /** The guard-boundary cells (owner ruling after ed0fccb6): withheld by production since, whatever a window reading says. */
 const GUARD_BOUNDARY = ['A3', 'A4', 'D2', 'D4', 'E7', 'E8', 'E9', 'E10', 'E12', 'E13', 'E14', 'H8', 'H18', 'I5']
 
-/** The evidence as recorded at ed0fccb6: every published capability but the later raw-floor registration's (scale:guard-boundary-raw-floor). */
-const RECORDED_EVIDENCE = [...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:guard-boundary-raw-floor')
+/** The evidence as recorded at ed0fccb6: every published capability but the later raw-floor (scale:guard-boundary-raw-floor) and literal-lower (scale:num-segment-literal-lower) registrations'. */
+const RECORDED_EVIDENCE = [...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:guard-boundary-raw-floor' && id !== 'scale:num-segment-literal-lower')
 const asRecorded = <T>(fn: () => T): T => withExactCfEvidence(RECORDED_EVIDENCE, fn)
 
 /** Rehearse a registration: the reading selected through the seam and the id's evidence held (as recorded), around `fn`. */
@@ -395,7 +395,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 /** The Stage 2 cases measured as of ed0fccb6 (the later stage2-scale-raw-floor left out). */
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('as recorded (nothing registered): no violation over the measured Stage 2 cases, this capture included; E4 and D19 withheld', async () => {
