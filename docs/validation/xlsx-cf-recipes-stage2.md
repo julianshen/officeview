@@ -1523,7 +1523,7 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **Registered:** `lower-arithmetic`, as §12.2 says: the `CF_STAGE2_NONDISCRIMINATING` entry is removed, `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`, published through the audit (351 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.21.
 - **The census with the capture:** `npx tsx scripts/cf-refs/literal-lower-census.ts` covers 130 interior cells (114 in the shape) and misses 0. `--pre-capture` reproduces §12.1.
 
-## 13. The upper-segment follow-up (`stage2-scale-upper-segment`; recipe-pending, registrable)
+## 13. The upper-segment follow-up (`stage2-scale-upper-segment`; captured 2ee3735a, `index-position` registered)
 
 Production withholds the interior cells of a 3-colour UPPER segment in three shapes: the literal num-segment shape in segment 1 (`numSegmentUnmeasured`, `cf-unmeasured-num-segment-fraction`) and the `integer` and `window` classes of the whole-product shape (`upperSegmentProductClass`, `cf-unmeasured-upper-segment-whole-product`). Excel's rule there was unexplained (§8–§12). Brief: `.superpowers/sdd/cf-upper-segment/brief.md`; Phase 1 report: `.superpowers/sdd/cf-upper-segment/phase1-report.md`.
 
@@ -1705,3 +1705,11 @@ npx tsx scripts/cf-refs/audit.ts --stage 2
 ```
 
 The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-upper-segment` (run twice, byte-identical; the manifest change is insertions only). The registration rule is §13.2.
+
+### 13.7 Run result (captured, 2ee3735a, Excel 16.115)
+
+- **The build:** repair-free on the first attempt; all 207 numeric cells and all 34 rules' cfvo bounds and colours bit-identical input vs saved (the near-top probes included).
+- **The capture is sound:** every pixel equals its DisplayFormat fill (207/207, minimum contrast 130); the 14 controls are white; the positive controls show FFF8696B and FF63BE7B; all 105 twins show their fills, the 3-colour endpoint twins included.
+- **The evidence:** Excel drew `index-position` at all 86 designated cells, in every group; the 48 decisive cells are off truncation, `truncate` matched none. The six mixed cells split their channels as predicted; the 26 kept cells drew truncation; the 8 decisive near-top probes drew one step below the maximum colour.
+- **Registered:** `index-position` for both ids, as §13.2 says: both `CF_STAGE2_NONDISCRIMINATING` entries removed, `CF_UPPER_SEGMENT_PRODUCTION_READINGS` and `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS` set, published through the audit (353 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.22.
+- **The census with the capture:** `npx tsx scripts/cf-refs/upper-segment-candidates.ts --all` covers 381 upper-segment interior cells; the same 7 survivors (one class) reproduce every one; truncation misses 203. Without `--all` it reproduces §13.1.

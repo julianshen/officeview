@@ -48,6 +48,12 @@ in git history.
   - **Reach:** 114 captured cells paint exactly; no captured cell is mispainted, and no other cell moves.
   - **Still withheld:** the upper segment of such a scale, where Excel's drawing is still unexplained.
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.21.
+- **3-colour scales paint their upper half exactly.** Cells in the upper segment of a 3-colour scale were withheld at whole step products and wherever both thresholds were literal numbers, because Excel drew some of them one step off the viewer's rounding.
+  - **What it showed:** a search over all 302 captured upper-segment cells found one arithmetic that reproduces every one (Excel's position on the whole scale, 1 + f, then the local fraction (1 + f) − 1 and floor). A pre-registered Excel 16.115 capture (`stage2-scale-upper-segment`) then drew all 86 test cells exactly so, including six where it moves some channels of a cell and not others, and cells a few ulps below the maximum.
+  - **What changes:** those cells are painted at Excel's colour instead of being withheld (`cf-unmeasured-num-segment-fraction`, `cf-unmeasured-upper-segment-whole-product`, `cf-unmeasured-upper-near-top`).
+  - **Reach:** 349 captured cells paint exactly; no captured cell is mispainted, and no other cell moves.
+  - **Still withheld:** a formula-bounded upper segment, a scale colour that is not opaque, and non-default colour spaces or roundings.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.22.
 
 ### Added
 
