@@ -1480,3 +1480,35 @@ Every designated cell under each reading. Live tokens name their twin; upper pro
 | H8 | 37.5 | control | ici | FF876623 (O8) | same |
 | H9 | 117 | upper (record) | bbc | FFBB812B | FFBB812C |
 | H10 | 148 | upper (record) | aac | FF7C6122 | FF7D6223 |
+
+### 12.5 Rehearsal (Phase 1 task 4)
+
+`tests/xlsx-cf-scale-literal-lower-case.test.ts` (25 tests):
+
+- **The independent model is production.** Unregistered (with or without the id's evidence), production withholds the 66 cells of the shape (46 evidence, the 4 P-line below-integer controls, 16 upper probes) and paints every other cell at the model's truncation. Under each registration the 46 evidence cells and the 4 controls paint the reading, the 16 upper probes stay withheld, and nothing else moves.
+- **Synthetic worlds** (`evaluateFormulaCapabilities`): each planted reading matches exactly itself; the upper probes drawn at the other reading or off both readings never change the verdict; one flipped decisive cell in any group gives `formula-hypothesis-none`; a formatted control, a missing or wrong positive control, a blank twin and a moved control all refuse.
+- **Audit gate** (real `verifyCfCase` and `auditStage2Manifest` on a synthetic measured capture): registry entry kept, unverified; entry removed and unregistered, `supported-structural`; matched reading registered, verified, and only this id joins the verified set; the other reading registered, `supported-structural`. A "no match" plant is `formula-hypothesis-none`, never verified, and unregistered production keeps the withhold (180 cells, 66 justified num-segment withholds, 0 violations).
+- **Every committed Stage 2 capture** (`stage2Conformance`, 1310 cells):
+
+| Registration | Violations | Exact | Withheld | Num-segment withheld |
+|---|---|---|---|---|
+| none | 0 | 963 | 347 | 258 |
+| `lower-arithmetic` | 0: the 64 census cells painted at Excel's fill | 1027 | 283 | 194 |
+| `step-plus-one` | **60**, exactly the census cells where the readings differ (caught) | | | |
+
+  The 4 census cells that `step-plus-one` does not catch are F6..F9 of ce3f701d: below-integer products, where the readings coincide.
+- **Stage 5:** records unchanged under each registration, 0 disagreeing (no Stage 5 cell is a literal-num lower-segment cell).
+- **Each planted world:** the conformance pass and `compareCfCase` (interactive and paged) pass unregistered and under the world's own registration; the other reading is caught at the 46 evidence cells.
+- **Deviation:** the case is not in `STAGE2_MEASURED_CASES` of the committed conformance test, because `stage2Conformance` reads the capture sidecar, which does not exist yet. The same pass runs on a synthetic temp root (the #102 and raw-floor pattern). The case joins it after the capture.
+
+### 12.6 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-literal-lower.xlsx   # 324c19f82e691545702022c005394063dd2400a1b2b83bc6b09385959b466e0e
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-literal-lower
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-literal-lower
+npx vitest run tests/xlsx-cf-scale-literal-lower-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-literal-lower` (run twice, byte-identical; the manifest change is insertions only). No rule has a single-cell range written as `X2:X2`. The registration rule is §12.2: registrable, and the upper segment stays withheld whatever the capture shows.

@@ -102,9 +102,9 @@ describe('every enabled scale capability has verified evidence', () => {
     // plus stage2-scale-upper-whole's three ids (exploratory: never verified), plus stage2-scale-upper-window's three
     // (the question registered until its capture, the literal twins and the twin line), plus stage2-scale-raw-floor's
     // literal-num lower segment and twin line. Its question, scale:guard-boundary-raw-floor, matched raw-floor (ce3f701d)
-    // and is verified: 36 verified.
+    // and is verified: 36 verified. Plus stage2-scale-literal-lower's question (registered until its capture) and twins.
     expect(report.summary.verifiedCapabilities).toBe(36)
-    expect(report.summary.unverifiedCapabilities).toBe(20)
+    expect(report.summary.unverifiedCapabilities).toBe(22)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 
