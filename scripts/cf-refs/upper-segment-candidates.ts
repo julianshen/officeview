@@ -198,6 +198,27 @@ export const POSITION_FORMS: Readonly<Record<string, PositionForm>> = {
   // Other indexes: the threshold count (a segment index of 2), float32 position.
   'index-2-plus-f': { t: s => 2 + fOf(s), local: t => t - 2, index: 2, unit: 1 },
   'index-plus-f-f32': { t: s => Math.fround(1 + fOf(s)), local: t => Math.fround(t - 1), index: 1, unit: 1 },
+  // The neighbourhood of the survivor: f from a reciprocal multiply or from the complement, another offset (0.5 + f), and
+  // an explicit snap of f to the 2^-52 grid under each rounding rule (nearest-even is the survivor's own snap).
+  'reciprocal-index-plus-f': { t: s => 1 + (s.value - s.lo) * (1 / (s.hi - s.lo)), local: t => t - 1, index: 1, unit: 1 },
+  'complement-index-plus-f': { t: s => 1 + (1 - rOf(s)), local: t => t - 1, index: 1, unit: 1 },
+  'half-plus-f': { t: s => 0.5 + fOf(s), local: t => t - 0.5, index: 0.5, unit: 1 },
+  'snap-52-nearest-even': { t: s => snap52(fOf(s), 'even'), local: t => t, index: 0, unit: 1 },
+  'snap-52-nearest-up': { t: s => snap52(fOf(s), 'up'), local: t => t, index: 0, unit: 1 },
+  'snap-52-floor': { t: s => snap52(fOf(s), 'floor'), local: t => t, index: 0, unit: 1 },
+  'snap-52-ceil': { t: s => snap52(fOf(s), 'ceil'), local: t => t, index: 0, unit: 1 },
+}
+/** f (0 <= f <= 1) on the 2^-52 grid: nearest with ties to even or up, floor or ceil (every step exact in doubles). */
+export function snap52(f: number, mode: 'even' | 'up' | 'floor' | 'ceil'): number {
+  const x = f * 2 ** 52, lo = Math.floor(x), frac = x - lo
+  const n = mode === 'floor' ? lo : mode === 'ceil' ? Math.ceil(x) : frac > 0.5 ? lo + 1 : frac < 0.5 ? lo : mode === 'up' ? lo + 1 : lo % 2 === 0 ? lo : lo + 1
+  return n / 2 ** 52
+}
+/** floor(l·d) in exact arithmetic (l a finite double >= 0, d a non-negative integer): no rounding of the product. */
+export function exactFloorProduct(l: number, d: number): number {
+  let n = l, e = 0n
+  while (!Number.isInteger(n)) { n *= 2; e++ }
+  return Number((BigInt(n) * BigInt(d)) >> e)
 }
 type PositionStep = (t: number, local: number, d: number, form: PositionForm) => number
 export const POSITION_STEPS: Readonly<Record<string, PositionStep>> = {
@@ -207,6 +228,8 @@ export const POSITION_STEPS: Readonly<Record<string, PositionStep>> = {
   'strictly-below': (_t, l, d) => Math.ceil(l * d) - 1,
   // The position product: floor(t·|d|/unit) − index·|d|/unit.
   'position-product': (t, _l, d, form) => Math.floor((t / form.unit) * d) - (form.index / form.unit) * d,
+  'floor-f32-product': (_t, l, d) => Math.floor(Math.fround(l * d)),
+  'floor-exact-product': (_t, l, d) => exactFloorProduct(l, d),
 }
 /** Value lerps from the recovered local fraction, rounded toward the start colour (c0 + l·D) or floored. */
 type PositionValue = (c0: number, c1: number, l: number) => number
@@ -287,12 +310,13 @@ export function evaluateCandidates(rows: readonly CensusRow[], candidates: reado
 /**
  * The probe grid: upper-segment segments with lo = 0, hi = q, v = p (integer operands: f the correctly rounded p/q) for
  * q = 2..64 and 0 < p < q, plus decimal-operand segments (lo = 0.1·a, span 0.1·b) and every double within 3 ulps of those
- * fractions (lo = 0, hi = 1, v the double), each at the palettes FF000000>FFFFFFFF and FFFFFFFF>FF000000 (|d| = 255) and
- * FF000000>FF1E0F07 / FF1E0F07>FF000000 (|d| = 30, 15, 7). Deterministic.
+ * fractions (lo = 0, hi = 1, v the double), each at the palettes FF000000>FFFFFFFF and FFFFFFFF>FF000000 (|d| = 255),
+ * FF000000>FF1E0F07 / FF1E0F07>FF000000 (|d| = 30, 15, 7), the P line FF14F028 / FFE61EFA (|d| = 210) and the default
+ * palette's upper pair FFFFEB84 / FF63BE7B (|d| = 156, 45, 9), both orders. Deterministic.
  */
 export function probeGrid(): CfScaleSegment[] {
   const out: CfScaleSegment[] = []
-  const palettes: Array<[number, number]> = [[0xff000000, 0xffffffff], [0xffffffff, 0xff000000], [0xff000000, 0xff1e0f07], [0xff1e0f07, 0xff000000]]
+  const palettes: Array<[number, number]> = [[0xff000000, 0xffffffff], [0xffffffff, 0xff000000], [0xff000000, 0xff1e0f07], [0xff1e0f07, 0xff000000], [0xff14f028, 0xffe61efa], [0xffe61efa, 0xff14f028], [0xffffeb84, 0xff63be7b], [0xff63be7b, 0xffffeb84]]
   const push = (value: number, lo: number, hi: number): void => {
     const fraction = (value - lo) / (hi - lo)
     if (!(fraction > 0 && fraction < 1)) return

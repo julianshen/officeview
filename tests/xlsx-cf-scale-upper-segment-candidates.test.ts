@@ -82,17 +82,23 @@ describe('the candidate search', () => {
     expect(best('upper-window')).toBe(34)
   }, HEAVY)
 
-  it('the position family: 112 candidates, 5 survivors, all one class over the probe grid: (1 + f) − 1 then raw floor', () => {
-    expect(pool('position').length).toBe(112)
+  it('the position family: 210 candidates, 7 survivors, all one class over the probe grid: (1 + f) − 1 then raw floor', () => {
+    expect(pool('position').length).toBe(210)
     const survivors = results.filter(r => r.mismatches.length === 0).map(r => r.id)
     expect(survivors).toEqual([
       'position/index-plus-f/floor', 'position/f-plus-index/floor', 'position/half-plus-half-f/floor', 'position/half-plus-half-f-div/floor', 'position/index-plus-f-halved/floor',
+      'position/snap-52-nearest-even/floor', 'position/snap-52-nearest-even/position-product',
     ])
-    expect(results.length).toBe(54520)
-    expect(probeGrid().length).toBe(64512)
+    expect(results.length).toBe(54618)
+    expect(probeGrid().length).toBe(129024)
     expect(survivorClasses(survivors, upperSegmentCandidates())).toEqual([survivors])
-    // The guard, a float32 position, a segment index of 2 and percent positions do not survive.
-    for (const id of ['position/index-plus-f/guarded', 'position/index-plus-f-f32/floor', 'position/index-2-plus-f/floor', 'position/percent-50/floor', 'position/percent-100/floor']) {
+    // The guard, a float32 position or product, the exact product, a segment index of 2, percent positions, a reciprocal or
+    // complement fraction and the other snaps to the 2^-52 grid do not survive.
+    for (const id of [
+      'position/index-plus-f/guarded', 'position/index-plus-f-f32/floor', 'position/index-plus-f/floor-f32-product', 'position/index-plus-f/floor-exact-product', 'position/index-2-plus-f/floor',
+      'position/percent-50/floor', 'position/percent-100/floor', 'position/reciprocal-index-plus-f/floor', 'position/complement-index-plus-f/floor', 'position/half-plus-f/floor',
+      'position/snap-52-nearest-up/floor', 'position/snap-52-floor/floor', 'position/snap-52-ceil/floor',
+    ]) {
       expect(results.find(r => r.id === id)!.mismatches.length).toBeGreaterThan(0)
     }
   }, HEAVY)
