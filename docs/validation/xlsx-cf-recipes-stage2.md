@@ -1275,3 +1275,32 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 
   Production paints the 14 cells of ed0fccb6 and this capture's 67 at Excel's fill. Nothing else moves. Details and reach: `docs/validation/xlsx-cf.md` §14.z.18.
 - **The census with the capture:** `npx tsx scripts/cf-refs/raw-floor-census.ts` covers 856 interior cells and W1 misses 0. `--pre-capture` reproduces §11.1.
+
+## 12. The literal-lower follow-up (`stage2-scale-literal-lower`)
+
+The num-segment withhold (`numSegmentUnmeasured`, reason `cf-unmeasured-num-segment-fraction`) withholds every interior cell of a 3-colour segment bounded by two literal `num` cfvo where f·2^20 is not an integer, in both segments. Its founding anomaly (T4/V3 of e448d831, §7) is in the UPPER segment. Owner ruling (2026-11-24): a new pre-registered case, declared **registrable** up front, decides the LOWER segment only; the upper segment stays withheld whatever it shows. Brief: `.superpowers/sdd/cf-literal-lower/brief.md`.
+
+### 12.1 Census (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/literal-lower-census.ts` (pinned by `tests/xlsx-cf-scale-literal-lower-census.test.ts`) runs production's lower-segment arithmetic as now registered over every captured interior cell of a literal-num 3-colour lower segment (`collectSegmentCells`, `{ include: 'all' }`: every measured Stage 2 case and the Stage 5 painted colour-scale cells). The arithmetic is production's own: in the guard-boundary shape the registered `raw-floor` reading (`upperWindowReadingColor`), elsewhere `interpolateScaleColor`'s truncation.
+
+- 1421 segment cells, 0 harness faults. 70 literal-num lower-segment interior cells, and 7 endpoints or clamped values.
+- **64 of the 70 are in the num-segment shape** (f·2^20 not an integer; production withholds them today). The other 6 are painted today.
+- **Production's lower-segment arithmetic equals Excel's DisplayFormat fill at all 70.** 0 disagree, so the case is not blocked.
+
+The 64, by:
+
+| Key | Cells (all exact) |
+|---|---|
+| case | stage2-scale-num-segment 48, stage2-scale-scope-disjoint 6, stage2-scale-upper-whole 6, stage2-scale-raw-floor 4 |
+| span (lo..hi) | 210 (7..217) 52, 210 (0..210) 4, 30 (0..30) 3, 30 (30..60) 2, 45 (0..45) 3 |
+| colour order / palette | both FF14F028 > FFE61EFA 34; both FFE61EFA > FF14F028 22; asc FFF8696B > FFFFEB84 8 |
+| palette kind | P-line (one span on every channel) 56; distinct spans per channel 8 |
+| product class | below 4; above 0; integer 30; clear 30 |
+| kind × class | P-line below 4, P-line integer 30, P-line clear 22; distinct clear 8 |
+
+Gaps the case fills:
+- no cell lies just above an integer;
+- the distinct-span cells are all ascending and all clear;
+- the 4 below-integer cells (F6..F9 of ce3f701d) come from one span (210) and one colour order;
+- no bound is negative or fractional, and the lowest bound is 0 or 7.
