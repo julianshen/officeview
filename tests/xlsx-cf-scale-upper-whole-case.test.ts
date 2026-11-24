@@ -105,7 +105,7 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 describe('stage2-scale-upper-whole: the case (exploratory)', () => {
   it('is appended last; owns its three ids, every one registered non-discriminating; truncate is the only reading', async () => {
     // Appended last at its time; the window follow-up stage2-scale-upper-window is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual([ID, 'stage2-scale-upper-window', 'stage2-scale-raw-floor'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual([ID, 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower'])
     for (const id of [CAP, CTRL, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)

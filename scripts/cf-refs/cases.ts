@@ -4002,6 +4002,374 @@ function stage2RawFloorCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The literal-lower follow-up (brief cf-literal-lower): the num-segment withhold (`numSegmentUnmeasured`) withholds every
+// interior cell of a 3-colour segment bounded by two literal num cfvo where f·2^20 is not an integer, in both segments; its
+// founding anomaly (T4/V3 of e448d831) is in the UPPER segment, and every one of the 64 captured LOWER-segment cells of the
+// shape drew production's lower-segment arithmetic (the census, scripts/cf-refs/literal-lower-census.ts; recipe §12.1). Owner
+// ruling (2026-11-24): a new case, REGISTRABLE, pre-registers two readings of the lower segment (scale:num-segment-literal-lower):
+// `lower-arithmetic` (painted as a non-literal lower segment: truncation, raw floor at a guard-boundary product) and
+// `step-plus-one` (T4/V3 transplanted: the guarded truncation step minus one per channel). One evidence configuration per
+// span × colour order × palette kind (P-line palettes, one span on every channel; distinct spans per channel), spans 30, 105,
+// 150, 210 and 420 with non-zero, negative and fractional bounds, the midpoint-above-max re-sort, T4/V3's fractions 1/3 and
+// 2/3 in the lower segment, product classes above / integer / clear (decisive) and below (the readings coincide on the P
+// line: controls); f·2^20-integer cells and endpoints as negative controls; upper-segment probes at the same doubles, recorded
+// only. P-line fills are shown by a twin line with IEEE-integer products (num 0 / 1 over 128 steps, value k/128), every other
+// fill by an endpoint twin (num 0 / 1, values 0 and 1: f = 0 or 1 exactly). Every prediction comes from an independent model
+// (`s2LiteralLowerColour`), never from the viewer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_LITERAL_LOWER_ID = 'stage2-scale-literal-lower'
+/** The question: interior cells of a 3-colour lower segment bounded by two literal num cfvo, f·2^20 not an integer. Registrable. */
+export const S2_LITERAL_LOWER_CAP = 'scale:num-segment-literal-lower'
+/** The twins (the P-line twin line and the endpoint twins): comparison references only. */
+export const S2_LITERAL_LOWER_TWIN = 'scale:num-segment-literal-lower-twin'
+/** The pre-registered readings (brief cf-literal-lower: lower-arithmetic the hypothesis, step-plus-one T4/V3 transplanted). */
+export const S2_LITERAL_LOWER_READINGS = ['lower-arithmetic', 'step-plus-one'] as const
+export type S2LiteralLowerReading = (typeof S2_LITERAL_LOWER_READINGS)[number]
+/**
+ * A cell's role: `evidence` (a lower-segment interior cell of the shape where the readings differ), `control` (a lower-segment
+ * cell where they agree: an f·2^20-integer interior cell, an endpoint, a P-line product just below an integer) or `upper` (an
+ * upper-segment interior cell at the double of a lower-segment evidence cell: recorded only, production withholds it).
+ */
+export type S2LiteralLowerRole = 'evidence' | 'control' | 'upper'
+export type S2LiteralLowerKind = 'p-line' | 'distinct'
+
+export interface S2LiteralLowerBlock {
+  /** The evidence configuration (replication group): span × colour order × palette kind. */
+  id: string
+  kind: S2LiteralLowerKind
+  col: string
+  /** Literal num cfvo in authored order (the re-sort block authors lo / top / mid). */
+  cfvo: readonly string[]
+  /** Colours in authored order. */
+  colors: readonly string[]
+  values: ReadonlyArray<{ text: string; role: S2LiteralLowerRole }>
+}
+
+const s2llV = (role: S2LiteralLowerRole, ...texts: string[]): Array<{ text: string; role: S2LiteralLowerRole }> => texts.map(text => ({ text, role }))
+const S2LL_P = s2UwLine(0), S2LL_Q = s2UwLine(210)
+/** T4/V3's segment colours (spans 156, 45, 9; all descending from yellow). */
+const S2LL_Y = 'FFFFEB84', S2LL_G = 'FF63BE7B'
+/** Distinct spans 210, 105, 30, all descending from DD0 (all ascending from DD1). */
+const S2LL_DD0 = 'FFF09B32', S2LL_DD1 = 'FF1E3214'
+
+/**
+ * The blocks (columns A..H, rows 2..12): per block 5 or 6 evidence cells, its controls, and 2 upper probes at the doubles of two
+ * evidence cells (the same span above the midpoint). Product classes per cell are pinned in the case test and listed in recipe
+ * §12.3.
+ */
+export function s2LiteralLowerBlocks(): S2LiteralLowerBlock[] {
+  return [
+    { id: 'pl-pq-210', kind: 'p-line', col: 'A', cfvo: ['7', '217', '427'], colors: [S2LL_P, S2LL_Q, S2LL_P],
+      values: [...s2llV('evidence', '36', '65', '116', '77', '150', '50.5'), ...s2llV('control', '34', '112', '217'), ...s2llV('upper', '246', '287')] },
+    { id: 'pl-qp-420', kind: 'p-line', col: 'B', cfvo: ['-210', '210', '630'], colors: [S2LL_Q, S2LL_P, S2LL_Q],
+      values: [...s2llV('evidence', '-152', '-94', '20', '-100', '104', '-131.5'), ...s2llV('control', '-156', '0', '210'), ...s2llV('upper', '268', '320')] },
+    { id: 'pl-pq-105', kind: 'p-line', col: 'C', cfvo: ['-52.5', '52.5', '157.5'], colors: [S2LL_P, S2LL_Q, S2LL_P],
+      values: [...s2llV('evidence', '2', '5', '8.5', '-40', '30', '-20.25'), ...s2llV('control', '1.5', '0', '52.5'), ...s2llV('upper', '107', '135')] },
+    { id: 'pl-qp-150', kind: 'p-line', col: 'D', cfvo: ['0.5', '150.5', '300.5'], colors: [S2LL_Q, S2LL_P, S2LL_Q],
+      values: [...s2llV('evidence', '5.5', '40.5', '100.5', '3', '77.7', '120.2'), ...s2llV('control', '75.5', '38', '150.5'), ...s2llV('upper', '155.5', '153')] },
+    // The midpoint above the maximum: num 0 / 420 / 210 re-sorts to 0 / 210 / 420; the lower segment runs colour 1 to colour 2.
+    // Its evidence values are pl-pq-210's minus 7: the same doubles f (replicated), so they share twins.
+    { id: 'pl-resort-210', kind: 'p-line', col: 'E', cfvo: ['0', '420', '210'], colors: [S2LL_P, S2LL_Q, S2LL_P],
+      values: [...s2llV('evidence', '29', '58', '109', '70', '143', '43.5'), ...s2llV('control', '57', '105', '210'), ...s2llV('upper', '239', '280')] },
+    // T4/V3 in the lower segment: 10 and 20 are f = 1/3 and 2/3 (T4 and V3's doubles); the upper probes 40 and 50 are T4 and V3.
+    { id: 'ds-yg-30', kind: 'distinct', col: 'F', cfvo: ['0', '30', '60'], colors: [S2LL_Y, S2LL_G, S2LL_Y],
+      values: [...s2llV('evidence', '10', '20', '4', '25', '3.5'), ...s2llV('control', '15', '7.5', '30'), ...s2llV('upper', '40', '50')] },
+    { id: 'ds-dd-210', kind: 'distinct', col: 'G', cfvo: ['-105', '105', '315'], colors: [S2LL_DD0, S2LL_DD1, S2LL_DD0],
+      values: [...s2llV('evidence', '3', '4', '11', '-35', '40.5'), ...s2llV('control', '0'), ...s2llV('upper', '213', '175')] },
+    { id: 'ds-da-105', kind: 'distinct', col: 'H', cfvo: ['-15', '90', '195'], colors: [S2LL_DD1, S2LL_DD0, S2LL_DD1],
+      values: [...s2llV('evidence', '12', '14', '39', '43', '55', '30.3'), ...s2llV('control', '37.5'), ...s2llV('upper', '117', '148')] },
+  ]
+}
+
+/** The layout's fixed slots: data rows, the control row, the twin line's spans and the literal positive controls. */
+export const S2_LITERAL_LOWER = {
+  firstRow: 2,
+  lastDataRow: 12,
+  /** Row 13: each data column's unformatted control (the column's first designated value), the twins' and the positive controls'. */
+  controlRow: 13,
+  /** The P-line twin line: num 0 / 1 between two P-line steps 128 apart; a twin of step k has value (k − from)/128 (exact). */
+  twinSpans: [{ from: 0, to: 128 }, { from: 82, to: 210 }] as const,
+  /** Literal cellIs positive controls (readback of a dxf fill). */
+  literalControls: ['FFF8696B', 'FF63BE7B'] as const,
+}
+
+export interface S2LiteralLowerCell {
+  ref: string
+  block: S2LiteralLowerBlock
+  text: string
+  value: number
+  role: S2LiteralLowerRole
+  /** 0: lower segment; 1: upper (after the midpoint-above-max re-sort). */
+  segment: 0 | 1
+  /** The configuration: the block's id (evidence), `controls`, `upper` (record). */
+  configuration: string
+  /** The segment as evaluated: thresholds re-sorted, colours positional. */
+  lo: number
+  hi: number
+  from: string
+  to: string
+}
+
+/** Every cell of every block, with the segment Excel's re-sort puts it in (thresholds sorted, colours positional). */
+export function s2LiteralLowerCells(): S2LiteralLowerCell[] {
+  return s2LiteralLowerBlocks().flatMap(b => {
+    const t = b.cfvo.map(Number)
+    const [mid, top] = t[1]! > t[2]! ? [t[2]!, t[1]!] : [t[1]!, t[2]!]
+    if (!(t[0]! < mid && mid < top)) throw new Error(`${S2_LITERAL_LOWER_ID}: ${b.id} thresholds ${b.cfvo.join(' / ')} are not ascending once re-sorted`)
+    return b.values.map((x, i): S2LiteralLowerCell => {
+      const value = Number(x.text)
+      const segment: 0 | 1 = value <= mid ? 0 : 1
+      const [lo, hi] = segment === 0 ? [t[0]!, mid] : [mid, top]
+      const configuration = x.role === 'evidence' ? b.id : x.role === 'control' ? 'controls' : 'upper'
+      return { ref: `${b.col}${S2_LITERAL_LOWER.firstRow + i}`, block: b, text: x.text, value, role: x.role, segment, configuration, lo, hi, from: b.colors[segment]!, to: b.colors[segment + 1]! }
+    })
+  })
+}
+
+/** f = (v − lo)/(hi − lo), clamped to [0, 1]: production's `safeFraction` for these finite spans, restated. */
+export const s2LiteralLowerFraction = (c: Pick<S2LiteralLowerCell, 'value' | 'lo' | 'hi'>): number => Math.max(0, Math.min(1, (c.value - c.lo) / (c.hi - c.lo)))
+
+/** Each ARGB channel with d != 0 at a cell: `below` (within 1e-11 strictly below a whole number), `above`, `integer`, `clear`. */
+export function s2LiteralLowerClasses(c: Pick<S2LiteralLowerCell, 'value' | 'lo' | 'hi' | 'from' | 'to'>): Array<'below' | 'above' | 'integer' | 'clear'> {
+  const f = s2LiteralLowerFraction(c)
+  return [0, 2, 4, 6].flatMap(i => {
+    const d = Math.abs(parseInt(c.to.slice(i, i + 2), 16) - parseInt(c.from.slice(i, i + 2), 16))
+    if (d === 0) return []
+    const p = f * d
+    if (Number.isInteger(p)) return ['integer' as const]
+    const k = Math.round(p)
+    return [Math.abs(p - k) <= 1e-11 ? (p < k ? 'below' as const : 'above' as const) : 'clear' as const]
+  })
+}
+
+/**
+ * The independent model's colour from `from` to `to` at fraction f, per ARGB channel (d = |c1 − c0|, p = f·d):
+ * - `truncation`: production's lower-segment arithmetic: raw floor floor(p) on every channel when some channel's p lies within
+ *   1e-11 strictly below a whole number (the guard-boundary shape, registered `raw-floor`), else floor(p + 1e-11);
+ * - `step-plus-one`: floor(p + 1e-11) − 1 on every channel with d != 0; undefined where that is negative.
+ */
+export function s2LiteralLowerColour(kind: 'truncation' | 'step-plus-one', from: string, to: string, f: number): string | undefined {
+  const ch = [0, 2, 4, 6].map(i => ({ c0: parseInt(from.slice(i, i + 2), 16), c1: parseInt(to.slice(i, i + 2), 16) }))
+  const boundary = ch.some(({ c0, c1 }) => { const p = f * Math.abs(c1 - c0); return Math.floor(p + 1e-11) !== Math.floor(p) })
+  const out: string[] = []
+  for (const { c0, c1 } of ch) {
+    const d = Math.abs(c1 - c0), p = f * d
+    let k: number
+    if (kind === 'truncation') k = boundary ? Math.floor(p) : Math.floor(p + 1e-11)
+    else if (d === 0) k = 0
+    else { k = Math.floor(p + 1e-11) - 1; if (k < 0) return undefined }
+    out.push((c1 >= c0 ? c0 + k : c0 - k).toString(16).toUpperCase().padStart(2, '0'))
+  }
+  return out.join('')
+}
+
+/** Whether a cell is in the num-segment shape: strictly inside its segment and f·2^20 not an integer. */
+export const s2LiteralLowerInShape = (c: Pick<S2LiteralLowerCell, 'value' | 'lo' | 'hi'>): boolean =>
+  c.value > c.lo && c.value < c.hi && !Number.isInteger(((c.value - c.lo) / (c.hi - c.lo)) * 1048576)
+
+/**
+ * What a reading predicts at a designated cell (a fill, or `none`): in the lower segment, `lower-arithmetic` is the truncation
+ * and `step-plus-one` its step colour where the cell is in the shape (elsewhere both are the truncation, which production paints
+ * today); at an upper probe (recorded only) each reading's arithmetic applied there.
+ */
+export function s2LiteralLowerPrediction(c: S2LiteralLowerCell, reading: S2LiteralLowerReading): string {
+  const f = s2LiteralLowerFraction(c)
+  const kind = reading === 'step-plus-one' && (c.role === 'upper' || (c.segment === 0 && s2LiteralLowerInShape(c))) ? 'step-plus-one' : 'truncation'
+  return s2LiteralLowerColour(kind, c.from, c.to, f) ?? 'none'
+}
+
+const S2LL_CONFIGURATIONS: ReadonlyArray<{ id: string; role?: 'negative-control'; record?: string; note: string }> = [
+  { id: 'pl-pq-210', note: 'P-line, span 210 (num 7 / 217 / 427), lower segment P to Q.' },
+  { id: 'pl-qp-420', note: 'P-line, span 420 with a negative bound (num -210 / 210 / 630), lower segment Q to P.' },
+  { id: 'pl-pq-105', note: 'P-line, span 105, negative fractional bounds (num -52.5 / 52.5 / 157.5), P to Q.' },
+  { id: 'pl-qp-150', note: 'P-line, span 150, fractional bounds (num 0.5 / 150.5 / 300.5), Q to P.' },
+  { id: 'pl-resort-210', note: 'P-line, span 210 after the midpoint-above-max re-sort (num 0 / 420 / 210), P to Q.' },
+  { id: 'ds-yg-30', note: 'Distinct spans 156 / 45 / 9 (T4/V3\'s colours, all descending), span 30 (num 0 / 30 / 60); 10 and 20 are T4/V3\'s f = 1/3, 2/3.' },
+  { id: 'ds-dd-210', note: 'Distinct spans 210 / 105 / 30, all descending, span 210 with a negative bound (num -105 / 105 / 315).' },
+  { id: 'ds-da-105', note: 'Distinct spans 210 / 105 / 30, all ascending, span 105 with a negative bound (num -15 / 90 / 195).' },
+  { id: 'controls', role: 'negative-control', note: 'Negative controls: lower-segment cells where both readings predict production\'s truncation (f·2^20-integer interior cells, endpoints, P-line products just below an integer); Excel must match it, never evidence.' },
+  { id: 'upper', record: 'Upper-segment probes (record only, docs/validation/xlsx-cf-recipes-stage2.md §12): interior cells at the doubles of lower-segment evidence cells, withheld by production (the num-segment shape) under every reading; never evidence and never a change to production.', note: 'recorded' },
+]
+
+/** The column name of a 0-based index. */
+const s2llCol = (i: number): string => { let s = ''; for (let c = i + 1; c > 0; c = Math.floor((c - 1) / 26)) s = String.fromCharCode(65 + ((c - 1) % 26)) + s; return s }
+const s2llColIndex = (col: string): number => [...col].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1
+
+export interface S2LiteralLowerTwin {
+  ref: string
+  /** The fill the twin shows. */
+  fill: string
+  text: string
+  /** The twin's rule: cfvo values and colours (2-colour num), and its sqref. */
+  rule: { sqref: string; cfvo: readonly [string, string]; colors: readonly [string, string] }
+  /** The model's fraction and products at the twin (f·d per ARGB channel with d != 0), checked IEEE integers. */
+  f: number
+}
+
+/**
+ * The twins: the P-line twin line first (one 2-colour num 0 / 1 rule per column between P-line steps `from` and `from` + 128,
+ * a twin of step k holding (k − from)/128), then the endpoint twins (one 2-colour num 0 / 1 rule per pair of off-line fills,
+ * the pair at values 0 and 1, so each shows its rule's colour at f = 0 or 1 exactly). Throws if any twin's products are not
+ * IEEE integers or the twin's colour (by the model) is not its fill.
+ */
+function s2llTwins(lineSteps: readonly number[], offLine: readonly string[], firstCol: number): { twins: S2LiteralLowerTwin[]; lastCol: number } {
+  const fx = S2_LITERAL_LOWER
+  const rows = fx.lastDataRow - fx.firstRow + 1
+  const twins: S2LiteralLowerTwin[] = []
+  let col = firstCol
+  const check = (t: S2LiteralLowerTwin): void => {
+    const [from, to] = t.rule.colors
+    const v = Number(t.text), f = (v - Number(t.rule.cfvo[0])) / (Number(t.rule.cfvo[1]) - Number(t.rule.cfvo[0]))
+    for (const i of [0, 2, 4, 6]) {
+      const p = f * Math.abs(parseInt(to.slice(i, i + 2), 16) - parseInt(from.slice(i, i + 2), 16))
+      if (!Number.isInteger(p)) throw new Error(`${S2_LITERAL_LOWER_ID}: twin ${t.ref} product ${p} is not an IEEE integer`)
+    }
+    if (s2LiteralLowerColour('truncation', from, to, f) !== t.fill) throw new Error(`${S2_LITERAL_LOWER_ID}: twin ${t.ref} shows ${s2LiteralLowerColour('truncation', from, to, f)}, not ${t.fill}`)
+    twins.push({ ...t, f })
+  }
+  for (const span of fx.twinSpans) {
+    const mine = lineSteps.filter(k => (span === fx.twinSpans[0] ? k <= span.to : k > fx.twinSpans[0].to) && k >= span.from && k <= span.to)
+    for (let i = 0; i < mine.length; i += rows) {
+      const name = s2llCol(col++)
+      const chunk = mine.slice(i, i + rows)
+      const sqref = chunk.length === 1 ? `${name}${fx.firstRow}` : `${name}${fx.firstRow}:${name}${fx.firstRow + chunk.length - 1}`
+      chunk.forEach((k, j) => check({ ref: `${name}${fx.firstRow + j}`, fill: s2UwLine(k), text: String((k - span.from) / 128), rule: { sqref, cfvo: ['0', '1'], colors: [s2UwLine(span.from), s2UwLine(span.to)] }, f: 0 }))
+    }
+  }
+  const perCol = Math.floor(rows / 2)
+  for (let i = 0; i < offLine.length; i += 2 * perCol) {
+    const name = s2llCol(col++)
+    const chunk = offLine.slice(i, i + 2 * perCol)
+    for (let j = 0; j < chunk.length; j += 2) {
+      const a = chunk[j]!, b = chunk[j + 1] ?? chunk[j]!
+      const row = fx.firstRow + j
+      const single = chunk[j + 1] === undefined
+      const sqref = single ? `${name}${row}` : `${name}${row}:${name}${row + 1}`
+      const rule = { sqref, cfvo: ['0', '1'] as const, colors: [a, b] as const }
+      check({ ref: `${name}${row}`, fill: a, text: '0', rule, f: 0 })
+      if (!single) check({ ref: `${name}${row + 1}`, fill: b, text: '1', rule, f: 0 })
+    }
+  }
+  return { twins, lastCol: col - 1 }
+}
+
+/** The configurations, the twins and the literal positive controls; every live prediction is a twin token, a recorded one a fill. */
+export function s2LiteralLowerLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: S2LiteralLowerTwin[]; positiveControlCol: string } {
+  const fx = S2_LITERAL_LOWER
+  const cells = s2LiteralLowerCells()
+  for (const c of cells) {
+    const [a, b] = S2_LITERAL_LOWER_READINGS.map(r => s2LiteralLowerPrediction(c, r))
+    const inShape = c.segment === 0 && s2LiteralLowerInShape(c)
+    if (c.role === 'evidence' && (!inShape || a === b || a === 'none' || b === 'none')) throw new Error(`${S2_LITERAL_LOWER_ID}: evidence ${c.ref} is not a decisive lower-segment cell of the shape (${a} / ${b})`)
+    if (c.role === 'control' && (c.segment !== 0 || a !== b)) throw new Error(`${S2_LITERAL_LOWER_ID}: control ${c.ref} does not agree under both readings (${a} / ${b})`)
+    if (c.role === 'upper' && (c.segment !== 1 || !s2LiteralLowerInShape(c))) throw new Error(`${S2_LITERAL_LOWER_ID}: upper probe ${c.ref} is not an upper-segment interior cell of the shape`)
+  }
+  const live = cells.filter(c => c.role !== 'upper')
+  const vouched = (c: S2LiteralLowerCell, fill: string): boolean => c.configuration === 'controls' && (fx.literalControls as readonly string[]).includes(fill)
+  const fills = [...new Set(live.flatMap(c => S2_LITERAL_LOWER_READINGS.map(r => s2LiteralLowerPrediction(c, r)).filter(f => !vouched(c, f))))].sort()
+  const lineSteps = [...new Set(fills.map(s2nsLineStep).filter((k): k is number => k !== undefined))].sort((a, b) => a - b)
+  const offLine = fills.filter(f => s2nsLineStep(f) === undefined)
+  const dataCols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  const { twins, lastCol } = s2llTwins(lineSteps, offLine, s2llColIndex(dataCols.at(-1)!) + 1)
+  const twinOf = new Map(twins.map(t => [t.fill, t.ref]))
+  const positiveControlCol = s2llCol(lastCol + 1)
+  const positiveControls = fx.literalControls.map((token, i) => ({ ref: `${positiveControlCol}${fx.firstRow + i}`, token }))
+  const configurations: S5Configuration[] = S2LL_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    // A recorded prediction is a literal fill; a live one is a twin token, or the literal token of a fill a literal positive
+    // control shows (vouched, in the controls configuration only).
+    const tokenOf = (fill: string): string => (cfg.record !== undefined || (cfg.id === 'controls' && (fx.literalControls as readonly string[]).includes(fill)) ? fill : `twin:${twinOf.get(fill)!}`)
+    const hypotheses = Object.fromEntries(S2_LITERAL_LOWER_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2LiteralLowerPrediction(c, h))]))]))
+    const twinRefs = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)).filter(t => t.startsWith('twin:')))].map(t => t.slice('twin:'.length)).sort()
+    return {
+      id: cfg.id, capabilityId: S2_LITERAL_LOWER_CAP, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(cfg.record ? { record: cfg.record } : {}),
+      ...(twinRefs.length > 0 ? { twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])) } : {}),
+      ...(cfg.id === 'controls' ? { positiveControls: Object.fromEntries(positiveControls.map(p => [p.ref, p.token])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins, positiveControlCol }
+}
+
+/** The data columns and the control of each: the column's first designated cell's value, unformatted, in the control row. */
+export function s2LiteralLowerColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2LiteralLowerCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_LITERAL_LOWER.controlRow}`, text: cells.find(c => /^[A-Z]+/.exec(c.ref)![0] === col)!.text }))
+}
+
+const s2llSqref = (col: string, first: number, last: number): string => (first === last ? `${col}${first}` : `${col}${first}:${col}${last}`)
+
+/** The colour rules (one per block), then the twins' (one per twin rule), in priority order; positive controls follow, unmarked. */
+export function s2LiteralLowerMarkers(): CfPartMarker[] {
+  const { twins } = s2LiteralLowerLayout()
+  const rules = [...new Map(twins.map(t => [t.rule.sqref, t.rule])).values()]
+  return [
+    ...s2LiteralLowerBlocks().map(b => ({ cap: S2_LITERAL_LOWER_CAP, sqref: s2llSqref(b.col, S2_LITERAL_LOWER.firstRow, S2_LITERAL_LOWER.firstRow + b.values.length - 1), cfvo: b.cfvo.map(val => ({ type: 'num', val })), colors: [...b.colors] })),
+    ...rules.map(r => ({ cap: S2_LITERAL_LOWER_TWIN, sqref: r.sqref, cfvo: r.cfvo.map(val => ({ type: 'num', val })), colors: [...r.colors] })),
+  ].map((m, i) => s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1))
+}
+
+/** The capture range: through the positive-control column and the control row. */
+export const s2LiteralLowerRange = (): string => `A1:${s2LiteralLowerLayout().positiveControlCol}${S2_LITERAL_LOWER.controlRow}`
+
+function stage2LiteralLowerCase(): CfOracleCase {
+  const fx = S2_LITERAL_LOWER
+  const { configurations, positiveControls, twins } = s2LiteralLowerLayout()
+  const all = s2LiteralLowerCells()
+  const colControl = new Map(s2LiteralLowerColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const twinControl = `${colOf(twins[0]!.ref)}${fx.controlRow}`
+  const pcControl = `${colOf(positiveControls[0]!.ref)}${fx.controlRow}`
+  const designated: CfCellExpectation[] = all.map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  // A twin's control is the shared unformatted twin-row cell (value 0); a positive control's is the shared one (value 1).
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: pcControl, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: pcControl, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const count = (cfg: string): number => all.filter(c => c.configuration === cfg).length
+  const evidence = S2LL_CONFIGURATIONS.filter(c => !c.role && !c.record).map(c => `${c.id} ${count(c.id)}`).join(', ')
+  return {
+    id: S2_LITERAL_LOWER_ID,
+    stage: 2,
+    question:
+      `The literal-lower follow-up (owner ruling 2026-11-24; registrable): an interior cell of a 3-colour LOWER segment bounded by two literal num cfvo where f·2^20 is not an integer (withheld today as the num-segment shape, whose founding anomaly T4/V3 is in the upper segment): does Excel draw it at production's lower-segment arithmetic (lower-arithmetic: truncation, raw floor at a guard-boundary product) or one step smaller per channel, as T4/V3 in the upper segment (step-plus-one: the guarded truncation step minus one)? Two readings pre-registered on ${evidence} cells (span × colour order × palette kind: P-line and distinct spans per channel; spans 30, 105, 150, 210, 420; non-zero, negative and fractional bounds; the midpoint-above-max re-sort; T4/V3's 1/3 and 2/3 in the lower segment); ${count('controls')} negative controls (f·2^20-integer cells, endpoints, P-line products just below an integer); ${count('upper')} upper-segment probes at the same doubles, recorded only. A P-line twin line and endpoint twins with IEEE-integer products show every predicted fill; two literal cellIs positive controls check the readback.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_LITERAL_LOWER_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_LITERAL_LOWER_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2LiteralLowerRange(),
+    requiredAppearances: ['screen'],
+    markers: s2LiteralLowerMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_LITERAL_LOWER_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_LITERAL_LOWER_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -5168,8 +5536,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   stage2UpperWholeCase(),
   // 12. stage2-scale-upper-window (the upper-segment window follow-up)
   stage2UpperWindowCase(),
-  // 13. stage2-scale-raw-floor (the raw-floor follow-up, appended last: earlier inputs stay byte-identical)
+  // 13. stage2-scale-raw-floor (the raw-floor follow-up)
   stage2RawFloorCase(),
+  // 14. stage2-scale-literal-lower (the literal-lower follow-up, appended last: earlier inputs stay byte-identical)
+  stage2LiteralLowerCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -5331,6 +5701,13 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings; withheld as the num-segment shape whatever a reading says, never registrable.',
   'scale:guard-boundary-twin':
     'The 2-colour twin line of stage2-scale-raw-floor (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
+  // The literal-lower follow-up (stage2-scale-literal-lower): the question is registered until its capture (a matched reading
+  // is published only by removing this entry and registering it in CF_LITERAL_LOWER_PRODUCTION_READINGS); the twins are
+  // comparisons, never questions.
+  'scale:num-segment-literal-lower':
+    'Pre-registered and registrable (stage2-scale-literal-lower, two readings: lower-arithmetic, step-plus-one), awaiting its capture: interior cells of a 3-colour lower segment bounded by two literal num cfvo with f·2^20 not an integer stay withheld (cf-unmeasured-num-segment-fraction) until a matched reading is registered in CF_LITERAL_LOWER_PRODUCTION_READINGS; the upper segment stays withheld whatever the capture shows.',
+  'scale:num-segment-literal-lower-twin':
+    'The twins of stage2-scale-literal-lower (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, num 0 / 1 at values 0 and 1; IEEE-integer products): comparison references, never a question themselves.',
 }
 
 /**
