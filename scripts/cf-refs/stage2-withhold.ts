@@ -10,7 +10,7 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, literalLowerPaints, upperNearTopShapeAt, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, literalLowerPaints, upperNearTopShapeAt, upperSegmentReadingPaints, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -92,7 +92,7 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
     // The literal-lower follow-up: a registered literal-lower reading (with its evidence) paints the LOWER segment (colours 1 -> 2,
     // positional), so it is justified no longer there. The upper-segment follow-up: a registered upper-segment reading (with its
     // evidence) paints the UPPER segment (literal bounds are never formula-resolved), so it is justified no longer there.
-    if (!lower) return upperSegmentReadingRegistered() === undefined
+    if (!lower) return !upperSegmentReadingPaints(upperSegmentReadingRegistered(), m.scale.colors[1]!, m.scale.colors[2]!)
     return !literalLowerPaints(m.scale.colors[0]!, m.scale.colors[1]!, f)
   })
 }

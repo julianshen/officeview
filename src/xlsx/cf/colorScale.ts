@@ -734,7 +734,9 @@ export function literalLowerStepColour(argb0: number, argb1: number, fraction: n
  *   over all 302 captured upper-segment interior cells (scripts/cf-refs/upper-segment-candidates.ts; with i = 0 it is the
  *   registered lower-segment raw floor);
  * - `truncate`: production's guarded truncation (`interpolateScaleColor`), the control.
- * Pre-registered by stage2-scale-upper-segment. A segment bounded by a formula-resolved cfvo stays withheld under every reading.
+ * Pre-registered by stage2-scale-upper-segment. A segment bounded by a formula-resolved cfvo stays withheld under every reading,
+ * and `index-position` applies only when both segment colours are opaque (alpha FF; the search held alpha constant and every
+ * capture is opaque): another alpha stays withheld.
  */
 export const CF_UPPER_SEGMENT_READINGS = ['index-position', 'truncate'] as const
 export type CfUpperSegmentReading = (typeof CF_UPPER_SEGMENT_READINGS)[number]
@@ -815,6 +817,9 @@ function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfSc
   if (r === undefined || !checkEvidence(CF_UPPER_SEGMENT_CAP)) return undefined
   // The near-top sub-shape: only with its own registration, the same reading, and its evidence.
   if (nearTop && (cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) !== r || !checkEvidence(CF_UPPER_NEAR_TOP_CAP))) return undefined
+  // Codex pre-capture review (fail closed): the search held alpha constant and every capture is opaque, so index-position
+  // applies only between two opaque endpoint colours; any other alpha keeps the cell withheld.
+  if (r === 'index-position' && (((seg.c0 >>> 24) & 0xff) !== 0xff || ((seg.c1 >>> 24) & 0xff) !== 0xff)) return undefined
   return r === 'index-position' ? upperSegmentPositionColour(seg.c0, seg.c1, seg.fraction) : interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding)
 }
 

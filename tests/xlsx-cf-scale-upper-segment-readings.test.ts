@@ -244,3 +244,43 @@ describe('the near-top sub-shape (orchestrator ruling before the capture): withh
     withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP], () => expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true))
   })
 })
+
+describe('codex pre-capture review: index-position only between opaque endpoint colours (fail closed on alpha)', () => {
+  const K = 0xff000000, T = 0x000000ff // FF000000 -> 000000FF: alpha and blue both span 255
+  const AL = [num(0, K), num(13, K), num(26, T)], ALT = [0, 13, 26]
+  const v = 13 + 10 // 10/13 in the upper segment: f·255 = 196.15..., clear; 10/11-like products elsewhere
+  it('unregistered the shape is withheld as before; with index-position registered a non-opaque endpoint stays withheld (the arithmetic would have painted alpha)', () => {
+    const f = 10 / 13
+    expect(hex(upperSegmentPositionColour(K, T, f)!)).not.toMatch(/^FF/) // the hazard: alpha interpolated
+    expect(at(v, AL, ALT)).toBe(NUMSEG)
+    register('index-position')
+    expect(at(v, AL, ALT)).toBe(NUMSEG)
+    const st = [mn(K), pct(50, K), mx(T)]
+    expect(at(280, [mn(K), pct(50, K), mx(0x00ffffff)], [0, 210, 420])).toBe(WHOLE)
+    expect(at(280, st, [0, 210, 420])).not.toMatch(/^[0-9A-F]{8}$/)
+    // Opaque endpoints unchanged.
+    expect(at(280, PL, PLT)).toBe(hex(upperSegmentPositionColour(Q, P, 70 / 210)!))
+  })
+  it('truncate (the control, production\'s own arithmetic) still paints a non-opaque segment when registered', () => {
+    register('truncate')
+    expect(at(v, AL, ALT)).toBe(hex(interpolateScaleColor(K, T, 10 / 13)))
+  })
+  it('the near-top path: a non-opaque segment stays withheld under index-position on both ids', () => {
+    register('index-position')
+    injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
+    const top = 25.999999999999996
+    expect(at(top, AL, ALT, { hasEvidence: all })).toBe('cf-unmeasured-upper-near-top')
+  })
+  it('the justifications recompute it: under index-position a non-opaque upper segment stays justified, an opaque one is not', () => {
+    const m = (to: string): UpperWholeMarker => ({ ruleType: 'colorScale', sqref: 'A2:A9', scale: { cfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '210' }, { type: 'num', val: '420' }], colors: ['FF14F028', 'FFE61EFA', to] } })
+    const st = (to: string): UpperWholeMarker => ({ ruleType: 'colorScale', sqref: 'A2:A9', scale: { cfvo: [{ type: 'min' }, { type: 'percent', val: '50' }, { type: 'max' }], colors: ['FF14F028', 'FFE61EFA', to] } })
+    const vals = new Map([['A2', 0], ['A3', 280], ['A9', 420]])
+    register('index-position')
+    withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP], () => {
+      expect(stage2NumSegmentShape([m('0014F028')], 'A3', 267)).toBe(true)
+      expect(stage2NumSegmentShape([m('FF14F028')], 'A3', 267)).toBe(false)
+      expect(upperWholeShapeAt(st('0014F028'), 'A3', 280, vals)).toBe(true)
+      expect(upperWholeShapeAt(st('FF14F028'), 'A3', 280, vals)).toBe(false)
+    })
+  })
+})

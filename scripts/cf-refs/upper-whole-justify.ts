@@ -93,6 +93,10 @@ export const literalLowerReadingRegistered = (): CfLiteralLowerReading | undefin
   return r !== undefined && hasEvidence(CF_LITERAL_LOWER_CAP) ? r : undefined
 }
 
+/** Whether production's upper-segment reading `r` paints between `from` and `to` (ARGB hex): `index-position` only between two opaque colours. */
+export const upperSegmentReadingPaints = (r: CfUpperSegmentReading | undefined, from: string, to: string): boolean =>
+  r !== undefined && (r !== 'index-position' || (from.slice(0, 2).toUpperCase() === 'FF' && to.slice(0, 2).toUpperCase() === 'FF'))
+
 /** The upper-segment reading registered with its evidence (undefined: none; production then withholds the upper shapes). */
 export const upperSegmentReadingRegistered = (): CfUpperSegmentReading | undefined => {
   const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
@@ -163,7 +167,7 @@ export function upperWholeShapeAt(marker: UpperWholeMarker, ref: string, value: 
   // The upper segment is bounded by cfvo 2 and 3 in either order (the midpoint-above-max re-sort swaps them).
   if (cls === 'window' && !(literalNumCfvo(marker.scale.cfvo[1]!) && literalNumCfvo(marker.scale.cfvo[2]!)) && windowReadingRegistered()) return false
   // The upper-segment follow-up: a registered upper-segment reading (with its evidence) paints both classes unless a bound is a formula.
-  if (cls !== undefined && upperSegmentReadingRegistered() !== undefined && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)) return false
+  if (cls !== undefined && upperSegmentReadingPaints(upperSegmentReadingRegistered(), marker.scale.colors[1]!, marker.scale.colors[2]!) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)) return false
   return cls !== undefined
 }
 
@@ -187,7 +191,7 @@ export function upperNearTopShapeAt(marker: UpperWholeMarker, ref: string, value
   const near = [2, 4, 6].some(i => { const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16)); return d !== 0 && d - f * d <= JUSTIFY_TRUNCATION_GUARD })
   if (!near) return false
   const r = upperSegmentReadingRegistered()
-  const painted = r !== undefined && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)
+  const painted = upperSegmentReadingPaints(r, from, to) && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)
   return !painted
 }
 
