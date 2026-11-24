@@ -130,8 +130,8 @@ const EVIDENCE = ['2c-num', '2c-minmax', '2c-percent', '2c-percentile', '2c-inve
 
 describe('stage2-scale-raw-floor: the case', () => {
   it('is appended last; owns its three ids; the question is registered as raw-floor (its entry removed), the literal id and twin line stay recorded', async () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-upper-window', ID])
+    // Appended last at its time; the literal-lower follow-up stage2-scale-literal-lower is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-upper-window', ID, 'stage2-scale-literal-lower'])
     for (const id of [CAP, LIT, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
     for (const id of [LIT, TWIN]) expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
@@ -309,7 +309,7 @@ describe('stage2-scale-raw-floor: the case', () => {
     expect(withheld.length).toBe(67 + 4 + 9)
   }, HEAVY)
 
-  it('the independent model is production as committed (raw-floor registered and published): Excel\'s fill at every cell production paints; only the literal and W3 cells are withheld', async () => {
+  it('the independent model is production as committed (raw-floor registered and published): Excel\'s fill at every cell production paints; only the W3 cells are withheld (the literal cells paint since the literal-lower registration, a3f85309)', async () => {
     const c = caseOf()
     const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
     const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
@@ -322,17 +322,17 @@ describe('stage2-scale-raw-floor: the case', () => {
       expect(got, e.ref).toBe(!e.matched ? undefined : cell ? s2RawFloorPrediction(cell, 'raw-floor') : twinK.has(e.ref) ? s2UwLine(twinK.get(e.ref)!) : e.fillRgb)
       if (e.matched) expect(got, `${e.ref} Excel`).toBe(excel.get(e.ref))
     }
-    expect(withheld.sort()).toEqual(designated.filter(x => x.role === 'w3' || x.configuration === 'literal').map(x => x.ref).sort())
-    expect(withheld.length).toBe(4 + 9)
+    expect(withheld.sort()).toEqual(designated.filter(x => x.role === 'w3').map(x => x.ref).sort())
+    expect(withheld.length).toBe(9)
   }, HEAVY)
 
   for (const reading of S2_RAW_FLOOR_READINGS) {
-    it(`the independent model is production under the ${reading} registration: every non-literal evidence cell paints the reading; literal and W3 cells stay withheld; nothing else moves`, async () => {
+    it(`the independent model is production under the ${reading} registration: every evidence cell paints the reading (the literal cells too, through the literal-lower registration); W3 cells stay withheld; nothing else moves`, async () => {
       const c = caseOf()
       const fills = await withRegistration(reading, () => productionFills(c, c.expected.cells.map(e => e.ref)))
       for (const e of c.expected.cells) {
         const cell = cellAt.get(e.ref)
-        const still = cell !== undefined && (cell.role === 'w3' || cell.configuration === 'literal')
+        const still = cell !== undefined && cell.role === 'w3'
         const want = !e.matched || still ? undefined : cell ? s2RawFloorPrediction(cell, reading) : twinK.has(e.ref) ? s2UwLine(twinK.get(e.ref)!) : e.fillRgb
         expect(fills.get(e.ref), e.ref).toBe(want)
       }
@@ -484,17 +484,19 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
     if (res.kind !== 'verified') return
     expect((res.refusedCapabilities ?? []).map(x => [x.capabilityId, x.code])).toEqual([[CAP, 'formula-hypothesis-none']])
     for (const reading of S2_RAW_FLOOR_READINGS) expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: published, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [CAP]: reading } }), CAP), reading).toBe('supported-structural')
-    // Unpublished production on that world: every evidence cell withheld and justified (67 guard-boundary, 4 num-segment), the W3 probes as upper whole products; nothing disagrees.
+    // Unpublished production on that world: every evidence cell withheld and justified (67 guard-boundary; the 4 literal cells
+    // too, as guard-boundary cells since the literal-lower registration), the W3 probes as upper whole products; nothing disagrees.
     const r = await withoutEvidence(() => stage2Conformance(m, root, [ID]))
     expect(r.violations).toEqual([])
-    expect([r.total, r.withheld, r.guardBoundaryWithheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([201, 80, 67, 4, 9])
+    expect([r.total, r.withheld, r.guardBoundaryWithheld, r.numSegmentWithheld, r.upperWholeWithheld]).toEqual([201, 80, 71, 0, 9])
     // As committed (raw-floor registered and published), the conformance pass catches the 9 flipped cells.
     const committed = await stage2Conformance(m, root, [ID])
     expect(committed.violations.map(v => v.split(':').slice(0, 2).join(':')).sort()).toEqual([...flipped].map(x => `${ID}:${x}`).sort())
   }, HEAVY)
 })
 
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
+// As recorded at ce3f701d: the cases measured then (stage2-scale-literal-lower, a3f85309, is rehearsed by its own case test).
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-literal-lower').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   // This capture's 67 evidence cells (the guard-boundary shape outside the literal num-segment withhold).
@@ -504,13 +506,13 @@ describe('the rehearsal: each registration against every committed capture, and 
     expect(STAGE2_MEASURED).toContain(ID)
     const r = await withoutEvidence(() => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 882, 428, 258, 59, 81])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 942, 368, 194, 59, 85])
   }, HEAVY)
 
   it('as committed (raw-floor registered and published): every committed capture agrees; the 14 cells of ed0fccb6 and this capture\'s 67 are painted at Excel\'s fill exactly; no guard-boundary withhold is left', async () => {
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED)
     expect(r.violations).toEqual([])
-    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 963, 347, 258, 59, 0])
+    expect([r.total, r.exact, r.withheld, r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([1310, 1027, 283, 194, 59, 0])
     expect(await withRegistration('raw-floor', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))).toEqual(r)
     const uw = manifest.cases.find(x => x.id === UW)!
     const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, uw.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
@@ -521,7 +523,9 @@ describe('the rehearsal: each registration against every committed capture, and 
 
   it('guarded registered: the committed captures refute it at exactly the 14 cells of ed0fccb6 and this capture\'s 67 (caught, never published)', async () => {
     const r = await withRegistration('guarded', () => stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED))
-    expect(r.violations.map(v => v.split(':').slice(0, 2).join(':')).sort()).toEqual([...MOVED.map(x => `${UW}:${x}`), ...EVIDENCE_REFS.map(x => `${ID}:${x}`)].sort())
+    // ... and the 4 literal cells (F6..F9), painted through the guard-boundary reading since the literal-lower registration.
+    const literal = designated.filter(x => x.configuration === 'literal').map(x => x.ref)
+    expect(r.violations.map(v => v.split(':').slice(0, 2).join(':')).sort()).toEqual([...MOVED.map(x => `${UW}:${x}`), ...EVIDENCE_REFS.map(x => `${ID}:${x}`), ...literal.map(x => `${ID}:${x}`)].sort())
   }, HEAVY)
 
   it('the conformance pass and cf-compare (interactive, paged) on this case: each planted world passes unregistered and under its own registration; the other reading is caught', async () => {
@@ -534,7 +538,7 @@ describe('the rehearsal: each registration against every committed capture, and 
       expect([unregistered.total, unregistered.withheld], reading).toEqual([201, 80])
       const registered = await withRegistration(reading, () => stage2Conformance(m, root, [ID]))
       expect(registered.violations, reading).toEqual([])
-      expect([registered.total, registered.withheld, registered.guardBoundaryWithheld, registered.numSegmentWithheld, registered.upperWholeWithheld], `${reading} registered`).toEqual([201, 13, 0, 4, 9])
+      expect([registered.total, registered.withheld, registered.guardBoundaryWithheld, registered.numSegmentWithheld, registered.upperWholeWithheld], `${reading} registered`).toEqual([201, 9, 0, 0, 9])
       for (const mode of ['interactive', 'paged'] as const) {
         const a = await withoutEvidence(() => compareCfCase(c, mode, { rootDir: root }))
         expect(`${reading} ${mode}: ${a.outcome} ${a.outcome === 'pass' ? '' : a.reason}`).toBe(`${reading} ${mode}: pass `)
@@ -544,7 +548,7 @@ describe('the rehearsal: each registration against every committed capture, and 
       // The other reading registered on this world: every non-literal evidence cell disagrees (caught).
       const other = S2_RAW_FLOOR_READINGS.find(x => x !== reading)!
       const wrong = await withRegistration(other, () => stage2Conformance(m, root, [ID]))
-      expect(wrong.violations.length, `${other} on a ${reading} world`).toBe(67)
+      expect(wrong.violations.length, `${other} on a ${reading} world`).toBe(67 + 4)
     }
   }, 900_000)
 

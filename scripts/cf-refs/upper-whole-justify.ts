@@ -20,9 +20,14 @@
  * (stage2-scale-raw-floor): once a guard-boundary reading is registered with its evidence (`cfGuardBoundaryReading`, the
  * registration table only), production paints that shape where neither bounding cfvo is a formula, so it is justified no
  * longer there; formula-bounded segments stay justified.
+ * The literal-lower follow-up (stage2-scale-literal-lower): once a literal-lower reading is registered with its evidence
+ * (`cfLiteralLowerReading`, the registration table only), production paints the LOWER segment of the num-segment shape, so it
+ * is justified no longer there (`literalLowerPaints`): `lower-arithmetic` hands the cell to the guard-boundary shape (justified
+ * by `guardBoundaryShapeAt` while its own reading is unregistered or its evidence absent); `step-plus-one` leaves justified
+ * only the cells where some channel's truncation step is 0. The upper segment stays justified whatever is registered.
  */
 import { isCellInSqref } from './verify'
-import { CF_GUARD_BOUNDARY_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfUpperWindowReading } from '../../src/xlsx/cf/colorScale'
+import { CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperWindowReading, type CfLiteralLowerReading } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -77,6 +82,28 @@ const literalNumCfvo = (x: UpperWholeCfvo): boolean => x.type === 'num' && x.f =
 /** Whether a guard-boundary reading is registered with its evidence (production then paints the shape of non-formula segments). */
 const guardReadingRegistered = (): boolean => cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) !== undefined && hasEvidence(CF_GUARD_BOUNDARY_CAP)
 const formulaCfvo = (x: UpperWholeCfvo): boolean => x.type === 'formula' || x.f !== undefined
+/** The literal-lower reading registered with its evidence (undefined: none; production then withholds the whole num-segment shape). */
+export const literalLowerReadingRegistered = (): CfLiteralLowerReading | undefined => {
+  const r = cfLiteralLowerReading(CF_LITERAL_LOWER_CAP)
+  return r !== undefined && hasEvidence(CF_LITERAL_LOWER_CAP) ? r : undefined
+}
+
+/**
+ * Whether production paints a literal-num lower-segment cell of the num-segment shape (colours `from` -> `to`, fraction f) under
+ * the registered literal-lower reading, restated: `lower-arithmetic` always (its guard-boundary cells are then
+ * `guardBoundaryShapeAt`'s); `step-plus-one` where every ARGB channel with d != 0 has a truncation step
+ * floor(f·d + JUSTIFY_TRUNCATION_GUARD) >= 1; none registered, never.
+ */
+export function literalLowerPaints(from: string, to: string, f: number): boolean {
+  const r = literalLowerReadingRegistered()
+  if (r === undefined || !Number.isFinite(f)) return false
+  if (r === 'lower-arithmetic') return true
+  for (const i of [0, 2, 4, 6]) {
+    const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16))
+    if (d > 0 && Math.floor(Math.max(0, Math.min(1, f)) * d + JUSTIFY_TRUNCATION_GUARD) < 1) return false
+  }
+  return true
+}
 
 /**
  * Whether `ref` (value `value`) is in the shape under `marker`. `values` holds the numeric cells of the sheet (the scope's
@@ -148,7 +175,7 @@ export function independentGuardBoundary(from: string, to: string, f: number): b
  * thresholds sorted, colours positional, as production inverts them) or strictly inside the LOWER segment of a 3-colour
  * scale (thresholds strictly ascending after the midpoint-above-max re-sort; colours 1 -> 2, positional), at
  * `independentGuardBoundary`. A 3-colour segment bounded by two literal num cfvo whose f·2^20 is not an integer is the
- * num-segment shape instead (its precedence), and is not this shape.
+ * num-segment shape instead (its precedence), and is not this shape, unless `lower-arithmetic` is registered with its evidence.
  */
 export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, value: unknown, values: ReadonlyMap<string, number>, formulaBound?: (cfvo: UpperWholeCfvo) => number | undefined): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value) || !marker.scale) return false
@@ -169,7 +196,9 @@ export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, valu
     const midCfvo = marker.scale.cfvo[t1 > t2 ? 2 : 1]!
     lo = t0; hi = mid
     bounds = [marker.scale.cfvo[0]!, midCfvo]
-    if (literalNumCfvo(marker.scale.cfvo[0]!) && literalNumCfvo(midCfvo) && value > lo && value < hi && !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)) return false
+    // The num-segment shape (its precedence), unless lower-arithmetic is registered with its evidence: production then paints
+    // the cell as a non-literal lower segment, through this shape.
+    if (literalNumCfvo(marker.scale.cfvo[0]!) && literalNumCfvo(midCfvo) && value > lo && value < hi && !Number.isInteger(((value - lo) / (hi - lo)) * 1048576) && literalLowerReadingRegistered() !== 'lower-arithmetic') return false
   }
   if (!(value > lo && value < hi)) return false
   const f = independentFraction(value, lo, hi)

@@ -25,6 +25,13 @@ import {
   S2_NUM_SEGMENT_ID,
   S2_UPPER_WHOLE,
   S2_UPPER_WHOLE_ID,
+  S2_LITERAL_LOWER,
+  S2_LITERAL_LOWER_ID,
+  s2LiteralLowerCells,
+  s2LiteralLowerColumnControls,
+  s2LiteralLowerLayout,
+  s2LiteralLowerMarkers,
+  s2LiteralLowerRange,
   S2_RAW_FLOOR,
   S2_RAW_FLOOR_ID,
   s2RawFloorCells,
@@ -1277,6 +1284,34 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
       return {
         dimension: s2RawFloorRange(),
+        cells,
+        legacyCfXml: [...scaleXml, ...pcXml].join(''),
+        dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,
+      }
+    }
+
+    case S2_LITERAL_LOWER_ID: {
+      // The literal-lower follow-up: one colour rule per block and per twin rule (catalogue markers, priority order), then one
+      // literal cellIs rule per positive control (value 1 = 1, its own dxf), sharing the unformatted control. Row 1 labels
+      // each column; the control row holds the controls. Values are written as their exact decimals.
+      const fx = S2_LITERAL_LOWER
+      const { positiveControls, twins, positiveControlCol } = s2LiteralLowerLayout()
+      const blockCols = new Map(s2LiteralLowerCells().map(c => [/^[A-Z]+/.exec(c.ref)![0], c.block.id] as const))
+      const twinCols = [...new Set(twins.map(t => /^[A-Z]+/.exec(t.ref)![0]))]
+      const header: Array<[string, string]> = [...blockCols, ...twinCols.map(col => [col, 'Twin'] as [string, string]), [positiveControlCol, 'PosCtl']]
+      const cells: CellSpec[] = header.map(([col, v]) => ({ ref: `${col}1`, v }))
+      for (const c of s2LiteralLowerCells()) cells.push({ ref: c.ref, v: c.value })
+      for (const c of s2LiteralLowerColumnControls()) cells.push({ ref: c.ref, v: Number(c.text) })
+      for (const t of twins) cells.push({ ref: t.ref, v: Number(t.text) })
+      cells.push({ ref: `${twinCols[0]!}${fx.controlRow}`, v: 0 })
+      cells.push({ ref: `${positiveControlCol}${fx.controlRow}`, v: 1 })
+      for (const p of positiveControls) cells.push({ ref: p.ref, v: 1 })
+      const cfvoXml = (v: { type: string; val?: string }): string => `<cfvo type="${v.type}"${v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      const markers = s2LiteralLowerMarkers()
+      const scaleXml = markers.map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+      const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
+      return {
+        dimension: s2LiteralLowerRange(),
         cells,
         legacyCfXml: [...scaleXml, ...pcXml].join(''),
         dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,

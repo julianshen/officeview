@@ -87,7 +87,7 @@ const judge = (c: CfOracleCase, sidecar: Record<string, unknown>) => evaluateFor
 describe('stage2-scale-num-segment: the case', () => {
   it('is appended last; owns its four ids, registered as recorded findings (the two questions) and as comparisons (the 2-colour twins, the twin line)', () => {
     // Appended last at its time; the exploratory follow-up stage2-scale-upper-whole and the window follow-up are appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual([ID, 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-5)).toEqual([ID, 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower'])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toBeDefined()
@@ -268,17 +268,17 @@ describe('the capture (Excel 16.115): no reading matches; production withholds o
   it('the audit: Stage 2 ok and complete; the four ids stay recorded findings (unverified-nondiscriminating); the verified Stage 2 set is unchanged', async () => {
     const { auditStage2Manifest, CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // scale:scope-disjoint (union) and, since stage2-scale-raw-floor (ce3f701d), the guard-boundary question (raw-floor).
-    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor' })
+    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor', 'scale:num-segment-literal-lower': 'lower-arithmetic' })
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) expect(r.perCapability.find(p => p.capabilityId === id)!.disposition, id).toBe('unverified-nondiscriminating')
     expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
   }, HEAVY)
 
-  it('the shared Stage 2 conformance pass over this case: no violation; every withheld cell is justified (96 num-segment, 13 upper-segment whole product)', async () => {
+  it('the shared Stage 2 conformance pass over this case: no violation; every withheld cell is justified (48 num-segment upper-segment cells since the literal-lower registration, a3f85309; 13 upper-segment whole product)', async () => {
     const r = await stage2Conformance(manifest, REPO_ROOT, [ID])
     expect(r.violations).toEqual([])
-    expect([r.total, r.numSegmentWithheld, r.upperWholeWithheld, r.withheld, r.exact]).toEqual([281, 96, 13, 109, 172])
+    expect([r.total, r.numSegmentWithheld, r.upperWholeWithheld, r.withheld, r.exact]).toEqual([281, 48, 13, 61, 220])
   }, HEAVY)
 
   it('the interactive and paged comparisons (scripts/cf-compare.ts) pass', async () => {

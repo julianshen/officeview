@@ -236,14 +236,22 @@ describe('Stage 2 cf-compare refuses to pass having compared nothing (I4)', () =
         return f && f !== 'FFFFFFFF' ? { applied: true, style: { fillColor: f } } : { applied: false }
       }
     }
-    // The real production outcome of the num-segment cells is withheld; every other cell Excel's colour.
-    const numSegment = ['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4']
+    // The real production outcome of the num-segment cells is withheld; every other cell Excel's colour. Since the
+    // literal-lower registration (stage2-scale-literal-lower, a3f85309) only the upper-segment ones are: R3, R4, S2, T3, U3
+    // and W4 (lower segments) are painted at Excel's fill.
+    const numSegment = ['R5', 'S3', 'S4', 'T4', 'V3']
     const realLike = (_c: CfOracleCase) => Object.fromEntries(numSegment.map(r => [r, { applied: false, unresolved: true }]))
 
     it('the num-segment cells withheld (no fill) pass; it is the condition, recomputed from the marker, that excuses them', async () => {
       const { verifyCaseCells } = await import('../scripts/cf-compare')
       const c = loadManifest().cases.find(entry => entry.id === ID)!
       expect(verifyCaseCells(c, REPO_ROOT, excelLike(c, realLike(c)))).toBeUndefined()
+    })
+
+    it('since the literal-lower registration, a lower-segment num-segment cell (R3) withheld is no longer justified', async () => {
+      const { verifyCaseCells } = await import('../scripts/cf-compare')
+      const c = loadManifest().cases.find(entry => entry.id === ID)!
+      expect(verifyCaseCells(c, REPO_ROOT, excelLike(c, { ...realLike(c), R3: { applied: false, unresolved: true } }))).toContain('R3 is withheld with no recorded justification')
     })
 
     it('mutant: T4 reported unresolved but painting a wrong fill is rejected', async () => {

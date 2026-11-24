@@ -1275,3 +1275,250 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 
   Production paints the 14 cells of ed0fccb6 and this capture's 67 at Excel's fill. Nothing else moves. Details and reach: `docs/validation/xlsx-cf.md` §14.z.18.
 - **The census with the capture:** `npx tsx scripts/cf-refs/raw-floor-census.ts` covers 856 interior cells and W1 misses 0. `--pre-capture` reproduces §11.1.
+
+## 12. The literal-lower follow-up (`stage2-scale-literal-lower`; captured a3f85309, `lower-arithmetic` registered)
+
+The num-segment withhold (`numSegmentUnmeasured`, reason `cf-unmeasured-num-segment-fraction`) withholds every interior cell of a 3-colour segment bounded by two literal `num` cfvo where f·2^20 is not an integer, in both segments. Its founding anomaly (T4/V3 of e448d831, §7) is in the UPPER segment. Owner ruling (2026-11-24): a new pre-registered case, declared **registrable** up front, decides the LOWER segment only; the upper segment stays withheld whatever it shows. Brief: `.superpowers/sdd/cf-literal-lower/brief.md`.
+
+### 12.1 Census (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/literal-lower-census.ts` (pinned by `tests/xlsx-cf-scale-literal-lower-census.test.ts`) runs production's lower-segment arithmetic as now registered over every captured interior cell of a literal-num 3-colour lower segment (`collectSegmentCells`, `{ include: 'all' }`: every measured Stage 2 case and the Stage 5 painted colour-scale cells). The arithmetic is production's own: in the guard-boundary shape the registered `raw-floor` reading (`upperWindowReadingColor`), elsewhere `interpolateScaleColor`'s truncation.
+
+- 1421 segment cells, 0 harness faults. 70 literal-num lower-segment interior cells, and 7 endpoints or clamped values.
+- **64 of the 70 are in the num-segment shape** (f·2^20 not an integer; production withholds them today). The other 6 are painted today.
+- **Production's lower-segment arithmetic equals Excel's DisplayFormat fill at all 70.** 0 disagree, so the case is not blocked.
+
+The 64, by:
+
+| Key | Cells (all exact) |
+|---|---|
+| case | stage2-scale-num-segment 48, stage2-scale-scope-disjoint 6, stage2-scale-upper-whole 6, stage2-scale-raw-floor 4 |
+| span (lo..hi) | 210 (7..217) 52, 210 (0..210) 4, 30 (0..30) 3, 30 (30..60) 2, 45 (0..45) 3 |
+| colour order / palette | both FF14F028 > FFE61EFA 34; both FFE61EFA > FF14F028 22; asc FFF8696B > FFFFEB84 8 |
+| palette kind | P-line (one span on every channel) 56; distinct spans per channel 8 |
+| product class | below 4; above 0; integer 30; clear 30 |
+| kind × class | P-line below 4, P-line integer 30, P-line clear 22; distinct clear 8 |
+
+Gaps the case fills:
+- no cell lies just above an integer;
+- the distinct-span cells are all ascending and all clear;
+- the 4 below-integer cells (F6..F9 of ce3f701d) come from one span (210) and one colour order;
+- no bound is negative or fractional; the lower segments start at 0, 7 or 30.
+
+### 12.2 Readings and the registration rule (Phase 1 task 2)
+
+Both readings are implemented in production (`src/xlsx/cf/colorScale.ts`) and selectable through the test seam `injectCfLiteralLowerReadings` with the id's evidence. They are registered nowhere: `CF_LITERAL_LOWER_PRODUCTION_READINGS` is empty and spread into `CF_STAGE2_PRODUCTION_READINGS`. The id is `scale:num-segment-literal-lower`.
+
+A reading applies only to an interior cell of a 3-colour LOWER segment (after the midpoint-above-max re-sort) bounded by two literal `num` cfvo where f·2^20 is not an integer (`numSegmentUnmeasured`), under the default sRGB / truncate variants, with the id's evidence:
+
+- **`lower-arithmetic`** (the hypothesis): the cell is painted exactly as a non-literal lower segment is (`guardedInterpolation`). Per ARGB channel that is truncation, floor(f·|d| + 1e-11), except in the guard-boundary shape, which follows its registered reading (`raw-floor`, with `scale:guard-boundary-raw-floor`'s evidence; without it the cell is withheld as `cf-unmeasured-guard-boundary`).
+- **`step-plus-one`** (T4/V3 transplanted): per ARGB channel with d ≠ 0, the step from the segment's start colour is floor(f·|d| + 1e-11) − 1, one unit smaller than production's guarded truncation (`literalLowerStepColour`). Running it reproduces T4 and V3 of e448d831 (FFCCDD82, FF98CE7F) and the literal upper-segment cells F12, F15, F16, F18 and F19 of 54fc3388. Raw floor minus one does not: it misses F12, F15, F16 and F18. A cell where some channel's truncation step is 0 has no step-plus-one colour (T4/V3 say nothing there) and stays withheld. No designated cell of the case depends on that choice.
+- **At a below-integer product the readings coincide:** raw floor floor(p) equals floor(p + 1e-11) − 1. Such P-line cells (every channel below) are controls, not evidence.
+
+No third reading: no captured lower-segment cell drew anything but production's arithmetic (§12.1).
+
+**Never changed by a reading:** the UPPER segment (every withhold keeps its precedence there), 2-colour scales, non-literal segments, f·2^20-integer cells and endpoints. Any non-finite intermediate withholds.
+
+**Justification** (`scripts/cf-refs/upper-whole-justify.ts`, `stage2-withhold.ts`) narrows only with the registration plus the id's evidence:
+- `stage2NumSegmentShape` stops justifying a lower-segment cell that production paints (`literalLowerPaints`: always under `lower-arithmetic`; under `step-plus-one` where every channel's step is at least 1);
+- `guardBoundaryShapeAt` takes the literal lower cells under `lower-arithmetic`, so a guard-boundary cell stays justified while that reading's evidence is absent.
+
+**Registration rule** (registrable, declared before the capture):
+- **`lower-arithmetic` matches:** remove the `CF_STAGE2_NONDISCRIMINATING` entry of `scale:num-segment-literal-lower` and set `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`. Production then paints the literal-num lower segment; the upper segment stays withheld.
+- **`step-plus-one` matches:** this contradicts the 60 census cells where the readings differ (§12.1). That is a finding for the owner before any registration.
+- **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The shape stays withheld.
+- **The upper probes** are recorded whatever they show. Production's upper-segment rules do not change.
+
+### 12.3 The case (Phase 1 task 3)
+
+`stage2-scale-literal-lower`, appended last in `CF_STAGE2_CASES` (earlier inputs byte-identical). It owns `scale:num-segment-literal-lower` (the question, registered in `CF_STAGE2_NONDISCRIMINATING` until its capture) and `scale:num-segment-literal-lower-twin` (the twins).
+
+- **Size:** 180 cells in A1:R13, 31 colour rules and 2 cellIs positive controls. The text-scope estimate over the whole range is 3,339,576 bytes, 39.8% of the 8,388,608-byte cap.
+- **Cells:** 82 designated (46 evidence, 20 controls, 16 upper probes), 86 twins, 2 literal positive controls (FFF8696B, FF63BE7B) and 10 unformatted controls (row 13).
+- **Groups:** one evidence configuration per span × colour order × palette kind, rows 2..12 of one column each. Every evidence cell is decisive.
+
+| Group | Col | cfvo (num) | Lower segment | Kind | Decisive |
+|---|---|---|---|---|---|
+| pl-pq-210 | A | 7 / 217 / 427 | P → Q (+−+) | P-line | 6 |
+| pl-qp-420 | B | −210 / 210 / 630 | Q → P (−+−) | P-line | 6 |
+| pl-pq-105 | C | −52.5 / 52.5 / 157.5 | P → Q | P-line | 6 |
+| pl-qp-150 | D | 0.5 / 150.5 / 300.5 | Q → P | P-line | 6 |
+| pl-resort-210 | E | 0 / 420 / 210 (midpoint above max) | P → Q | P-line | 6 |
+| ds-yg-30 | F | 0 / 30 / 60 | FFFFEB84 → FF63BE7B (spans 156/45/9, −−−) | distinct | 5 |
+| ds-dd-210 | G | −105 / 105 / 315 | FFF09B32 → FF1E3214 (spans 210/105/30, −−−) | distinct | 5 |
+| ds-da-105 | H | −15 / 90 / 195 | FF1E3214 → FFF09B32 (+++) | distinct | 6 |
+
+- **Product classes of the evidence cells** (worst channel): P-line above 12, integer 11, clear 7; distinct below 3, above 4, integer 6, clear 3. The P-line below-integer cells (A8, B8, C8, E8) coincide under both readings and are controls.
+- **T4/V3 in the lower segment:** F2 and F3 (10 and 20 in 0..30) have T4's and V3's f doubles and colours. Their predictions are T4/V3's truncation (FFCBDC81, FF97CD7E) under `lower-arithmetic` and T4/V3's Excel fills (FFCCDD82, FF98CE7F) under `step-plus-one`. 1/3 also sits on the P line (A5, E5).
+- **The re-sort:** pl-resort-210's evidence values are pl-pq-210's minus 7, so they have the same f doubles.
+- **Negative controls (20):** 16 f·2^20-integer cells or endpoints, and 4 P-line below-integer cells. Both readings predict production's truncation there.
+- **Upper probes (16, record only):** two per block, each at the f double of a lower-segment evidence cell of its block (bit for bit). F10 and F11 (40 and 50 over 0 / 30 / 60) have T4's and V3's values and f doubles, but this block's upper segment runs FF63BE7B → FFFFEB84, the opposite direction of T4/V3's (FFFFEB84 → FF63BE7B): they are not replicas of T4/V3. Production withholds them under every reading, and they are never evidence.
+- **Twins:** P-line fills are shown by a twin line (num 0 / 1 between P-line steps 128 apart; a twin of step k holds (k − from)/128). Every other live fill is shown by an endpoint twin: a 2-colour num 0 / 1 rule over two cells holding 0 and 1, so f is 0 or 1 exactly. The layout throws if any twin's product is not an IEEE integer on every channel, or if its model colour is not its fill. FF63BE7B in the controls is a literal token, vouched by its positive control.
+
+### 12.4 Predictions
+
+Every designated cell under each reading. Live tokens name their twin; upper probes (record) are literal fills. Channel classes are per channel with d ≠ 0 (R, G, B): b below, a above, i integer, c clear.
+
+**pl-pq-210** (A; num 7 / 217 / 427; FF14F028 / FFE61EFA / FF14F028; p-line)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| A2 | 36 | evidence | aaa | FF31D345 (I7) | FF30D444 (I6) |
+| A3 | 65 | evidence | aaa | FF4EB662 (J4) | FF4DB761 (J3) |
+| A4 | 116 | evidence | aaa | FF818395 (K6) | FF808494 (K5) |
+| A5 | 77 | evidence | iii | FF5AAA6E (J8) | FF59AB6D (J7) |
+| A6 | 150 | evidence | iii | FFA361B7 (L3) | FFA262B6 (L2) |
+| A7 | 50.5 | evidence | ccc | FF3FC553 (I9) | FF3EC652 (I8) |
+| A8 | 34 | control | bbb | FF2ED642 (I5) | same |
+| A9 | 112 | control | iii | FF7D8791 (K3) | same |
+| A10 | 217 | control | iii | FFE61EFA (M10) | same |
+| A11 | 246 | upper (record) | aaa | FFC93BDD | FFCA3ADE |
+| A12 | 287 | upper (record) | iii | FFA064B4 | FFA163B5 |
+
+**pl-qp-420** (B; num -210 / 210 / 630; FFE61EFA / FF14F028 / FFE61EFA; p-line)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| B2 | -152 | evidence | aaa | FFC93BDD (M3) | FFCA3ADE (M4) |
+| B3 | -94 | evidence | aaa | FFAC58C0 (L4) | FFAD57C1 (L5) |
+| B4 | 20 | evidence | aaa | FF739187 (J10) | FF749088 (J11) |
+| B5 | -100 | evidence | iii | FFAF55C3 (L7) | FFB054C4 (L8) |
+| B6 | 104 | evidence | iii | FF49BB5D (I11) | FF4ABA5E (I12) |
+| B7 | -131.5 | evidence | ccc | FFBF45D3 (L12) | FFC044D4 (M2) |
+| B8 | -156 | control | bbb | FFCC38E0 (M5) | same |
+| B9 | 0 | control | iii | FF7D8791 (K3) | same |
+| B10 | 210 | control | iii | FF14F028 (I2) | same |
+| B11 | 268 | upper (record) | aaa | FF31D345 | FF30D444 |
+| B12 | 320 | upper (record) | iii | FF4BB95F | FF4ABA5E |
+
+**pl-pq-105** (C; num -52.5 / 52.5 / 157.5; FF14F028 / FFE61EFA / FF14F028; p-line)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| C2 | 2 | evidence | aaa | FF818395 (K6) | FF808494 (K5) |
+| C3 | 5 | evidence | aaa | FF877D9B (K8) | FF867E9A (K7) |
+| C4 | 8.5 | evidence | aaa | FF8E76A2 (K10) | FF8D77A1 (K9) |
+| C5 | -40 | evidence | iii | FF2DD741 (I4) | FF2CD840 (I3) |
+| C6 | 30 | evidence | iii | FFB94BCD (L11) | FFB84CCC (L10) |
+| C7 | -20.25 | evidence | ccc | FF54B068 (J6) | FF53B167 (J5) |
+| C8 | 1.5 | control | bbb | FF7F8593 (K4) | same |
+| C9 | 0 | control | iii | FF7D8791 (K3) | same |
+| C10 | 52.5 | control | iii | FFE61EFA (M10) | same |
+| C11 | 107 | upper (record) | aaa | FF798B8D | FF7A8A8E |
+| C12 | 135 | upper (record) | iii | FF41C355 | FF42C256 |
+
+**pl-qp-150** (D; num 0.5 / 150.5 / 300.5; FFE61EFA / FF14F028 / FFE61EFA; p-line)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| D2 | 5.5 | evidence | iii | FFDF25F3 (M6) | FFE024F4 (M7) |
+| D3 | 40.5 | evidence | iii | FFAE56C2 (L6) | FFAF55C3 (L7) |
+| D4 | 100.5 | evidence | iii | FF5AAA6E (J8) | FF5BA96F (J9) |
+| D5 | 3 | evidence | ccc | FFE321F7 (M8) | FFE420F8 (M9) |
+| D6 | 77.7 | evidence | ccc | FF7A8A8E (J12) | FF7B898F (K2) |
+| D7 | 120.2 | evidence | ccc | FF3FC553 (I9) | FF40C454 (I10) |
+| D8 | 75.5 | control | iii | FF7D8791 (K3) | same |
+| D9 | 38 | control | ccc | FFB252C6 (L9) | same |
+| D10 | 150.5 | control | iii | FF14F028 (I2) | same |
+| D11 | 155.5 | upper (record) | iii | FF1BE92F | FF1AEA2E |
+| D12 | 153 | upper (record) | ccc | FF17ED2B | FF16EE2A |
+
+**pl-resort-210** (E; num 0 / 420 / 210; FF14F028 / FFE61EFA / FF14F028; p-line)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| E2 | 29 | evidence | aaa | FF31D345 (I7) | FF30D444 (I6) |
+| E3 | 58 | evidence | aaa | FF4EB662 (J4) | FF4DB761 (J3) |
+| E4 | 109 | evidence | aaa | FF818395 (K6) | FF808494 (K5) |
+| E5 | 70 | evidence | iii | FF5AAA6E (J8) | FF59AB6D (J7) |
+| E6 | 143 | evidence | iii | FFA361B7 (L3) | FFA262B6 (L2) |
+| E7 | 43.5 | evidence | ccc | FF3FC553 (I9) | FF3EC652 (I8) |
+| E8 | 57 | control | bbb | FF4CB860 (J2) | same |
+| E9 | 105 | control | iii | FF7D8791 (K3) | same |
+| E10 | 210 | control | iii | FFE61EFA (M10) | same |
+| E11 | 239 | upper (record) | aaa | FFC93BDD | FFCA3ADE |
+| E12 | 280 | upper (record) | iii | FFA064B4 | FFA163B5 |
+
+**ds-yg-30** (F; num 0 / 30 / 60; FFFFEB84 / FF63BE7B / FFFFEB84; distinct)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| F2 | 10 | evidence | iii | FFCBDC81 (P10) | FFCCDD82 (P11) |
+| F3 | 20 | evidence | iii | FF97CD7E (P4) | FF98CE7F (P5) |
+| F4 | 4 | evidence | cic | FFEBE583 (Q3) | FFECE684 (Q4) |
+| F5 | 25 | evidence | icc | FF7DC67D (O2) | FF7EC77E (O3) |
+| F6 | 3.5 | evidence | ccc | FFEDE683 (Q5) | FFEEE784 (Q6) |
+| F7 | 15 | control | icc | FFB1D580 (P9) | same |
+| F8 | 7.5 | control | icc | FFD8E082 (Q2) | same |
+| F9 | 30 | control | iii | FF63BE7B (literal) | same |
+| F10 | 40 | upper (record) | iii | FF97CD7E | FF96CC7D |
+| F11 | 50 | upper (record) | iii | FFCBDC81 | FFCADB80 |
+
+**ds-dd-210** (G; num -105 / 105 / 315; FFF09B32 / FF1E3214 / FFF09B32; distinct)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| G2 | 3 | evidence | bbc | FF856623 (O6) | FF856624 (O7) |
+| G3 | 4 | evidence | acc | FF836523 (O4) | FF846624 (O5) |
+| G4 | 11 | evidence | aac | FF7C6122 (N10) | FF7D6223 (N11) |
+| G5 | -35 | evidence | iii | FFAA7828 (P7) | FFAB7929 (P8) |
+| G6 | 40.5 | evidence | ccc | FF5F531E (N6) | FF60541F (N7) |
+| G7 | 0 | control | ici | FF876723 (O9) | same |
+| G8 | 213 | upper (record) | bbc | FF896723 | FF896722 |
+| G9 | 175 | upper (record) | iii | FF64551E | FF63541D |
+
+**ds-da-105** (H; num -15 / 90 / 195; FF1E3214 / FFF09B32 / FF1E3214; distinct)
+
+| Cell | Value | Role | Channel classes | lower-arithmetic | step-plus-one |
+|---|---|---|---|---|---|
+| H2 | 12 | evidence | bbc | FF534C1B (N3) | FF534C1A (N2) |
+| H3 | 14 | evidence | aac | FF584F1C (N5) | FF574E1B (N4) |
+| H4 | 39 | evidence | bbc | FF896723 (O11) | FF896722 (O10) |
+| H5 | 43 | evidence | aac | FF926C24 (P3) | FF916B23 (P2) |
+| H6 | 55 | evidence | iii | FFAA7828 (P7) | FFA97727 (P6) |
+| H7 | 30.3 | evidence | ccc | FF785F20 (N9) | FF775E1F (N8) |
+| H8 | 37.5 | control | ici | FF876623 (O8) | same |
+| H9 | 117 | upper (record) | bbc | FFBB812B | FFBB812C |
+| H10 | 148 | upper (record) | aac | FF7C6122 | FF7D6223 |
+
+### 12.5 Rehearsal (Phase 1 task 4)
+
+`tests/xlsx-cf-scale-literal-lower-case.test.ts` (25 tests):
+
+- **The independent model is production.** Unregistered (with or without the id's evidence), production withholds the 66 cells of the shape (46 evidence, the 4 P-line below-integer controls, 16 upper probes) and paints every other cell at the model's truncation. Under each registration the 46 evidence cells and the 4 controls paint the reading, the 16 upper probes stay withheld, and nothing else moves.
+- **Synthetic worlds** (`evaluateFormulaCapabilities`): each planted reading matches exactly itself; the upper probes drawn at the other reading or off both readings never change the verdict; one flipped decisive cell in any group gives `formula-hypothesis-none`; a formatted control, a missing or wrong positive control, a blank twin and a moved control all refuse.
+- **Audit gate** (real `verifyCfCase` and `auditStage2Manifest` on a synthetic measured capture): registry entry kept, unverified; entry removed and unregistered, `supported-structural`; matched reading registered, verified, and only this id joins the verified set; the other reading registered, `supported-structural`. A "no match" plant is `formula-hypothesis-none`, never verified, and unregistered production keeps the withhold (180 cells, 66 justified num-segment withholds, 0 violations).
+- **Every committed Stage 2 capture** (`stage2Conformance`, 1310 cells):
+
+| Registration | Violations | Exact | Withheld | Num-segment withheld |
+|---|---|---|---|---|
+| none | 0 | 963 | 347 | 258 |
+| `lower-arithmetic` | 0: the 64 census cells painted at Excel's fill | 1027 | 283 | 194 |
+| `step-plus-one` | **60**, exactly the census cells where the readings differ (caught) | | | |
+
+  The 4 census cells that `step-plus-one` does not catch are F6..F9 of ce3f701d: below-integer products, where the readings coincide.
+- **Stage 5:** records unchanged under each registration, 0 disagreeing (no Stage 5 cell is a literal-num lower-segment cell).
+- **Each planted world:** the conformance pass and `compareCfCase` (interactive and paged) pass unregistered and under the world's own registration; the other reading is caught at the 46 evidence cells.
+- **Deviation:** the case is not in `STAGE2_MEASURED_CASES` of the committed conformance test, because `stage2Conformance` reads the capture sidecar, which does not exist yet. The same pass runs on a synthetic temp root (the #102 and raw-floor pattern). The case joins it after the capture.
+
+### 12.6 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-literal-lower.xlsx   # 324c19f82e691545702022c005394063dd2400a1b2b83bc6b09385959b466e0e
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-literal-lower
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-literal-lower
+npx vitest run tests/xlsx-cf-scale-literal-lower-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-literal-lower` (run twice, byte-identical; the manifest change is insertions only). No rule has a single-cell range written as `X2:X2`. The registration rule is §12.2: registrable, and the upper segment stays withheld whatever the capture shows.
+
+### 12.7 Run result (captured, a3f85309, Excel 16.115)
+
+- **Status:** captured (measured). The build opened repair-free; the capture verified at minimum contrast 123, and `--verify-only` re-verified it.
+- **`verifyCfCase`:** `lower-arithmetic` for `scale:num-segment-literal-lower` (discriminating); the twins are non-discriminating.
+- **The capture is sound:** every pixel equals its DisplayFormat fill (180/180); the 10 controls are white; the positive controls show FFF8696B and FF63BE7B; all 86 twins show their fills, the endpoint twins included.
+- **The evidence:** Excel drew `lower-arithmetic` at all 46 evidence cells, in every group; `step-plus-one` at none. Every negative control drew the colour both readings predict.
+- **The upper probes** (record only): 13 of 16 off production's truncation: 11 at the step-plus-one colour, G8 and H9 at raw floor; 3 at truncation (D11, D12, H10). Production's upper-segment withholds are unchanged.
+- **Registered:** `lower-arithmetic`, as §12.2 says: the `CF_STAGE2_NONDISCRIMINATING` entry is removed, `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`, published through the audit (351 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.21.
+- **The census with the capture:** `npx tsx scripts/cf-refs/literal-lower-census.ts` covers 130 interior cells (114 in the shape) and misses 0. `--pre-capture` reproduces §12.1.
