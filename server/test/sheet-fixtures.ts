@@ -773,3 +773,52 @@ export async function a11yFocus(): Promise<Uint8Array> {
   const st = stringTable()
   return sheetWorkbook([A11Y_FOCUS.b1, A11Y_FOCUS.b3, A11Y_FOCUS.b5].map(([r, , text]) => ({ r: r + 1, cells: [textCell(st, `B${r + 1}`, text)] })), st.list)
 }
+
+/** `tableHiddenFormat`: the table's header and value, and the control outside the table. */
+export const TABLE_HIDDEN = Object.freeze({ header: 'HDR-A1', value: 987654321, outside: 'OUTSIDE-B1' })
+/**
+ * Final review R1: a table over A1:A2 (header `HDR-A1`, A2 = 987654321) under the custom table style `OVHide`, whose
+ * wholeTable DXF writes number format `;;;`. Both cells keep their own General style (style 0), so they inherit `;;;`
+ * from the region (resolve.ts: an own General format takes the table's) and paint nothing. B1, outside the table,
+ * holds the control `OUTSIDE-B1`.
+ */
+export async function tableHiddenFormat(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [{ r: 1, cells: [textCell(st, 'A1', TABLE_HIDDEN.header), textCell(st, 'B1', TABLE_HIDDEN.outside)] }, { r: 2, cells: [{ ref: 'A2', v: TABLE_HIDDEN.value }] }]
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', '</cellXfs><dxfs count="1"><dxf><numFmt numFmtId="164" formatCode=";;;"/></dxf></dxfs>'
+      + '<tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"><tableStyle name="OVHide" pivot="0" count="1"><tableStyleElement type="wholeTable" dxfId="0"/></tableStyle></tableStyles>'))
+    zip.file('xl/tables/table1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<table xmlns="${SPREADSHEET_NS}" id="1" name="Table1" displayName="Table1" ref="A1:A2" headerRowCount="1" totalsRowCount="0"><tableColumns count="1"><tableColumn id="1" name="${TABLE_HIDDEN.header}"/></tableColumns><tableStyleInfo name="OVHide" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>`)
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    zip.file(relsPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdT1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>`)
+    const ct = await textOf(zip, '[Content_Types].xml')
+    zip.file('[Content_Types].xml', ct.replace('</Types>', '<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>'))
+    await patchSheetXml(zip, 0, (xml) => {
+      const withNs = xml.includes('xmlns:r=') ? xml : xml.replace(`<worksheet xmlns="${SPREADSHEET_NS}"`, `<worksheet xmlns="${SPREADSHEET_NS}" xmlns:r="${REL_NS}"`)
+      return insertSheetElement(withNs, 'tableParts', '<tableParts count="1"><tablePart r:id="rIdT1"/></tableParts>')
+    })
+  })
+}
+
+/** `rotatedRow` / `wrappedRow` texts (Arial 11 pt, own style 3). */
+export const FIT_LAYOUT = Object.freeze({
+  rotatedLong: 'ROTATED TEXT THAT NEEDS A TALL ROW',
+  rotatedShort: 'ROT-SHORT-TEXT',
+  wrapped: 'WRAPPED text that runs over several lines\nwith an explicit break and anunbreakablewordthatislongerthanthecolumn',
+})
+/**
+ * Final review R2: row 1 holds `text` in A1 under style 3 (Arial 11 pt) that either rotates it 90° (`textRotation`
+ * 90) or wraps it (`wrapText`). Default column widths (64 CSS px).
+ */
+export async function layoutRow(kind: 'rotated' | 'wrapped', text: string): Promise<Uint8Array> {
+  const st = stringTable()
+  const alignment = kind === 'rotated' ? '<alignment textRotation="90"/>' : '<alignment wrapText="1"/>'
+  return sheetWorkbook([{ r: 1, cells: [{ ...textCell(st, 'A1', text), style: 3 }] }], st.list, async (zip) => {
+    await patchStylesXml(zip, (xml) => {
+      const out = xml.replace('<fonts count="2">', '<fonts count="3">').replace('</fonts>', '<font><sz val="11"/><name val="Arial"/></font></fonts>')
+        .replace('<cellXfs count="3">', '<cellXfs count="4">').replace('</cellXfs>', `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">${alignment}</xf></cellXfs>`)
+      if (out === xml) throw new Error('sheet-fixtures: styles not recognised')
+      return out
+    })
+  })
+}

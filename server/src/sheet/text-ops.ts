@@ -59,7 +59,7 @@ export interface TextInputs {
   /** The store local find reads (`InteractiveSheetDoc.tsx` ~1824): `store()` with a formula lacking any value marked
    * unavailable (`withUnavailableFormulas`). Local copy reads the plain store, so only find uses this one. */
   findStore(): SourceStore
-  /** The cell's style as paint and copy use it: a table or pivot region style resolved over its own. */
+  /** The cell's style as paint and copy use it: a table or pivot region style resolved over its own (`view.styleAt`). */
   styleOf(cell: Pick<XlsxCell, 'row' | 'col'>): XlsxCell['style']
   /** Display text as the local viewer forms it: the region-resolved style through the scope's CF-effective style. */
   textOf(cell: Pick<XlsxCell, 'row' | 'col' | 'value'>, allocation?: FormatAllocation, scope?: EffectiveFormatScope): string
@@ -83,10 +83,7 @@ export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
     colCount = cols.logicalCount
     for (const o of cols.overrides) if (o.sizeCss === 0) hiddenCols.push({ r0: o.start, r1: o.end })
   }
-  const styleOf = (cell: Pick<XlsxCell, 'row' | 'col'>) => {
-    const own = cellOf(view, cell.row, cell.col)?.style
-    return view.sheet.regionStyles?.styleAt(cell.row, cell.col, own, 'screen') ?? own
-  }
+  const styleOf = (cell: Pick<XlsxCell, 'row' | 'col'>) => view.styleAt(cell.row, cell.col, cellOf(view, cell.row, cell.col)?.style)
   return {
     sheetId, order,
     visibility: visibilityFromHidden(createIntervalSet(authored)),
@@ -246,8 +243,10 @@ const A11Y_DOC_ID = 'sheet-a11y'
 /**
  * One window's a11y text (P10): each cell the local grid would present (the authored-visible rows and the non-zero-width
  * columns of the window, from `textInputs`), as local `presentCell` gives it (`InteractiveSheetDoc.tsx` ~274–282):
- * `formatCellPresentation(view.sheet, cell, budget, false, cf)`, where `cf` is the view's CF scope's effective style
- * over the region-resolved style (no scope: no `cf`, the cell's own style, as locally). The CF descriptor is omitted
+ * `formatCellPresentation(view.sheet, cell, budget, false, cf)` over the cell with its painted (region-resolved) style,
+ * where `cf` is the view's CF scope's effective style over that style. Without a scope the painted style still applies:
+ * a region format that paints nothing (a table style's `;;;`) presents nothing, though local `presentCell` formats the
+ * own style when it has no scope (final review R1). The CF descriptor is omitted
  * (S4 §6.7's default). A withheld cell is blank in the view, so its text is `''` and it is not listed. A cell whose
  * formatting is refused (`state: 'error'`) fails the job: its fallback text never travels.
  */
@@ -267,8 +266,9 @@ export function a11yAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'a11
       if (!cells) continue
       const inWindow = cells.filter((c) => c.col >= c0 && c.col <= c1 && inputs.columns.visible(c.col)).sort((a, b) => a.col - b.col)
       for (const cell of inWindow) {
-        const cf = scope ? { gen: scope.gen, style: scope.effectiveStyle(row, cell.col, inputs.styleOf(cell)) } : undefined
-        const p = formatCellPresentation(view.sheet, cell, budget, false, cf)
+        const painted = inputs.styleOf(cell)
+        const cf = scope ? { gen: scope.gen, style: scope.effectiveStyle(row, cell.col, painted) } : undefined
+        const p = formatCellPresentation(view.sheet, painted === cell.style ? cell : { ...cell, ...(painted ? { style: painted } : {}) }, budget, false, cf)
         if (p.state === 'error') throw new Error('sheet-a11y: formatting exceeds its budget')
         if (p.text !== '') out.push([row, cell.col, p.text])
       }

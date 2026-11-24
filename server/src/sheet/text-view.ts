@@ -7,7 +7,8 @@
  * `blankCell` semantics (value removed, style kept):
  * - P5, current-view coverage: `baseCoverage` over the projected sheet with its drawings placed by the session sizes;
  * - P3, merge tails: every merge cell but the anchor;
- * - P4, undrawn: a non-empty value whose display text under its CF-effective style is `''` (`;;;` and the like); a cell
+ * - P4, undrawn: a non-empty value whose display text under its CF-effective painted style (`TextView.styleAt`, the table
+ *   or pivot region style over its own, through the CF scope) is `''` (`;;;` and the like); a cell
  *   whose CF bar or icon has `showValue="0"` (from the snapshot's CF batch); and, fail closed, every cell of every CF
  *   sqref when the CF text scope is unavailable, and every cell of a `showValue="0"` rule's sqref when the batch is.
  * Unknown coverage (base or current view) blanks every cell, and `'full'` is the identity. Tiles never read the view.
@@ -18,6 +19,8 @@ import { cfDocumentEvaluationOf } from '../../../src/xlsx/cf/formula'
 import { CF_LIMITS } from '../../../src/xlsx/cf/limits'
 import { prepareCfTextScope } from '../../../src/xlsx/cf/text'
 import { cellDisplayText } from '../../../src/xlsx/render'
+import { regionStylesFor } from '../../../src/xlsx/tableStyleLoader'
+import type { RegionStyleLayer } from '../../../src/xlsx/tableStyles/regionLayer'
 import { hasSessionSizes, type SessionSizes } from '../../../src/xlsx/view/axisSizes'
 import { coverCellsToRects, type SourceRect } from '../../../src/xlsx/view/coordinates'
 import type { EffectiveFormatScope, FormatBudget } from '../../../src/xlsx/view/formatWorkspace'
@@ -40,6 +43,9 @@ export interface TextView {
   /** P4's CF text scope, the `prepareScope`/`textOf` scope of every op; undefined when the sheet has no CF, the scope
    * is unavailable (its sqrefs are then blank) or every cell is blank. */
   scope: EffectiveFormatScope | undefined
+  /** The style a cell paints with before CF: its table or pivot region style resolved over `own`, as the tile painter
+   * resolves it (`regionStylesFor`, `'screen'`; renderViewport.ts). Blanking, find, copy and a11y all read this one. */
+  styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
   /** Disposes the scope (idempotent). The snapshot is the host's: a view never releases it. */
   release(): void
 }
@@ -124,11 +130,16 @@ function paintsNothing(sheet: XlsxSheet, cell: XlsxCell, style: XlsxCellStyle | 
   try { return cellDisplayText(sheet, { value: cell.value, style }) === '' } catch { return true }
 }
 
-function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, projected: XlsxSheet, blankAll: boolean, scope: EffectiveFormatScope | undefined): TextView {
+/** The painter's pre-CF style over `region` (the region layer of the sheet the view is built from). */
+function regionStyleAt(region: RegionStyleLayer | undefined): TextView['styleAt'] {
+  return (row, col, own) => region?.styleAt(row, col, own, 'screen') ?? own
+}
+
+function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, projected: XlsxSheet, blankAll: boolean, scope: EffectiveFormatScope | undefined, styleAt: TextView['styleAt']): TextView {
   let released = false
   return {
     sheetIndex: snap.sheetIndex, sheet, geometry: buildSheetGeometry(sheet, { sizes }), blankAll,
-    withheld: sheet === projected ? 0 : contentCount(projected) - contentCount(sheet), scope,
+    withheld: sheet === projected ? 0 : contentCount(projected) - contentCount(sheet), scope, styleAt,
     release() { if (!released) { released = true; scope?.dispose() } },
   }
 }
@@ -140,9 +151,9 @@ function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, projec
  */
 export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, sizes: SessionSizes, o: { workbook: XlsxDocument; clock: SheetClock; budget: FormatBudget }): Promise<TextView> {
   const ranges = (sheet: XlsxSheet) => (sheet.conditionalFormatting?.rules ?? []).flatMap((rule) => rule.ranges)
-  if (snap.contentPolicy === 'full') return view(snap, projected, sizes, projected, false, await prepareScope(projected, scopeRects(projected, ranges(projected)), o))
+  if (snap.contentPolicy === 'full') return view(snap, projected, sizes, projected, false, await prepareScope(projected, scopeRects(projected, ranges(projected)), o), regionStyleAt(regionStylesFor(projected)))
 
-  const blankEverything = () => view(snap, blankWhere(projected, () => true), sizes, projected, true, undefined)
+  const blankEverything = () => view(snap, blankWhere(projected, () => true), sizes, projected, true, undefined, regionStyleAt(regionStylesFor(projected)))
   if (snap.coverage === 'off' || snap.coverage.kind !== 'known' || snap.geometry.kind !== 'ready') return blankEverything()
   const merges = snap.geometry.merges
 
@@ -158,6 +169,8 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
 
   // P4: the CF text scope, over the snapshot's sheet (the values the tile's CF batch was prepared over).
   const sheet = snap.sheet
+  // Resolved on the snapshot's sheet before it is copied, so the view's sheet carries the same layer.
+  const styleAt = regionStyleAt(regionStylesFor(sheet))
   const rules = sheet.conditionalFormatting?.rules ?? []
   const cfRanges = ranges(sheet)
   const rects = rules.length ? scopeRects(sheet, cfRanges) : []
@@ -176,13 +189,14 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
       if (scopeUnavailable && inRanges(cfRanges, row, col)) return true
       if (batch && (batch.barAt(row, col)?.showValue === false || batch.iconAt(row, col)?.showValue === false)) return true
       if (hiddenValueRanges.length && inRanges(hiddenValueRanges, row, col)) return true
-      // Undrawn under the scope's effective style, or under the style the tile's CF batch paints with (either suffices).
-      const base = cell.style
+      // Undrawn under the scope's effective style over the painted base, or under the style the tile's CF batch paints
+      // with (either suffices). The batch's layer resolves the region style over the own style itself.
+      const base = styleAt(row, col, cell.style)
       if (paintsNothing(formatSheet, cell, scope ? scope.effectiveStyle(row, col, base) : base)) return true
-      const painted = batch?.layer.styleAt(row, col, base)
+      const painted = batch?.layer.styleAt(row, col, cell.style, 'screen')
       return painted !== undefined && painted !== base && paintsNothing(formatSheet, cell, painted)
     })
-    return view(snap, out, sizes, projected, false, scope)
+    return view(snap, out, sizes, projected, false, scope, styleAt)
   } catch (e) {
     scope?.dispose()
     throw e
