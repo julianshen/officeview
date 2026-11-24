@@ -1519,6 +1519,6 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **`verifyCfCase`:** `lower-arithmetic` for `scale:num-segment-literal-lower` (discriminating); the twins are non-discriminating.
 - **The capture is sound:** every pixel equals its DisplayFormat fill (180/180); the 10 controls are white; the positive controls show FFF8696B and FF63BE7B; all 86 twins show their fills, the endpoint twins included.
 - **The evidence:** Excel drew `lower-arithmetic` at all 46 evidence cells, in every group; `step-plus-one` at none. Every negative control drew the colour both readings predict.
-- **The upper probes** (record only): 11 of 16 at the step-plus-one colour, 5 at truncation (D11, D12, G8, H9, H10). Production's upper-segment withholds are unchanged.
+- **The upper probes** (record only): 13 of 16 off production's truncation: 11 at the step-plus-one colour, G8 and H9 at raw floor; 3 at truncation (D11, D12, H10). Production's upper-segment withholds are unchanged.
 - **Registered:** `lower-arithmetic`, as §12.2 says: the `CF_STAGE2_NONDISCRIMINATING` entry is removed, `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`, published through the audit (351 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.21.
 - **The census with the capture:** `npx tsx scripts/cf-refs/literal-lower-census.ts` covers 130 interior cells (114 in the shape) and misses 0. `--pre-capture` reproduces §12.1.

@@ -5699,7 +5699,7 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   // capture (Excel 16.115, ce3f701d) and is registered (CF_GUARD_BOUNDARY_PRODUCTION_READINGS), so its entry is removed; the
   // literal-num lower segment and the twin line stay comparisons, never questions.
   'scale:guard-boundary-literal-lower':
-    'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings; withheld as the num-segment shape whatever a reading says, never registrable.',
+    'The literal-num 3-colour lower segments of stage2-scale-raw-floor: recorded against the same readings, never registrable; withheld as the num-segment shape until the literal-lower registration (scale:num-segment-literal-lower, a3f85309), which paints them as a non-literal lower segment.',
   'scale:guard-boundary-twin':
     'The 2-colour twin line of stage2-scale-raw-floor (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
   // The literal-lower follow-up (stage2-scale-literal-lower): the question, scale:num-segment-literal-lower, matched
