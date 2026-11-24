@@ -103,3 +103,25 @@ describe('the candidate search', () => {
     }
   }, HEAVY)
 })
+
+describe('after the capture of stage2-scale-upper-segment (2ee3735a): the census and search on every capture (recipe §13.7)', () => {
+  let all: Awaited<ReturnType<typeof upperSegmentCensusOf>>
+  let res: CandidateResult[] = []
+  beforeAll(async () => {
+    all = await upperSegmentCensusOf(undefined, undefined, { include: 'all' })
+    res = evaluateCandidates(all.rows)
+  }, HEAVY)
+  it('1780 segment cells, no fault; 381 upper-segment interior cells (79 of this capture); clear products still never move; 6 mixed cells (the case\'s, as index-position predicted)', () => {
+    expect([all.collection.cells.length, all.collection.faults.length, all.rows.length, all.rows.filter(r => r.caseId === 'stage2-scale-upper-segment').length]).toEqual([1780, 0, 381, 79])
+    expect(channelTable(all.rows).find(t => t.key === 'clear -1')).toBeUndefined()
+    const dec = decisionByDouble(all.rows)
+    expect(dec.mixedCells.sort()).toEqual(['stage2-scale-upper-segment:G2', 'stage2-scale-upper-segment:G3', 'stage2-scale-upper-segment:G4', 'stage2-scale-upper-segment:G5', 'stage2-scale-upper-segment:H4', 'stage2-scale-upper-segment:I3'])
+  })
+  it('the same 7 survivors, one class; every other pool still none; truncation misses 203', () => {
+    expect(res.filter(r => r.mismatches.length === 0).map(r => r.id)).toEqual([
+      'position/index-plus-f/floor', 'position/f-plus-index/floor', 'position/half-plus-half-f/floor', 'position/half-plus-half-f-div/floor', 'position/index-plus-f-halved/floor',
+      'position/snap-52-nearest-even/floor', 'position/snap-52-nearest-even/position-product',
+    ])
+    expect(res.find(r => r.id === 'baseline/truncate')!.mismatches.length).toBe(203)
+  }, HEAVY)
+})

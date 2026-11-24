@@ -743,11 +743,14 @@ export type CfUpperSegmentReading = (typeof CF_UPPER_SEGMENT_READINGS)[number]
 /** The capability an upper-segment reading is registered under (stage2-scale-upper-segment). */
 export const CF_UPPER_SEGMENT_CAP = 'scale:upper-segment'
 /**
- * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
- * (with its evidence), every upper-segment cell withheld today stays withheld, as on main. The audit's
- * CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ * The reading production implements per id: `index-position` for scale:upper-segment, matched by the capture of
+ * stage2-scale-upper-segment (Excel 16.115, 2ee3735a) at every designated cell of its nine main groups (40 decisive, 25
+ * kept, 5 clear, the mixed cells included). With its evidence, production paints the upper-segment cells withheld before
+ * (the literal num-segment shape in segment 1, the integer and window classes) at index-position, under sRGB / truncate,
+ * opaque endpoints and no formula-resolved bound; without it they stay withheld. The audit's CF_STAGE2_PRODUCTION_READINGS
+ * spreads this table.
  */
-export const CF_UPPER_SEGMENT_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({})
+export const CF_UPPER_SEGMENT_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({ [CF_UPPER_SEGMENT_CAP]: 'index-position' })
 let proposedUpperSegmentReadings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfUpperSegmentReadings(readings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null): void {
@@ -797,8 +800,11 @@ export function upperSegmentNearTop(c0: number, c1: number, value: number, tLo: 
 }
 /** The capability the near-top sub-shape's reading is registered under (stage2-scale-upper-segment, its own configuration). */
 export const CF_UPPER_NEAR_TOP_CAP = 'scale:upper-segment-near-top'
-/** The near-top reading production implements: none (withheld) until a capture matches it and it is registered here. */
-export const CF_UPPER_NEAR_TOP_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({})
+/**
+ * The near-top reading production implements: `index-position`, matched by the capture of stage2-scale-upper-segment (2ee3735a)
+ * at all 8 decisive near-top probes and the kept one, the same reading as scale:upper-segment.
+ */
+export const CF_UPPER_NEAR_TOP_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
 let proposedUpperNearTopReadings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null = null
 /** Test seam: rehearse a proposed near-top registration as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfUpperNearTopReadings(readings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null): void {

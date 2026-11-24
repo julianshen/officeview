@@ -34,6 +34,10 @@ import { residentSource } from '../src/xlsx/cf/render'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = 'stage5-cfvo-nonnumeric-v2'

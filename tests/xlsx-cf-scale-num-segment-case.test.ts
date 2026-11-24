@@ -39,6 +39,10 @@ import { CF_NUM_SEGMENT_CLASSES } from '../scripts/cf-refs/num-segment-classes'
 import { numSegmentCandidate } from '../scripts/cf-refs/num-segment-formulas'
 import { VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_NUM_SEGMENT_ID
@@ -268,7 +272,8 @@ describe('the capture (Excel 16.115): no reading matches; production withholds o
   it('the audit: Stage 2 ok and complete; the four ids stay recorded findings (unverified-nondiscriminating); the verified Stage 2 set is unchanged', async () => {
     const { auditStage2Manifest, CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // scale:scope-disjoint (union) and, since stage2-scale-raw-floor (ce3f701d), the guard-boundary question (raw-floor).
-    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor', 'scale:num-segment-literal-lower': 'lower-arithmetic' })
+    // Since stage2-scale-upper-segment (2ee3735a), also its two questions (index-position).
+    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor', 'scale:num-segment-literal-lower': 'lower-arithmetic', 'scale:upper-segment': 'index-position', 'scale:upper-segment-near-top': 'index-position' })
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) expect(r.perCapability.find(p => p.capabilityId === id)!.disposition, id).toBe('unverified-nondiscriminating')

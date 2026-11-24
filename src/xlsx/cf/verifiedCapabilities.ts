@@ -154,6 +154,8 @@ export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
   'scale:thresholds-percent',
   'scale:thresholds-percent-percentile-out-of-bounds',
   'scale:thresholds-percentile-inc-exc',
+  'scale:upper-segment',
+  'scale:upper-segment-near-top',
 ])
 
 export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
@@ -729,6 +731,8 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'scale:thresholds-percent',
   'scale:thresholds-percent-percentile-out-of-bounds',
   'scale:thresholds-percentile-inc-exc',
+  'scale:upper-segment',
+  'scale:upper-segment-near-top',
   'text:absent-formula',
   'text:beginsWith-canonical',
   'text:containsText-canonical',

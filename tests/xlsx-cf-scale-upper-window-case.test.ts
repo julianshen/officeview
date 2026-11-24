@@ -53,6 +53,10 @@ import { CF_UPPER_WINDOW_CAP, CF_UPPER_WINDOW_READINGS, injectCfUpperWindowReadi
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_UPPER_WINDOW_ID
@@ -395,7 +399,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 /** The Stage 2 cases measured as of ed0fccb6 (the later stage2-scale-raw-floor left out). */
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('as recorded (nothing registered): no violation over the measured Stage 2 cases, this capture included; E4 and D19 withheld', async () => {

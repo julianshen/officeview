@@ -30,7 +30,8 @@
  *
  * Nothing here is registered or reachable from production: survivors are hypotheses to pre-register for a NEW capture.
  *
- * Run: `npx tsx scripts/cf-refs/upper-segment-candidates.ts` (about a minute). Pinned by
+ * Run: `npx tsx scripts/cf-refs/upper-segment-candidates.ts` (about a minute; the search as run before the capture of
+ * stage2-scale-upper-segment, recipe §13.1); `--all` includes that capture (recipe §13.7). Pinned by
  * tests/xlsx-cf-scale-upper-segment-candidates.test.ts.
  */
 import { readFileSync } from 'node:fs'
@@ -347,15 +348,23 @@ export function survivorClasses(ids: readonly string[], candidates: readonly Upp
 // Entry.
 // ---------------------------------------------------------------------------------------------------------------------
 
-export async function upperSegmentCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT): Promise<{ collection: SegmentCollection; rows: CensusRow[] }> {
+/**
+ * The capture that followed this search (stage2-scale-upper-segment, 2ee3735a): `{ include: 'pre-capture' }` (the default, the
+ * search as run before the capture, recipe §13.1) leaves it out; `'all'` includes it (recipe §13.7).
+ */
+export const UPPER_SEGMENT_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-upper-segment']
+
+export async function upperSegmentCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection; rows: CensusRow[] }> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
-  const collection = await collectSegmentCells(m, rootDir, { include: 'all' })
-  if (collection.faults.length > 0) throw new Error(`upper-segment: harness faults ${collection.faults.join('; ')}`)
+  const all = await collectSegmentCells(m, rootDir, { include: 'all' })
+  if (all.faults.length > 0) throw new Error(`upper-segment: harness faults ${all.faults.join('; ')}`)
+  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'pre-capture') === 'all' || !UPPER_SEGMENT_POST_CAPTURE_CASES.includes(x.caseId)
+  const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, rows: upperSegmentCensus(collection) }
 }
 
 async function main(): Promise<void> {
-  const { collection, rows } = await upperSegmentCensusOf()
+  const { collection, rows } = await upperSegmentCensusOf(undefined, REPO_ROOT, { include: process.argv.includes('--all') ? 'all' : 'pre-capture' })
   const short = (k: string): string => k.replace(/^stage\d-(scale-)?/, '')
   const groupB3 = collection.excluded.filter(e => e.group === 'b' && e.threeColour).length
   console.log(`## Census\n\n${collection.cells.length} captured colour-scale cells; ${collection.excluded.length} excluded (${collection.excluded.filter(e => e.group === 'b').length} by a production gate, ${groupB3} of them under a 3-colour scale); ${rows.length} upper-segment interior cells.\n`)

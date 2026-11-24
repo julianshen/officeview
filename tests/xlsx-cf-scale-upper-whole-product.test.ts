@@ -26,6 +26,10 @@ import { caseNowOf, caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
 import { independentWholeProduct, JUSTIFY_TRUNCATION_GUARD } from '../scripts/cf-refs/upper-whole-justify'
 import { injectCfScaleSegmentProbe } from '../src/xlsx/cf/colorScale'
 import type { XlsxSheet } from '../src/xlsx/types'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const RED = 0xfff8696b, YELLOW = 0xffffeb84, GREEN = 0xff63be7b
@@ -186,7 +190,9 @@ describe('the reviewer\'s overflow sheet (pre-capture fix round 2): default prod
 
 describe('the reach: every newly withheld cell of every measured case is the shape, and Stage 5\'s list is derived', () => {
   it('per case (through production\'s own segment evaluations): the cells in the shape are exactly the recorded reach', async () => {
-    const { cells } = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
+    // Recorded as of the captures before stage2-scale-upper-segment (2ee3735a), whose case is pinned by its own test.
+    const LATER = ['stage2-scale-upper-segment']
+    const cells = (await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })).cells.filter(c => !LATER.includes(c.caseId))
     // The literal-num withhold takes precedence (num / num bounds, f·2^20 not an integer): those cells keep its reason.
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)
     const inShape = cells.filter(c => c.segment.colours === 3 && c.segment.segment === 1 && !literalWithheld(c.segment) && upperSegmentWholeProduct(c.segment.c0, c.segment.c1, c.segment.value, c.segment.lo, c.segment.hi, c.segment.fraction))
@@ -208,7 +214,7 @@ describe('the reach: every newly withheld cell of every measured case is the sha
       'stage2-scale-raw-floor': ['H10', 'H11', 'H12', 'H13', 'I9', 'I10', 'I11', 'I12', 'I13'].sort(),
     })
     // The justifications, recomputed independently of production, name exactly these cells, case by case.
-    for (const c of manifest.cases.filter(x => x.status === 'measured' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
+    for (const c of manifest.cases.filter(x => x.status === 'measured' && !LATER.includes(x.id) && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
       const { sheet } = await parsed(c)
       const cellsOf = stage5SheetCells(sheet)
       const numbers = new Map([...cellsOf].filter(([, v]) => typeof v.value === 'number' && !v.error).map(([k, v]) => [k, v.value as number]))

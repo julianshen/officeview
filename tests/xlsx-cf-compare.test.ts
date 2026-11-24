@@ -13,6 +13,10 @@ import { fileURLToPath } from 'node:url'
 import { compareCfCase } from '../scripts/cf-compare'
 import type { CfManifest, CfOracleCase } from '../scripts/cf-refs/cases'
 import { readFileSync } from 'node:fs'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 

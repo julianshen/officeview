@@ -49,6 +49,10 @@ import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidenc
 /** As recorded at 54fc3388: before the literal-lower registration (a3f85309), whose evidence is withheld here. */
 const asRecorded = <T>(fn: () => Promise<T>): Promise<T> => withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:num-segment-literal-lower'), fn)
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_UPPER_WHOLE_ID

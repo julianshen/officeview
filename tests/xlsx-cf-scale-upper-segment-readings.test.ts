@@ -7,7 +7,9 @@
  * - `index-position`: l = (1 + f) − 1, then floor(l·|d|) per channel (the only survivor class of
  *   scripts/cf-refs/upper-segment-candidates.ts over all 302 captured upper-segment interior cells);
  * - `truncate`: production's guarded truncation (the control).
- * Unregistered, every such cell stays withheld as on main. A formula-resolved bound, another colour space or rounding, the
+ * Unregistered, every such cell stays withheld as before. Since the capture of stage2-scale-upper-segment (2ee3735a) matched
+ * index-position for both ids, it is registered and published: the unregistered state is pinned through an invalid proposal
+ * (`unregisterUpperSegment`), the registered one as committed. A formula-resolved bound, another colour space or rounding, the
  * lower segment and 2-colour scales are untouched under every reading. The justifications (`upperWholeShapeAt`,
  * `stage2NumSegmentShape`) narrow only with the registration plus its evidence. This checks production, not Excel.
  */
@@ -33,6 +35,7 @@ import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evide
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { upperNearTopShapeAt, upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
 import { stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
+import { unregisterUpperSegment } from './helpers/cf-upper-segment-recorded'
 
 afterEach(() => { injectCfUpperSegmentReadings(null); injectCfUpperNearTopReadings(null); injectCfUpperWindowReadings(null) })
 
@@ -61,19 +64,19 @@ const PLT = [0, 210, 420]
 const ST = [mn(P), pct(50, Q), mx(P)]
 const at = (v: number, points: readonly CfScalePoint[], t: readonly number[], opts: Parameters<typeof scaleColorAt>[3] = { hasEvidence: all }): string => colour(scaleColorAt(v, points, t, opts))
 
-describe('the readings: implemented, selectable, registered nowhere', () => {
-  it('index-position and truncate, the only readings; production registers none', () => {
+describe('the readings: implemented, selectable; index-position registered (2ee3735a)', () => {
+  it('index-position and truncate, the only readings; production registers index-position for the question and nothing else', () => {
     expect([...CF_UPPER_SEGMENT_READINGS]).toEqual(['index-position', 'truncate'])
     expect(CF_UPPER_SEGMENT_CAP).toBe('scale:upper-segment')
-    expect(CF_UPPER_SEGMENT_PRODUCTION_READINGS).toEqual({})
+    expect(CF_UPPER_SEGMENT_PRODUCTION_READINGS).toEqual({ [CF_UPPER_SEGMENT_CAP]: 'index-position' })
     expect(Object.isFrozen(CF_UPPER_SEGMENT_PRODUCTION_READINGS)).toBe(true)
-    expect(cfUpperSegmentReading()).toBeUndefined()
+    expect(cfUpperSegmentReading()).toBe('index-position')
     register('truncate')
     expect(cfUpperSegmentReading()).toBe('truncate')
     injectCfUpperSegmentReadings({ [CF_UPPER_SEGMENT_CAP]: 'nonsense' as CfUpperSegmentReading })
     expect(cfUpperSegmentReading()).toBeUndefined()
-    injectCfUpperSegmentReadings({ 'scale:other': 'index-position' })
-    expect(cfUpperSegmentReading()).toBeUndefined()
+    injectCfUpperSegmentReadings({ 'scale:other': 'truncate' })
+    expect(cfUpperSegmentReading()).toBe('index-position')
   })
 
   it('index-position reproduces T4/V3 (e448d831) and the 54fc3388 cells F12, F15, F16, F18, F19 from their segments; it keeps 1/6, 1/10 and 127/210', () => {
@@ -94,7 +97,8 @@ describe('the readings: implemented, selectable, registered nowhere', () => {
 })
 
 describe('scaleColorAt: default unchanged; a registered reading paints only the upper-segment shapes withheld today', () => {
-  it('unregistered (the state on main): the literal shape, the integer class and the window class stay withheld whatever the evidence', () => {
+  it('unregistered (the state before 2ee3735a): the literal shape, the integer class and the window class stay withheld whatever the evidence', () => {
+    unregisterUpperSegment()
     for (const ev of [all, without(CF_UPPER_SEGMENT_CAP)]) {
       expect(at(40, TV, TVT, { hasEvidence: ev })).toBe(NUMSEG)
       expect(at(280, PL, PLT, { hasEvidence: ev })).toBe(NUMSEG)
@@ -149,6 +153,7 @@ describe('scaleColorAt: default unchanged; a registered reading paints only the 
   })
 
   it('the registration is per id: the window id never selects it', () => {
+    unregisterUpperSegment()
     injectCfUpperWindowReadings({ [CF_UPPER_WINDOW_CAP]: 'guarded', [CF_UPPER_SEGMENT_CAP]: 'guarded' } as never)
     expect(at(280, PL, PLT)).toBe(NUMSEG)
     expect(at(280, ST, PLT)).toBe(WHOLE)
@@ -165,6 +170,7 @@ describe('the justifications narrow with the registration plus its evidence, and
   const whole = (m: UpperWholeMarker, v: number): boolean => upperWholeShapeAt(m, 'A3', v, values, () => 210)
 
   it('unregistered: the upper literal shape and the whole-product shape are justified; the lower literal shape is the literal-lower registration\'s', () => {
+    unregisterUpperSegment()
     withExactCfEvidence(caps, () => {
       expect(lit(280)).toBe(true)
       expect(lit(267)).toBe(true)
@@ -184,7 +190,7 @@ describe('the justifications narrow with the registration plus its evidence, and
         expect(whole(fm, 280)).toBe(true)
         expect(lit(70)).toBe(false)
       })
-      withExactCfEvidence([...VERIFIED_CAPABILITIES], () => {
+      withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== CF_UPPER_SEGMENT_CAP && id !== CF_UPPER_NEAR_TOP_CAP), () => {
         expect(lit(280)).toBe(true)
         expect(whole(st, 280)).toBe(true)
       })
@@ -205,14 +211,16 @@ describe('the near-top sub-shape (orchestrator ruling before the capture): withh
     expect(upperSegmentNearTop(Q, P, 427, 217, 427, 1)).toBe(false)
     expect(upperSegmentNearTop(Q, P, 0.9999999999999999, -1, 1, 0.9999999999999999)).toBe(true)
     expect(CF_UPPER_NEAR_TOP_CAP).toBe('scale:upper-segment-near-top')
-    expect(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS).toEqual({})
+    expect(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS).toEqual({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
   })
   it('unregistered: withheld (it was painted at the maximum colour before the ruling); with the main id alone or a different near-top reading: still withheld; with both at the same reading: the reading', () => {
+    unregisterUpperSegment()
     expect(at(top, NT, NTT)).toBe(NEARTOP)
     expect(at(top, st, [0, 210, 420].map(x => x + 7))).toBe(NEARTOP)
     for (const reading of CF_UPPER_SEGMENT_READINGS) {
       const other = CF_UPPER_SEGMENT_READINGS.find(x => x !== reading)!
       register(reading)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'unregistered' as never })
       expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(NEARTOP)
       injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: other })
       expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(NEARTOP)
@@ -221,7 +229,7 @@ describe('the near-top sub-shape (orchestrator ruling before the capture): withh
       expect(at(top, NT, NTT, { hasEvidence: allNear })).toBe(hex(reading === 'index-position' ? upperSegmentPositionColour(Q, P, f)! : interpolateScaleColor(Q, P, f)))
       expect(at(top, NT, NTT, { hasEvidence: without(CF_UPPER_NEAR_TOP_CAP) })).toBe(NEARTOP)
       expect(at(top, [num(7, P), numF(217, Q), num(427, P)], NTT, { hasEvidence: allNear })).toBe(NEARTOP)
-      injectCfUpperNearTopReadings(null)
+      injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'unregistered' as never })
     }
     // index-position one step below the maximum colour, truncate the maximum colour.
     expect(hex(upperSegmentPositionColour(Q, P, (top - 217) / 210)!)).toBe('FF15EF29')
@@ -231,6 +239,7 @@ describe('the near-top sub-shape (orchestrator ruling before the capture): withh
     const m: UpperWholeMarker = { ruleType: 'colorScale', sqref: 'A2:A9', scale: { cfvo: [{ type: 'num', val: '7' }, { type: 'num', val: '217' }, { type: 'num', val: '427' }], colors: ['FF14F028', 'FFE61EFA', 'FF14F028'] } }
     const vals = new Map([['A3', top]])
     const caps = [...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP, CF_UPPER_NEAR_TOP_CAP]
+    unregisterUpperSegment()
     withExactCfEvidence(caps, () => {
       expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true)
       expect(upperNearTopShapeAt(m, 'A3', 300, vals)).toBe(false)
@@ -241,7 +250,7 @@ describe('the near-top sub-shape (orchestrator ruling before the capture): withh
       injectCfUpperNearTopReadings({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
       expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(false)
     })
-    withExactCfEvidence([...VERIFIED_CAPABILITIES, CF_UPPER_SEGMENT_CAP], () => expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true))
+    withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== CF_UPPER_NEAR_TOP_CAP), () => expect(upperNearTopShapeAt(m, 'A3', top, vals)).toBe(true))
   })
 })
 
@@ -282,5 +291,19 @@ describe('codex pre-capture review: index-position only between opaque endpoint 
       expect(upperWholeShapeAt(st('0014F028'), 'A3', 280, vals)).toBe(true)
       expect(upperWholeShapeAt(st('FF14F028'), 'A3', 280, vals)).toBe(false)
     })
+  })
+})
+
+describe('as committed (index-position registered for both ids, published)', () => {
+  it('T4/V3\'s doubles, a P-line whole product, a window product, a statistical integer product and a near-top cell paint index-position; without the evidence they are withheld', () => {
+    const ev = (cap: string): boolean => VERIFIED_CAPABILITIES.has(cap)
+    expect(at(280, PL, PLT, { hasEvidence: ev })).toBe(hex(upperSegmentPositionColour(Q, P, 70 / 210)!))
+    expect(at(267, PL, PLT, { hasEvidence: ev })).toBe(hex(upperSegmentPositionColour(Q, P, 57 / 210)!))
+    expect(at(280, ST, PLT, { hasEvidence: ev })).toBe(hex(upperSegmentPositionColour(Q, P, 70 / 210)!))
+    expect(at(40, TV, TVT, { hasEvidence: ev })).toBe(hex(upperSegmentPositionColour(G, Y, 1 / 3)!))
+    expect(at(426.99999999999994, [num(7, P), num(217, Q), num(427, P)], [7, 217, 427], { hasEvidence: ev })).toBe('FF15EF29')
+    expect(at(280, PL, PLT, { hasEvidence: c => ev(c) && c !== CF_UPPER_SEGMENT_CAP })).toBe(NUMSEG)
+    expect(at(280, ST, PLT, { hasEvidence: c => ev(c) && c !== CF_UPPER_SEGMENT_CAP })).toBe(WHOLE)
+    expect(at(426.99999999999994, [num(7, P), num(217, Q), num(427, P)], [7, 217, 427], { hasEvidence: c => ev(c) && c !== CF_UPPER_NEAR_TOP_CAP })).toBe('cf-unmeasured-upper-near-top')
   })
 })

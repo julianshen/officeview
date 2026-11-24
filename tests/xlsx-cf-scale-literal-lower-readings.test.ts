@@ -32,6 +32,10 @@ import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evide
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { guardBoundaryShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
 import { stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 afterEach(() => { injectCfLiteralLowerReadings(null); injectCfGuardBoundaryReadings(null); injectCfUpperWindowReadings(null) })
 

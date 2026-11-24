@@ -6090,12 +6090,10 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   // entry is removed; the twins stay comparisons, never questions.
   'scale:num-segment-literal-lower-twin':
     'The twins of stage2-scale-literal-lower (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, num 0 / 1 at values 0 and 1; IEEE-integer products): comparison references, never a question themselves.',
-  // The upper-segment follow-up (stage2-scale-upper-segment): the question is registered until its capture (a matched reading is
-  // published only by removing this entry and registering it in CF_UPPER_SEGMENT_PRODUCTION_READINGS); the twins are comparisons.
-  'scale:upper-segment':
-    'Pre-registered and registrable (stage2-scale-upper-segment, two readings: index-position, truncate), awaiting its capture: interior cells of a 3-colour upper segment in the literal num-segment shape or the whole-product shape stay withheld (cf-unmeasured-num-segment-fraction, cf-unmeasured-upper-segment-whole-product) until a matched reading is registered in CF_UPPER_SEGMENT_PRODUCTION_READINGS.',
-  'scale:upper-segment-near-top':
-    'Pre-registered and registrable (stage2-scale-upper-segment, its near-top configuration, the readings index-position and truncate), awaiting its capture: upper-segment interior cells within 1e-11 below the full span stay withheld (cf-unmeasured-upper-near-top) unless CF_UPPER_NEAR_TOP_PRODUCTION_READINGS registers the same reading as scale:upper-segment; the main reading can be registered with this sub-shape still withheld.',
+  // The upper-segment follow-up (stage2-scale-upper-segment): both questions, scale:upper-segment and
+  // scale:upper-segment-near-top, matched index-position in its capture (Excel 16.115, 2ee3735a) and are registered
+  // (CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS), so their entries are removed; the twins stay
+  // comparisons, never questions.
   'scale:upper-segment-twin':
     'The twins of stage2-scale-upper-segment (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
 }

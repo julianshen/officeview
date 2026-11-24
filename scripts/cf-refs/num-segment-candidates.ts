@@ -101,7 +101,7 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
  * stage2-scale-upper-window (ed0fccb6), stage2-scale-raw-floor (ce3f701d) and stage2-scale-literal-lower (a3f85309). Pass
  * `{ include: 'all' }` to add them.
  */
-export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower']
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment']
 
 export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }
@@ -152,6 +152,13 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
       const prod = production.get(ref)
       const truncate = hex(interpolateScaleColor(seg.c0, seg.c1, seg.fraction))
       if (prod === undefined && withheldShape(seg)) { out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' }); continue }
+      // Painted since the upper-segment registration (stage2-scale-upper-segment, 2ee3735a): an upper-segment cell of the
+      // num-segment shape, withheld when the searches ran; evaluated as then. A painted fill that is not Excel's is a fault.
+      if (prod !== undefined && seg.colours === 3 && seg.segment === 1 && withheldShape(seg)) {
+        if (prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
+        out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' })
+        continue
+      }
       // Painted since the literal-lower registration (stage2-scale-literal-lower, a3f85309): a literal-num LOWER-segment cell of
       // the num-segment shape, withheld when the searches ran; evaluated as then. A painted fill that is not Excel's is a fault.
       if (prod !== undefined && seg.segment === 0 && withheldShape(seg)) {
@@ -161,7 +168,10 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
       }
       // Withheld only by the later upper-segment whole-product rule (owner ruling A): before it, production painted the
       // truncation here; the cell is evaluated as it was when the search ran.
-      if (prod === undefined && seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+      // Painted at index-position since the upper-segment registration (2ee3735a): evaluated as when the searches ran; a painted
+      // fill that is not Excel's is a fault.
+      if (prod !== undefined && prod !== truncate && seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) && prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
+      if ((prod === undefined || prod === excel) && seg.colours === 3 && seg.segment === 1 && upperSegmentWholeProduct(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
         if (truncate === excel) out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'confirmed' })
         else out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' })
         continue
