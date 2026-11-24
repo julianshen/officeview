@@ -19,6 +19,7 @@
  *   charge is returned only when nothing references the pair;
  * - a font publication (setFontGen) drops the hosts and their width caches.
  */
+import type { CanvasLike } from '../../core/canvas-backend'
 import type { XlsxSheet } from '../../xlsx/types'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { LayoutAdmissionError, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
@@ -30,18 +31,25 @@ export const MEASURE_CONTEXT_CAP = 4 * 1024 * 1024
 /** A base measurement context (and the local identity context the canonical
  * layout derives from it), each measuring only through `admitShape` first.
  * The caller admits both contexts (2 × TILE_CANVAS_BYTES) before calling.
- * Null without a canvas-capable document. */
-export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local', font: string, text: string) => void): CanvasRenderingContext2D | null {
+ * `createCanvas` supplies the canvases where there is no document (the
+ * stream server's canvas backend); without it they are the document's.
+ * Null without a canvas-capable document or factory. */
+export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local', font: string, text: string) => void, createCanvas?: () => CanvasLike): CanvasRenderingContext2D | null {
   const doc = globalThis.document
-  if (!doc) return null
+  if (!doc && !createCanvas) return null
   const make = (cache: 'base' | 'local'): CanvasRenderingContext2D | null => {
     let ctx: CanvasRenderingContext2D | null = null
     try {
-      const canvas = doc.createElement('canvas')
-      // Measurement inherits the same language as the painting tiles
-      // (createCanvasTile), so generic/fallback faces resolve alike.
-      const lang = doc.documentElement?.getAttribute('lang')
-      if (lang) canvas.setAttribute('lang', lang)
+      let canvas: CanvasLike
+      if (createCanvas) canvas = createCanvas()
+      else {
+        const element = doc!.createElement('canvas')
+        // Measurement inherits the same language as the painting tiles
+        // (createCanvasTile), so generic/fallback faces resolve alike.
+        const lang = doc!.documentElement?.getAttribute('lang')
+        if (lang) element.setAttribute('lang', lang)
+        canvas = element
+      }
       canvas.width = 1
       canvas.height = 1
       ctx = canvas.getContext('2d')
@@ -58,7 +66,7 @@ export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local'
   const localCanvas = { width: 4, height: 4, getContext: () => local }
   // `closest` lets core/text-metrics inherit the document language, as a
   // painted page canvas would (visual review #16).
-  const canvas = { width: 1, height: 1, ownerDocument: { createElement: () => localCanvas }, closest: (selector: string) => doc.documentElement?.closest?.(selector) ?? null }
+  const canvas = { width: 1, height: 1, ownerDocument: { createElement: () => localCanvas }, closest: (selector: string) => doc?.documentElement?.closest?.(selector) ?? null }
   return new Proxy(base, {
     get(target, property) {
       if (property === 'canvas') return canvas

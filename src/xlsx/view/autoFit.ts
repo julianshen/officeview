@@ -9,6 +9,7 @@ import type { SheetGeometry } from './viewport'
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, RESIZE_LIMITS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from './axisSizes'
 import { createCellLayoutHost } from './renderViewport'
 import { createAdmittedLayoutContext } from '../../components/xlsx/measureContext'
+import type { CanvasLike } from '../../core/canvas-backend'
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from './mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../types'
 import { cellDisplayText } from '../render'
@@ -112,8 +113,11 @@ export interface FitMeasure {
  * (shapeCacheBytes per font) before each new text is measured, and the JS
  * cache entries. `admit({ heap, native })` receives the running totals and
  * charges them; a refusal throws AutoFitRefusedError and nothing more is
- * created. With an injected `measureText` no context is created or charged. */
-export function createFitMeasure(options: { admit: (charge: FitCharge) => boolean; measureText?: Measure; sheet?: XlsxSheet }): FitMeasure {
+ * created. With an injected `measureText` no context is created or charged.
+ * `createCanvas` supplies the admitted pair's canvases where there is no
+ * document (the stream server's canvas backend); everything else, the
+ * canonical `layoutHeight` included, is unchanged. */
+export function createFitMeasure(options: { admit: (charge: FitCharge) => boolean; measureText?: Measure; sheet?: XlsxSheet; createCanvas?: () => CanvasLike }): FitMeasure {
   let ctx: CanvasRenderingContext2D | null | undefined = options.measureText ? null : undefined
   let host: ReturnType<typeof createCellLayoutHost> | null = null
   const fonts = new Map<string, { entries: number; units: number }>()
@@ -144,7 +148,7 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
     // identity context) are reserved before they exist; each measures only
     // through its own admitting wrapper (no global state is touched).
     reserve(0, 2 * TILE_CANVAS_BYTES)
-    ctx = createAdmittedLayoutContext((cacheName, font, text) => reserveShape(font, text, cacheName))
+    ctx = createAdmittedLayoutContext((cacheName, font, text) => reserveShape(font, text, cacheName), options.createCanvas)
     return ctx
   }
   // Formatting builders are admitted (heap) before they are made; the fit's

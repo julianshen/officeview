@@ -11,7 +11,7 @@
 import type { Box, WireSelection } from '../../../src/stream/sheet-wire'
 import { formatCellPresentation } from '../../../src/components/xlsx/formatPresentation'
 import { autoFitSize, createFitMeasure } from '../../../src/xlsx/view/autoFit'
-import type { Measure } from '../../../src/xlsx/view/axisSizes'
+import type { CanvasLike } from '../../../src/core/canvas-backend'
 import type { RowOrder, RowVisibility, SourceStore } from '../../../src/xlsx/view/contracts'
 import { withUnavailableFormulas } from '../../../src/xlsx/view/unavailableFormulas'
 import { serializeSelection } from '../../../src/xlsx/view/copy'
@@ -107,19 +107,21 @@ export function clampBox(box: Box, extent: { width: number; height: number }): B
 /**
  * The fit size (P9): local `autoFitSize` over the view's (blanked) sheet and its sized geometry, with the pane and
  * regions clamped to the sheet's extent and `knownRows` the view's first rows, as on the local resident path.
- * `measureText` is the server backend's text measure; with it injected `createFitMeasure` builds no layout context.
+ * `createCanvas` is the server backend's canvas: `createFitMeasure` builds its admitted measurement pair on it, so a
+ * wrapped or rotated cell's row fit reads the canonical painter layout height (`layoutHeight`), as the local fit does
+ * (`InteractiveSheetDoc.tsx` resizeLine; final review R2). Its layout diagnostics land on a copy of the view's sheet.
  */
-export function fitAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'fit' }>, measureText: Measure): number {
+export function fitAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'fit' }>, createCanvas: () => CanvasLike): number {
   const geometry = view.geometry
   if (geometry.kind !== 'ready') throw new Error('sheet-fit: sheet geometry unavailable')
   const extent = { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }
-  const fit = createFitMeasure({ admit: ({ heap, native }) => heap + native <= FIT_MEASURE_BYTES, measureText, sheet: view.sheet })
+  const fit = createFitMeasure({ admit: ({ heap, native }) => heap + native <= FIT_MEASURE_BYTES, createCanvas, sheet: { ...view.sheet } })
   return autoFitSize(job.axis === 'col' ? 'column' : 'row', job.index, {
     // Fix round 1: no regions is `undefined`, never `[]` (`autoFitSize` reads `regions ?? [pane]`; `[]` would mean no
     // visible rows at all).
     geometry, sheet: view.sheet, pane: clampBox(job.pane, extent), ...(job.regions?.length ? { regions: job.regions.map((r) => clampBox(r, extent)) } : {}),
     knownRows: (limit) => view.sheet.rows.slice(0, limit).map((r) => r.index),
-    measure: fit.measure, allocation: fit.allocation,
+    measure: fit.measure, allocation: fit.allocation, ...(fit.layoutHeight ? { layoutHeight: fit.layoutHeight } : {}),
   })
 }
 
@@ -279,9 +281,9 @@ export function a11yAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'a11
 
 /** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views;
  * `workbook`: the servable workbook the text document is built over). */
-export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; measureText: Measure }): Promise<SheetTextReply> {
+export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; createCanvas: () => CanvasLike }): Promise<SheetTextReply> {
   switch (job.op) {
-    case 'fit': return { op: 'fit', size: fitAnswer(await deps.viewOf(job.sheetIndex, job.sizes), job, deps.measureText) }
+    case 'fit': return { op: 'fit', size: fitAnswer(await deps.viewOf(job.sheetIndex, job.sizes), job, deps.createCanvas) }
     case 'find': {
       const view = await deps.viewOf(job.sheetIndex, job.sizes)
       return { op: 'find', ...await findAnswer(view, job, deps.workbook()) }

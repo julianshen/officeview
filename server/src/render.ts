@@ -400,11 +400,10 @@ export class DocumentHost {
    * Stage 4b (P2, P9): one `sheet-text` op over the text view of its sheet at the job's session sizes, under the session
    * clock (no clock is read). Views are built from the cached snapshots (`sheetTextView`) and cached per
    * `(sheetIndex, clock, sha256(sizes))`, at most `TEXT_VIEWS` per document (LRU), released on eviction and on `drop`;
-   * a view a running job holds is released by that job when it ends. Fit measures with the server backend's text.
+   * a view a running job holds is released by that job when it ends. Fit measures and lays out on the server backend's canvases.
    */
   async sheetText(docKey: string, clock: SheetClock, job: SheetTextJob): Promise<SheetTextReply> {
     const held: TextViewEntry[] = []
-    let measureCtx: CanvasRenderingContext2D | undefined
     try {
       return await answerSheetText(job, {
         viewOf: (sheetIndex, sizes) => {
@@ -418,11 +417,7 @@ export class DocumentHost {
           if (!doc || !saved) throw new RenderRefusal('unknown-doc')
           return this.servableWorkbook(doc, saved)
         },
-        measureText: (font, text) => {
-          measureCtx ??= this.backend.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
-          measureCtx.font = font
-          return measureCtx.measureText(text).width
-        },
+        createCanvas: () => this.backend.createCanvas(1, 1),
       })
     } finally {
       for (const e of held) if (--e.uses === 0 && e.evicted) e.view.then((v) => v.release(), () => undefined)
