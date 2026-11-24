@@ -4073,7 +4073,8 @@ export function s2LiteralLowerBlocks(): S2LiteralLowerBlock[] {
     // Its evidence values are pl-pq-210's minus 7: the same doubles f (replicated), so they share twins.
     { id: 'pl-resort-210', kind: 'p-line', col: 'E', cfvo: ['0', '420', '210'], colors: [S2LL_P, S2LL_Q, S2LL_P],
       values: [...s2llV('evidence', '29', '58', '109', '70', '143', '43.5'), ...s2llV('control', '57', '105', '210'), ...s2llV('upper', '239', '280')] },
-    // T4/V3 in the lower segment: 10 and 20 are f = 1/3 and 2/3 (T4 and V3's doubles); the upper probes 40 and 50 are T4 and V3.
+    // T4/V3 in the lower segment: 10 and 20 are f = 1/3 and 2/3 (T4 and V3's doubles); the upper probes 40 and 50
+    // have T4 and V3's values and doubles, but this block's upper segment runs G to Y (T4/V3's ran Y to G): not replicas.
     { id: 'ds-yg-30', kind: 'distinct', col: 'F', cfvo: ['0', '30', '60'], colors: [S2LL_Y, S2LL_G, S2LL_Y],
       values: [...s2llV('evidence', '10', '20', '4', '25', '3.5'), ...s2llV('control', '15', '7.5', '30'), ...s2llV('upper', '40', '50')] },
     { id: 'ds-dd-210', kind: 'distinct', col: 'G', cfvo: ['-105', '105', '315'], colors: [S2LL_DD0, S2LL_DD1, S2LL_DD0],

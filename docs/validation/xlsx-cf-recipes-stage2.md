@@ -1303,7 +1303,7 @@ Gaps the case fills:
 - no cell lies just above an integer;
 - the distinct-span cells are all ascending and all clear;
 - the 4 below-integer cells (F6..F9 of ce3f701d) come from one span (210) and one colour order;
-- no bound is negative or fractional, and the lowest bound is 0 or 7.
+- no bound is negative or fractional; the lower segments start at 0, 7 or 30.
 
 ### 12.2 Readings and the registration rule (Phase 1 task 2)
 
@@ -1352,7 +1352,7 @@ No third reading: no captured lower-segment cell drew anything but production's 
 - **T4/V3 in the lower segment:** F2 and F3 (10 and 20 in 0..30) have T4's and V3's f doubles and colours. Their predictions are T4/V3's truncation (FFCBDC81, FF97CD7E) under `lower-arithmetic` and T4/V3's Excel fills (FFCCDD82, FF98CE7F) under `step-plus-one`. 1/3 also sits on the P line (A5, E5).
 - **The re-sort:** pl-resort-210's evidence values are pl-pq-210's minus 7, so they have the same f doubles.
 - **Negative controls (20):** 16 f·2^20-integer cells or endpoints, and 4 P-line below-integer cells. Both readings predict production's truncation there.
-- **Upper probes (16, record only):** two per block, each at the f double of a lower-segment evidence cell of its block (bit for bit). F10 and F11 (40 and 50 over 0 / 30 / 60) are T4 and V3 exactly, with this case's palette. Production withholds them under every reading, and they are never evidence.
+- **Upper probes (16, record only):** two per block, each at the f double of a lower-segment evidence cell of its block (bit for bit). F10 and F11 (40 and 50 over 0 / 30 / 60) have T4's and V3's values and f doubles, but this block's upper segment runs FF63BE7B → FFFFEB84, the opposite direction of T4/V3's (FFFFEB84 → FF63BE7B): they are not replicas of T4/V3. Production withholds them under every reading, and they are never evidence.
 - **Twins:** P-line fills are shown by a twin line (num 0 / 1 between P-line steps 128 apart; a twin of step k holds (k − from)/128). Every other live fill is shown by an endpoint twin: a 2-colour num 0 / 1 rule over two cells holding 0 and 1, so f is 0 or 1 exactly. The layout throws if any twin's product is not an IEEE integer on every channel, or if its model colour is not its fill. FF63BE7B in the controls is a literal token, vouched by its positive control.
 
 ### 12.4 Predictions

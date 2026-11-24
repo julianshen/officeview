@@ -224,7 +224,7 @@ describe('stage2-scale-literal-lower: the case', () => {
     expect(designated.filter(c => c.role === 'control' && !s2LiteralLowerInShape(c)).length).toBe(16)
   })
 
-  it('T4/V3 in the lower segment: ds-yg-30 F2 and F3 are T4 and V3\'s doubles and colours, the lower-arithmetic and step-plus-one fills their truncation and their Excel fills; the upper probes F10, F11 are T4/V3 replicas', () => {
+  it('T4/V3 in the lower segment: ds-yg-30 F2 and F3 are T4 and V3\'s doubles and colours, the lower-arithmetic and step-plus-one fills their truncation and their Excel fills; the upper probes F10, F11 share T4/V3\'s values and doubles but run the other way (G -> Y)', () => {
     const f = (c: S2LiteralLowerCell): number => safeFraction(c.value, c.lo, c.hi)!
     // T4 and V3 (e448d831): upper segment of num 0 / 30 / 60 at 40 and 50, FFFFEB84 -> FF63BE7B.
     const t4 = safeFraction(40, 30, 60)!, v3 = safeFraction(50, 30, 60)!
@@ -233,8 +233,9 @@ describe('stage2-scale-literal-lower: the case', () => {
     expect([F2!.from, F2!.to]).toEqual(['FFFFEB84', 'FF63BE7B'])
     expect(S2_LITERAL_LOWER_READINGS.map(r => s2LiteralLowerPrediction(F2!, r))).toEqual(['FFCBDC81', 'FFCCDD82'])
     expect(S2_LITERAL_LOWER_READINGS.map(r => s2LiteralLowerPrediction(F3!, r))).toEqual(['FF97CD7E', 'FF98CE7F'])
-    // The upper probes at 40 and 50 are T4/V3 exactly (palette G -> Y in this case's upper segment, opposite direction).
+    // The upper probes at 40 and 50 have T4/V3's values and doubles, but their segment runs G -> Y (T4/V3's ran Y -> G): not replicas.
     expect([F10!.value, F11!.value, F10!.segment, F11!.segment]).toEqual([40, 50, 1, 1])
+    expect([Object.is(f(F10!), t4), Object.is(f(F11!), v3), F10!.from, F10!.to]).toEqual([true, true, 'FF63BE7B', 'FFFFEB84'])
     // 1/3 and 2/3 also on the P line (pl-pq-210 A5 and pl-resort-210 E5) and ascending (ds-da-105 H6 at 70/105).
     expect(Object.is(f(cellAt.get('A5')!), 70 / 210)).toBe(true)
     expect(Object.is(f(cellAt.get('E5')!), 70 / 210)).toBe(true)
