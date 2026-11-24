@@ -245,6 +245,7 @@ Every Stage 2 capability corresponds to a single variant in the oracle matrix an
 | `scale:interpolation-precondition-probe` | `stage2-scale-interpolation` | Precondition probe: display format interior color differs from base interior color | Ruling S2-A | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-A (precondition probe requires display format interior color to differ from base interior color) |
 | `scale:interpolation-rounding-ladder` | `stage2-scale-interpolation` | Rounding ladder across half-up, half-even, and truncate on 0, 1, 3, 5, 255, 509, 510 | Ruling S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-B (interpolation rounding has no default; requires verified rounding ladder evidence) |
 | `scale:guard-boundary-raw-floor` | `stage2-scale-raw-floor` (§14.z.18; `stage2-scale-upper-window` is the finding it settles) | An interior 2-colour or 3-colour lower-segment cell whose step product f·\|d\| lies within 1e-11 strictly below a whole number: two pre-registered readings, `raw-floor` and `guarded`, over min / max, percent, percentile, literal, inverted, mixed and re-sorted bounds, both colour orders and spans 210, 150, 105, 30 | Ruling S2-B (truncate) | `verified` (matched `raw-floor`, ce3f701d) | The shape paints at raw floor, floor(f·\|d\|); withheld (`cf-unmeasured-guard-boundary`) without this evidence, under a formula-resolved bound, or outside sRGB / truncate; a literal num 3-colour lower segment keeps the num-segment withhold |
+| `scale:num-segment-literal-lower` | `stage2-scale-literal-lower` (§14.z.21; the census of recipe §12.1) | An interior cell of a 3-colour LOWER segment bounded by two literal `num` cfvo where f·2^20 is not an integer: two pre-registered readings, `lower-arithmetic` and `step-plus-one`, over P-line and distinct-per-channel palettes, both colour orders, spans 30, 105, 150, 210, 420, non-zero / negative / fractional bounds and the midpoint-above-max re-sort | Ruling S2-B (truncate) | `verified` (matched `lower-arithmetic`, a3f85309) | The lower segment paints as a non-literal lower segment (truncation; raw floor at a guard-boundary product under `scale:guard-boundary-raw-floor`); withheld (`cf-unmeasured-num-segment-fraction`) without this evidence or outside sRGB / truncate; the UPPER segment keeps the num-segment withhold |
 | `scale:interpolation-color-space` | `stage2-scale-interpolation` | Colour space interpolation across sRGB, linear-light, and HSL at 50% | Ruling S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-B (color space has no default; requires verified color space evidence) |
 | `scale:interpolation-spec-palette` | `stage2-scale-interpolation` | Spec §3 3-colour palette `FFF8696B`/`FFFFEB84`/`FF63BE7B` over 1..9 | Rulings S2-A, S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-A and S2-B |
 | `scale:thresholds-min-max` | `stage2-scale-thresholds` | Basic 2-colour `min`/`max` threshold evaluation | Ruling S2-C | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-C |
@@ -3549,3 +3550,39 @@ Both stages recompute the justification independently of production (`scripts/cf
 - **Audits.**
   - Stage 3: ok, `structural=17/17 pending=0 unverifiedNonDiscriminating=6`, complete.
   - Stage 5: ok, complete; 3194 records, 0 disagreeing.
+
+### 14.z.21 The literal-lower follow-up: captured; `lower-arithmetic` matched and registered; the literal-num lower-segment withhold lifted (2026-11-24)
+
+**Why.** The num-segment withhold (§14.z.13, `numSegmentUnmeasured`) withheld every interior cell of a 3-colour segment bounded by two literal `num` cfvo where f·2^20 is not an integer, in both segments. Its founding anomaly (T4/V3 of e448d831) is in the upper segment, and all 64 captured lower-segment cells of the shape drew production's lower-segment arithmetic. Owner ruling (2026-11-24): do not lift on that evidence; run a new case, registrable up front, and lift the LOWER segment only if one reading matches every decisive cell; the upper segment stays withheld whatever it shows. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §12. Interpretation: `.superpowers/sdd/cf-literal-lower/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The census:** e270cea0 (64/64 at production's lower-segment arithmetic).
+2. **The readings and production behaviour:** b484faf0 (`lower-arithmetic`, `step-plus-one`; selectable, unregistered).
+3. **The case:** 16a0f998, d1d20aa2, 1b55cd8c.
+4. **Capture:** a3f85309 (Excel 16.115). The build opened repair-free; the capture verified at minimum contrast 123, and `--verify-only` re-verified it.
+
+**The case.** `stage2-scale-literal-lower`, 180 cells in A1:R13: 46 evidence cells in eight groups (span × colour order × palette kind: P-line spans 210, 420, 105, 150 and the re-sort; distinct spans 156/45/9 and 210/105/30, both orders), 20 negative controls, 16 upper-segment probes (record only), 86 twins (a P-line twin line and, new, 2-colour endpoint twins at values 0 and 1), 2 literal positive controls.
+
+**The capture is sound.** Every pixel equals its DisplayFormat fill (180/180). The 10 unformatted controls are white, the positive controls show FFF8696B and FF63BE7B, and all 86 twins show their fills (the endpoint twins included, first time captured).
+
+**The result.** `verifyCfCase`: verified, `scale:num-segment-literal-lower` matched `lower-arithmetic` (discriminating); the twin id is non-discriminating; nothing refused.
+- **Every decisive cell drew `lower-arithmetic`:** 46/46 across all eight groups (6, 6, 6, 6, 6, 5, 5, 6). `step-plus-one` matched none; no cell drew neither. That includes T4/V3's doubles and colours in the lower segment (F2 FFCBDC81, F3 FF97CD7E), and the distinct-palette below / above / integer / clear cells.
+- **All 20 controls** drew what both readings predict.
+- **The upper probes (record only):** 11 of 16 drew the step-plus-one colour (one step smaller than truncation), at whole products and at products just above an integer, in both colour directions (F10, F11 at T4/V3's doubles with an ascending palette included); 5 drew truncation (D11 at a whole product 7, D12 clear, G8 and H9 just below an integer, H10 just above). The upper segment is unexplained as before, and stays withheld.
+
+**Registered.** `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`; the id's `CF_STAGE2_NONDISCRIMINATING` entry is removed. The audit published it (`npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5`, twice, byte-identical, sha-256 `c70ba5a7…`): 351 ids (110 S1, 37 S2, 56 S3, 97 S4, 51 S5); the only addition is `scale:num-segment-literal-lower`.
+
+**Production effect.** A 3-colour lower segment bounded by two literal `num` cfvo now paints at f·2^20-non-integer interior cells as any lower segment does. The justification (`stage2NumSegmentShape`, `guardBoundaryShapeAt`) narrows with the registration plus its evidence. **Still withheld:** every upper-segment cell of the shape, non-default colour spaces and roundings.
+
+**Reach** (newly painted, all exactly Excel's fill; 0 mispainted):
+
+| Case | Newly painted |
+|---|---|
+| `stage2-scale-num-segment` | 48 |
+| `stage2-scale-scope-disjoint` | 6 |
+| `stage2-scale-upper-whole` | 6 |
+| `stage2-scale-raw-floor` | 4 (F6..F9) |
+| `stage2-scale-literal-lower` | 50 (46 evidence, 4 below-integer controls) |
+| Stage 5 measured cases | 0 (no cell in the shape) |
+
+**Audits.** Stage 2 conformance over the 14 measured cases: 1490 cells; without the evidence 1077 exact, 413 withheld (324 num-segment); as committed 1191 exact, 299 withheld (210 num-segment), 0 violations. `step-plus-one` registered is caught at exactly the 106 census cells where the readings differ. Stage 5 records unchanged.

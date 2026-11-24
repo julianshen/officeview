@@ -42,6 +42,12 @@ in git history.
   - **Reach:** 51 captured cells now match Excel's pixels: the 36 all-equal cells of that capture (at the bottom bound under 0/100, C2:C4 draw no bar, as Excel), `stage3-bar-degenerate` B2:B6 and `stage3-bar-geometry` H2:H6 and I2:I6. No captured cell is mispainted, and no other cell moves.
   - **Still withheld:** a single numeric cell, equal number bounds (num 0/0), number bounds of mixed sign, gradient or bordered bars, formula bounds, the explicit-direction bars on a right-to-left sheet, and percent or percentile bounds over equal values.
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.19 and §14.z.20.
+- **3-colour scales with two number thresholds paint their lower half again.** Cells in the lower segment of a 3-colour scale whose bounds are both literal numbers were withheld at most positions, because Excel had drawn two upper-segment cells of that shape one step off.
+  - **What it showed:** a pre-registered Excel 16.115 capture (`stage2-scale-literal-lower`) drew all 46 test cells in the lower segment exactly as the viewer computes any lower segment, across two palette kinds, both colour orders, five spans and negative, fractional and re-sorted bounds. All 20 control cells drew as expected.
+  - **What changes:** those lower-segment cells are painted at Excel's colour instead of being withheld (`cf-unmeasured-num-segment-fraction`).
+  - **Reach:** 114 captured cells paint exactly; no captured cell is mispainted, and no other cell moves.
+  - **Still withheld:** the upper segment of such a scale, where Excel's drawing is still unexplained.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.21.
 
 ### Added
 

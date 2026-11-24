@@ -1276,7 +1276,7 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
   Production paints the 14 cells of ed0fccb6 and this capture's 67 at Excel's fill. Nothing else moves. Details and reach: `docs/validation/xlsx-cf.md` §14.z.18.
 - **The census with the capture:** `npx tsx scripts/cf-refs/raw-floor-census.ts` covers 856 interior cells and W1 misses 0. `--pre-capture` reproduces §11.1.
 
-## 12. The literal-lower follow-up (`stage2-scale-literal-lower`)
+## 12. The literal-lower follow-up (`stage2-scale-literal-lower`; captured a3f85309, `lower-arithmetic` registered)
 
 The num-segment withhold (`numSegmentUnmeasured`, reason `cf-unmeasured-num-segment-fraction`) withholds every interior cell of a 3-colour segment bounded by two literal `num` cfvo where f·2^20 is not an integer, in both segments. Its founding anomaly (T4/V3 of e448d831, §7) is in the UPPER segment. Owner ruling (2026-11-24): a new pre-registered case, declared **registrable** up front, decides the LOWER segment only; the upper segment stays withheld whatever it shows. Brief: `.superpowers/sdd/cf-literal-lower/brief.md`.
 
@@ -1512,3 +1512,13 @@ npx tsx scripts/cf-refs/audit.ts --stage 2
 ```
 
 The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-literal-lower` (run twice, byte-identical; the manifest change is insertions only). No rule has a single-cell range written as `X2:X2`. The registration rule is §12.2: registrable, and the upper segment stays withheld whatever the capture shows.
+
+### 12.7 Run result (captured, a3f85309, Excel 16.115)
+
+- **Status:** captured (measured). The build opened repair-free; the capture verified at minimum contrast 123, and `--verify-only` re-verified it.
+- **`verifyCfCase`:** `lower-arithmetic` for `scale:num-segment-literal-lower` (discriminating); the twins are non-discriminating.
+- **The capture is sound:** every pixel equals its DisplayFormat fill (180/180); the 10 controls are white; the positive controls show FFF8696B and FF63BE7B; all 86 twins show their fills, the endpoint twins included.
+- **The evidence:** Excel drew `lower-arithmetic` at all 46 evidence cells, in every group; `step-plus-one` at none. Every negative control drew the colour both readings predict.
+- **The upper probes** (record only): 11 of 16 at the step-plus-one colour, 5 at truncation (D11, D12, G8, H9, H10). Production's upper-segment withholds are unchanged.
+- **Registered:** `lower-arithmetic`, as §12.2 says: the `CF_STAGE2_NONDISCRIMINATING` entry is removed, `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`, published through the audit (351 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.21.
+- **The census with the capture:** `npx tsx scripts/cf-refs/literal-lower-census.ts` covers 130 interior cells (114 in the shape) and misses 0. `--pre-capture` reproduces §12.1.
