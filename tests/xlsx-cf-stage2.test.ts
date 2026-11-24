@@ -105,7 +105,8 @@ describe('every enabled scale capability has verified evidence', () => {
     // and is verified: 36 verified. Plus stage2-scale-literal-lower's twins; its question, scale:num-segment-literal-lower,
     // matched lower-arithmetic (a3f85309) and is verified: 37 verified.
     expect(report.summary.verifiedCapabilities).toBe(37)
-    expect(report.summary.unverifiedCapabilities).toBe(21)
+    // Plus stage2-scale-upper-segment's question (registered until its capture) and twins.
+    expect(report.summary.unverifiedCapabilities).toBe(23)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 

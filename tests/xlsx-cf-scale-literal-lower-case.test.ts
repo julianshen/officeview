@@ -132,8 +132,8 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 
 describe('stage2-scale-literal-lower: the case', () => {
   it('is appended last; owns its two ids; the question is registered as lower-arithmetic (its entry removed), the twins stay recorded', async () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-raw-floor', ID])
+    // Appended last at its time; the upper-segment follow-up is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-raw-floor', ID, 'stage2-scale-upper-segment'])
     for (const id of [CAP, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
     expect(CF_STAGE2_NONDISCRIMINATING[TWIN]).toMatch(/./)
