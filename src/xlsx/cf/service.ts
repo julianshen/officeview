@@ -2,7 +2,7 @@ import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
-import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
+import { cfFormulaBoundFifteenDigit, fifteenDigitFormulaBounds, resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
 import { evaluateDataBar, resolveBarThresholds } from './dataBar'
 import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
@@ -113,9 +113,15 @@ function substitutedShape(d: CfVisualDefinition): unknown {
  * A boolean or range result has no reading.
  */
 function substitutedBound(b: CfFormulaBound, result: CfResult, position: 'first' | 'middle' | 'last', kind: CfVisualDefinition['kind'], check: (capability: string) => boolean): CfOutcome<CfScaleBound> {
-  const feed = (value: number): CfOutcome<CfScaleBound> => Number.isFinite(value)
-    ? { kind: 'ready', value: { type: b.cfvo === 'formula' ? 'num' : b.cfvo, value, resolved: 'formula' } }
-    : { kind: 'unresolved', reason: 'cf-formula-nonfinite' }
+  // The formula-bounds follow-up: under a registered `fifteen-digit` reading (with its evidence) a colour scale's formula
+  // result is rounded to 15 significant digits before it feeds the bound (a percent / percentile p before its threshold).
+  const rounded = (value: number): number => (kind === 'colorScale' && fifteenDigitFormulaBounds(check) ? cfFormulaBoundFifteenDigit(value) : value)
+  const feed = (raw: number): CfOutcome<CfScaleBound> => {
+    const value = rounded(raw)
+    return Number.isFinite(value)
+      ? { kind: 'ready', value: { type: b.cfvo === 'formula' ? 'num' : b.cfvo, value, resolved: 'formula' } }
+      : { kind: 'unresolved', reason: 'cf-formula-nonfinite' }
+  }
   if (result.kind === 'number') return typeof result.value === 'number' ? feed(result.value) : { kind: 'unresolved', reason: 'cf-formula-unsupported' }
   if (result.kind !== 'text' && result.kind !== 'blank' && result.kind !== 'error') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
   // Measured only for `type="formula"` bounds on colour scales (stage5-cfvo-formulas L/M/N). Each kind has its own

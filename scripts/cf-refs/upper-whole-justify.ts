@@ -32,7 +32,7 @@
  * longer (`upperWholeShapeAt`, `stage2NumSegmentShape`); formula-bounded upper segments stay justified.
  */
 import { isCellInSqref } from './verify'
-import { CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperNearTopReading, cfUpperSegmentReading, cfUpperWindowReading, type CfLiteralLowerReading, type CfUpperSegmentReading } from '../../src/xlsx/cf/colorScale'
+import { CF_FORMULA_BOUNDS_CAP, CF_FORMULA_BOUNDS_NEAR_TOP_CAP, CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, cfFormulaBoundsReading, CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperNearTopReading, cfUpperSegmentReading, cfUpperWindowReading, type CfFormulaBoundsReading, type CfLiteralLowerReading, type CfUpperSegmentReading } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -93,6 +93,21 @@ export const literalLowerReadingRegistered = (): CfLiteralLowerReading | undefin
   return r !== undefined && hasEvidence(CF_LITERAL_LOWER_CAP) ? r : undefined
 }
 
+/**
+ * The formula-bounds follow-up (stage2-scale-formula-bounds): the formula-bounds reading registered with its evidence
+ * (`cfFormulaBoundsReading`, the registration table only; undefined: none, so formula-bounded cells of the settled shapes stay
+ * justified). Under `fifteen-digit` a formula result is rounded (`independentFifteenDigit`) before its threshold is resolved.
+ */
+export const formulaBoundsReadingRegistered = (): CfFormulaBoundsReading | undefined => {
+  const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
+  return r !== undefined && hasEvidence(CF_FORMULA_BOUNDS_CAP) ? r : undefined
+}
+/** `fifteen-digit`'s rounding restated (production's `cfFormulaBoundFifteenDigit`; a test pins the two equal). */
+export const independentFifteenDigit = (x: number): number => (Number.isFinite(x) ? Number(x.toPrecision(15)) : x)
+/** Whether a segment bounded by `lo` / `hi` is painted in a settled shape: no formula bound, or a formula-bounds reading registered. */
+const formulaBoundsAdmit = (lo: UpperWholeCfvo, hi: UpperWholeCfvo): boolean => (!formulaCfvo(lo) && !formulaCfvo(hi)) || formulaBoundsReadingRegistered() !== undefined
+const opaqueHex = (argb: string): boolean => argb.slice(0, 2).toUpperCase() === 'FF'
+
 /** Whether production's upper-segment reading `r` paints between `from` and `to` (ARGB hex): `index-position` only between two opaque colours. */
 export const upperSegmentReadingPaints = (r: CfUpperSegmentReading | undefined, from: string, to: string): boolean =>
   r !== undefined && (r !== 'index-position' || (from.slice(0, 2).toUpperCase() === 'FF' && to.slice(0, 2).toUpperCase() === 'FF'))
@@ -135,12 +150,15 @@ function independentThresholds(marker: UpperWholeMarker, ref: string, values: Re
   if (scope.length === 0) return undefined
   const min = scope[0]!, max = scope[scope.length - 1]!
   const at = (x: UpperWholeCfvo): number | undefined => {
-    if (x.type === 'formula' || x.f !== undefined) return formulaBound?.(x)
     if (x.type === 'min') return min
     if (x.type === 'max') return max
-    const n = x.val !== undefined && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(x.val.trim()) ? Number(x.val) : undefined
-    if (n === undefined) return undefined
-    if (x.type === 'num') return n
+    // A formula result feeds its cfvo type (a `formula` / `num` bound is the number, a percent / percentile one its p), rounded
+    // first under a registered fifteen-digit reading.
+    const raw = x.type === 'formula' || x.f !== undefined ? formulaBound?.(x)
+      : x.val !== undefined && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(x.val.trim()) ? Number(x.val) : undefined
+    if (raw === undefined) return undefined
+    const n = (x.type === 'formula' || x.f !== undefined) && formulaBoundsReadingRegistered() === 'fifteen-digit' ? independentFifteenDigit(raw) : raw
+    if (x.type === 'num' || x.type === 'formula') return n
     if (x.type === 'percent') return min + (n / 100) * (max - min)
     if (x.type === 'percentile') return percentileInc(scope, n)
     return undefined
@@ -167,7 +185,8 @@ export function upperWholeShapeAt(marker: UpperWholeMarker, ref: string, value: 
   // The upper segment is bounded by cfvo 2 and 3 in either order (the midpoint-above-max re-sort swaps them).
   if (cls === 'window' && !(literalNumCfvo(marker.scale.cfvo[1]!) && literalNumCfvo(marker.scale.cfvo[2]!)) && windowReadingRegistered()) return false
   // The upper-segment follow-up: a registered upper-segment reading (with its evidence) paints both classes unless a bound is a formula.
-  if (cls !== undefined && upperSegmentReadingPaints(upperSegmentReadingRegistered(), marker.scale.colors[1]!, marker.scale.colors[2]!) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)) return false
+  // A formula-bounded segment only with a formula-bounds reading registered with its evidence.
+  if (cls !== undefined && upperSegmentReadingPaints(upperSegmentReadingRegistered(), marker.scale.colors[1]!, marker.scale.colors[2]!) && formulaBoundsAdmit(marker.scale.cfvo[1]!, marker.scale.cfvo[2]!)) return false
   return cls !== undefined
 }
 
@@ -191,7 +210,11 @@ export function upperNearTopShapeAt(marker: UpperWholeMarker, ref: string, value
   const near = [2, 4, 6].some(i => { const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16)); return d !== 0 && d - f * d <= JUSTIFY_TRUNCATION_GUARD })
   if (!near) return false
   const r = upperSegmentReadingRegistered()
-  const painted = upperSegmentReadingPaints(r, from, to) && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)
+  const formula = formulaCfvo(marker.scale.cfvo[1]!) || formulaCfvo(marker.scale.cfvo[2]!)
+  const fr = formulaBoundsReadingRegistered()
+  // A formula-bounded near-top cell: also the formula near-top id at the same formula-bounds reading, with its evidence.
+  const formulaPainted = !formula || (fr !== undefined && cfFormulaBoundsReading(CF_FORMULA_BOUNDS_NEAR_TOP_CAP) === fr && hasEvidence(CF_FORMULA_BOUNDS_NEAR_TOP_CAP))
+  const painted = upperSegmentReadingPaints(r, from, to) && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && formulaPainted
   return !painted
 }
 
@@ -244,5 +267,7 @@ export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, valu
   if (!(value > lo && value < hi)) return false
   const f = independentFraction(value, lo, hi)
   if (f === undefined || !independentGuardBoundary(marker.scale.colors[0]!, marker.scale.colors[1]!, f)) return false
-  return !(guardReadingRegistered() && !bounds.some(formulaCfvo))
+  // A formula-bounded segment is painted only with a formula-bounds reading registered with its evidence, between opaque colours.
+  const formulaOk = !bounds.some(formulaCfvo) || (formulaBoundsReadingRegistered() !== undefined && opaqueHex(marker.scale.colors[0]!) && opaqueHex(marker.scale.colors[1]!))
+  return !(guardReadingRegistered() && formulaOk)
 }
