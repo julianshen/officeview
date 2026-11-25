@@ -1,16 +1,17 @@
 /**
  * Stage 4a Task 16: the compatibility matrix over REAL builds, old/new client x old/new server.
  *
- *   bun scripts/stream-s4/compat-matrix.ts --base 53668e81 [--keep] [--tmp <dir>]
+ *   bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d [--keep] [--tmp <dir>]
  *
- * Every temp file (the base worktree, fixtures, the server launcher) lives in one run directory: a fresh `mkdtemp`
+ * Every temp file (the two worktrees, fixtures, the server launcher) lives in one run directory: a fresh `mkdtemp`
  * under `os.tmpdir()`, or a new subdirectory of `--tmp <dir>`.
  *
- * `--base` is the pre-4a build (main before Stage 4a). The script adds a detached worktree of it, links this
- * checkout's `node_modules` into it, starts the BASE server and the CURRENT server from source (each a separate
- * `bun` process on an OS-picked free port, same docs dir, same origin), runs the legs and prints one PASS/FAIL
- * line per leg. Exit code is non-zero on any FAIL (or a setup failure). The worktree is removed (`git worktree
- * remove --force`, that exact path only, then `git worktree prune`) unless `--keep` is given.
+ * `--base` is the pre-4a build (main before Stage 4a); `--base4a` is the 4a build (Stage 4b's base, main with 4a
+ * merged). The script adds a detached worktree of each, links this checkout's `node_modules` into it, starts the
+ * BASE, the 4A and the CURRENT server from source (each a separate `bun` process on an OS-picked free port, same
+ * docs dir, same origin), runs the legs and prints one PASS/FAIL line per leg. Exit code is non-zero on any FAIL
+ * (or a setup failure). Each worktree is removed (`git worktree remove --force`, that exact path only, then
+ * `git worktree prune`) unless `--keep` is given; no other worktree is touched.
  *
  *   (a) base StreamSession x current server: the manifest has no `sheetMode`/`sheets`/`tiles` (checked on the RAW
  *       wire JSON, not only on the base client's parsed manifest); a unit, a search hit, a copy and a print page arrive;
@@ -20,6 +21,16 @@
  *       arrive, and the base server accepted the HELLO;
  *   (d) a raw HELLO with 17 features (one over HELLO_FEATURES_MAX) closes `unsupported-version`; a 16-feature
  *       control on the same server is accepted, so only the count differs.
+ *
+ * Stage 4b Task 13 (P1, F1, F2):
+ *   (e) the 4A StreamSession (`features: ['sheet-tiles@1']`) x current server: the 4a client's own `validateManifest`
+ *       accepts the manifest, `'sheetView' in raw === false`, its own `decodeSheetLayout` decodes one `sheet-layout`
+ *       (the raw parts carry no session-size keys) and one tile decodes;
+ *   (f) the current DEFAULT client (HELLO `['sheet-view@1']`) x 4a server: units mode (no `sheetMode`), a Stage 3
+ *       search hit and copy arrive;
+ *   (f') the current client with `streamSheets: 'tiles'` (HELLO exactly `['sheet-tiles@1']`) x 4a server: tiles mode,
+ *       `doc.sheets.view === undefined`, one tile decodes;
+ *   (g) the current client with `streamSheets: 'units'` (no `features`) x current server: units, a Stage 3 copy works.
  *
  * KNOWN BUG B1 (predates 4a, not fixed here): in UNITS mode a sheet whose static unit is over 8192 px gets a
  * manifest the client's `validateManifest` rejects (`units.list[i]` is capped 1..8192). `grid500x100` is 6400 x
@@ -37,6 +48,7 @@ import { join, resolve } from 'node:path'
 import { buildXlsx } from '../../src/testdata/ooxml-builders'
 import { Reassembler } from '../../src/stream/frame'
 import { StreamSession as CurrentSession, type TextMessage } from '../../src/stream/remote/session'
+import { openRemoteDocument, type RemoteOfficeDoc } from '../../src/stream/remote/open'
 import { grid500x100 } from '../../server/test/sheet-fixtures'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -48,10 +60,11 @@ const LEG_MS = 120_000
 const argv = process.argv.slice(2)
 const argOf = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
 const BASE = argOf('--base')
+const BASE4A = argOf('--base4a')
 const KEEP = argv.includes('--keep')
 /** `--tmp <dir>`: the parent of this run's directory (must exist or be creatable). Default: a fresh `mkdtemp` under `os.tmpdir()`. */
 const TMP = argOf('--tmp')
-if (!BASE || BASE.startsWith('--')) { console.error('usage: bun scripts/stream-s4/compat-matrix.ts --base <rev> [--keep] [--tmp <dir>]'); process.exit(2) }
+if (!BASE || BASE.startsWith('--') || !BASE4A || BASE4A.startsWith('--')) { console.error('usage: bun scripts/stream-s4/compat-matrix.ts --base <rev> --base4a <rev> [--keep] [--tmp <dir>]'); process.exit(2) }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +97,8 @@ const wsOf = (url: string): WebSocket => new WebSocket(url, { headers: { Origin:
  */
 function tap() {
   const sent: Array<Record<string, unknown>> = []
+  /** Every `sheet-layout` text frame the server sent (raw JSON text), so a leg can inspect the keys on the wire. */
+  const layouts: string[] = []
   let manifest: Record<string, unknown> | undefined
   const waiters: Array<() => void> = []
   const factory = (s: { url: string }) => {
@@ -93,7 +108,7 @@ function tap() {
     const r = new Reassembler({ acceptedVersions: new Set([1]), expects: () => true, decodedCap: (k) => CAPS[k]?.[1] ?? 0, encodedCap: (k) => CAPS[k]?.[0] ?? 0 })
     let inbox = Promise.resolve()
     ws.addEventListener('message', (e) => {
-      if (typeof e.data === 'string') return
+      if (typeof e.data === 'string') { if (e.data.includes('"sheet-layout"')) layouts.push(e.data); return }
       inbox = inbox.then(async () => {
         const res = await r.push(new Uint8Array(e.data as ArrayBuffer))
         if (res?.ok && res.kind === 1 && !manifest) { manifest = JSON.parse(new TextDecoder().decode(res.payload)); for (const w of waiters.splice(0)) w() }
@@ -102,7 +117,7 @@ function tap() {
     return ws
   }
   return {
-    factory, sent,
+    factory, sent, layouts,
     async rawManifest(): Promise<Record<string, unknown>> {
       const deadline = Date.now() + 10_000
       while (!manifest) { if (Date.now() > deadline) throw new Fail('the tap saw no MANIFEST frame'); await new Promise<void>((r) => { waiters.push(r); setTimeout(r, 50) }) }
@@ -268,12 +283,121 @@ async function legD(cur: Server): Promise<string> {
   return `17 features (16 distinct unknowns + ${TILES}) closed ${over.code} = unsupported-version; the 16-feature control was accepted`
 }
 
+// ── Stage 4b legs ────────────────────────────────────────────────────────────
+
+const helloFeatures = (t: ReturnType<typeof tap>) => JSON.stringify(t.sent.find((m) => m.type === 'hello')?.features)
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47]
+
+interface TileClient {
+  sheetLayout(sheetId: string): Promise<{ sheetId: string; viewGen: number; defaults: { colPx: number } }>
+  tiles(req: unknown, onTile: (t: { col: number; row: number; png: Uint8Array }) => void): Promise<{ refused: unknown[]; cancelled: boolean }>
+}
+
+/** A tile (0,0) at zoomStep 5, dpr 1, decoded as a 512x512 image, through a client's own `sheetLayout` and `tiles`. */
+async function oneTile(s: TileClient, sheetId: string): Promise<{ layout: Awaited<ReturnType<TileClient['sheetLayout']>>; size: string }> {
+  const layout = await s.sheetLayout(sheetId)
+  check(layout.sheetId === sheetId && layout.defaults.colPx > 0, 'sheet-layout did not decode')
+  const got: Array<{ col: number; row: number; png: Uint8Array }> = []
+  const res = await s.tiles({ sheetId, viewGen: layout.viewGen, zoomStep: 5, dpr: 1, palette: 'light', tiles: [{ col: 0, row: 0 }] }, (x) => got.push(x))
+  check(res.refused.length === 0 && !res.cancelled, `tiles refused ${JSON.stringify(res.refused)}`)
+  check(got.length === 1 && got[0]!.col === 0 && got[0]!.row === 0, `tiles delivered ${got.length}`)
+  check(PNG_MAGIC.every((b, i) => got[0]!.png[i] === b), 'the tile is not a PNG')
+  const { loadImage } = await import('@napi-rs/canvas')
+  const img = await loadImage(Buffer.from(got[0]!.png))
+  check(img.width === 512 && img.height === 512, `tile decoded as ${img.width}x${img.height}`)
+  return { layout, size: `${img.width}x${img.height}` }
+}
+
+/** (e) the 4A client class (`features: ['sheet-tiles@1']`) against the CURRENT server (F2: its own layout decoder too). */
+async function legE(cur: Server, tree4a: string): Promise<string> {
+  const { StreamSession: Session4a } = await import(resolve(tree4a, 'src/stream/remote/session.ts')) as { StreamSession: typeof CurrentSession }
+  check(Session4a !== CurrentSession, 'the 4a StreamSession is the current class (wrong module)')
+  const t = tap()
+  // `open` runs the 4a client's own `validateManifest`; a manifest it rejects fails the open.
+  const s = await Session4a.open(src(cur, 'grid500x100.xlsx'), { client: t.factory as never, faces: async () => [], features: [TILES] })
+  try {
+    check(helloFeatures(t) === JSON.stringify([TILES]), `the 4a HELLO features ${helloFeatures(t)}`)
+    const raw = await t.rawManifest()
+    check(raw.sheetMode === 'tiles', `raw sheetMode ${String(raw.sheetMode)}`)
+    check((s.manifest as { sheetMode?: unknown }).sheetMode === 'tiles', `4a-parsed sheetMode ${String((s.manifest as { sheetMode?: unknown }).sheetMode)}`)
+    check(!('sheetView' in raw), 'the raw manifest carries sheetView for a sheet-tiles@1-only session')
+    // One sheet-layout, requested and decoded by the 4a client's own `decodeSheetLayout`, then one tile.
+    const { layout, size } = await oneTile(s as unknown as TileClient, '0')
+    check(t.layouts.length >= 1, 'the tap saw no sheet-layout frame')
+    const wire = t.layouts.join('\n')
+    check(!/sessionRows|sessionCols/.test(wire), 'the sheet-layout parts carry session-size keys for a sheet-tiles@1-only session')
+    check(!('sessionRows' in layout) && !('sessionCols' in layout), 'the 4a-decoded layout carries session sizes')
+    return `4a client x current server: 4a validateManifest accepted it, no sheetView on the raw manifest, 4a decodeSheetLayout decoded sheet-layout (${t.layouts.length} part(s), no session-size keys), tile (0,0) decoded ${size}`
+  } finally { s.close() }
+}
+
+const RANGE_ALL = { anchor: { unit: 0, x: 0, y: 0 }, focus: { unit: 0, x: 1e6, y: 1e6 } }
+
+/** (f) the CURRENT default client x the 4A server: units mode, a Stage 3 search hit and copy. */
+async function legF(s4a: Server): Promise<string> {
+  const t = tap()
+  const doc: RemoteOfficeDoc = await openRemoteDocument(src(s4a, 'two-sheet.xlsx'), { client: t.factory as never, faces: async () => [] })
+  try {
+    check(helloFeatures(t) === JSON.stringify(['sheet-view@1']), `the default HELLO features ${helloFeatures(t)}`)
+    check(s4a.proc.exitCode === null, 'the 4a server is gone')
+    const raw = await t.rawManifest()
+    for (const k of ['sheetMode', 'sheets', 'tiles', 'sheetView']) check(!(k in raw) && !(k in doc.manifest), `the manifest carries ${k}`)
+    check(doc.sheets === undefined, 'doc.sheets is set in units mode')
+    const units = await doc.units()
+    check(units.length >= 1, `units ${units.length}`)
+    const found = await doc.search(A1)
+    check(found.total >= 1, `search hits ${found.total}`)
+    const copied = await doc.copy(RANGE_ALL)
+    check(copied.includes(A1), `copy text ${JSON.stringify(copied.slice(0, 80))}`)
+    return `current default client (HELLO sheet-view@1) x 4a server: units mode (no sheetMode), ${units.length} unit(s), ${found.total} search hit(s), copy ${copied.length} chars`
+  } finally { doc.close() }
+}
+
+/** (f') the CURRENT client with `streamSheets: 'tiles'` x the 4A server: tiles mode without the 4b ops. */
+async function legF2(s4a: Server): Promise<string> {
+  const t = tap()
+  const doc: RemoteOfficeDoc = await openRemoteDocument(src(s4a, 'grid500x100.xlsx'), { client: t.factory as never, faces: async () => [], streamSheets: 'tiles' })
+  try {
+    check(helloFeatures(t) === JSON.stringify([TILES]), `the streamSheets 'tiles' HELLO features ${helloFeatures(t)} (F1: exactly sheet-tiles@1)`)
+    const raw = await t.rawManifest()
+    check(raw.sheetMode === 'tiles' && doc.manifest.sheetMode === 'tiles', `sheetMode raw ${String(raw.sheetMode)} / parsed ${String(doc.manifest.sheetMode)}`)
+    check(!('sheetView' in raw), 'the 4a server sent sheetView')
+    check(doc.sheets !== undefined, 'doc.sheets is absent in tiles mode')
+    check(doc.sheets!.view === undefined, 'doc.sheets.view is set against a 4a server')
+    const sheetId = doc.sheets!.list[0]?.sheetId
+    check(sheetId === '0', `sheets.list[0].sheetId ${String(sheetId)}`)
+    const { size } = await oneTile({ sheetLayout: (id) => doc.sheets!.layout(id), tiles: (r, f) => doc.sheets!.tiles(r as never, f) }, sheetId!)
+    return `current client (streamSheets 'tiles', HELLO ${TILES}) x 4a server: tiles mode, doc.sheets.view undefined, tile (0,0) decoded ${size}`
+  } finally { doc.close() }
+}
+
+/** (g) the CURRENT client with `streamSheets: 'units'` x the CURRENT server: units, and a Stage 3 copy. */
+async function legG(cur: Server): Promise<string> {
+  const t = tap()
+  const doc: RemoteOfficeDoc = await openRemoteDocument(src(cur, 'two-sheet.xlsx'), { client: t.factory as never, faces: async () => [], streamSheets: 'units' })
+  try {
+    const hello = t.sent.find((m) => m.type === 'hello')
+    check(hello !== undefined && !('features' in hello), `the units HELLO carried features (${JSON.stringify(hello)})`)
+    const raw = await t.rawManifest()
+    check(JSON.stringify(Object.keys(raw).sort()) === JSON.stringify(STAGE3_KEYS), `raw manifest keys ${JSON.stringify(Object.keys(raw).sort())}`)
+    for (const k of ['sheetMode', 'sheets', 'tiles', 'sheetView']) check(!(k in raw) && !(k in doc.manifest), `the manifest carries ${k}`)
+    check(doc.sheets === undefined, 'doc.sheets is set in units mode')
+    const units = await doc.units()
+    check(units.length >= 1, `units ${units.length}`)
+    const copied = await doc.copy(RANGE_ALL)
+    check(copied.includes(A1), `copy text ${JSON.stringify(copied.slice(0, 80))}`)
+    return `current client (streamSheets 'units', no HELLO features) x current server: units mode, Stage 3 manifest keys, ${units.length} unit(s), copy ${copied.length} chars`
+  } finally { doc.close() }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 
 const runDir = TMP ? resolve(TMP, `compat-matrix-${process.pid}-${Date.now()}`) : mkdtempSync(join(tmpdir(), 'compat-matrix-'))
 const baseTree = resolve(runDir, 'base')
-let worktreeAdded = false
-let cur: Server | undefined, base: Server | undefined
+const tree4a = resolve(runDir, 'base4a')
+/** The worktrees this run added (by path), so cleanup removes exactly those and nothing else. */
+const added: string[] = []
+let cur: Server | undefined, base: Server | undefined, s4a: Server | undefined
 let failed = false
 
 try {
@@ -287,21 +411,28 @@ try {
   ], [A1, 'east quay', 'second sheet text']))
   const launcher = resolve(runDir, 'serve.ts'); writeFileSync(launcher, LAUNCHER)
 
-  const add = await run('git', ['worktree', 'add', '--detach', baseTree, BASE])
-  if (add.code !== 0) throw new Error(`git worktree add failed:\n${add.out}`)
-  worktreeAdded = true
-  symlinkSync(resolve(ROOT, 'node_modules'), resolve(baseTree, 'node_modules'))
-  const head = (await run('git', ['rev-parse', '--short=8', 'HEAD'], baseTree)).out.trim()
-  note(`base worktree ${baseTree} @ ${head}; current ${ROOT}`)
+  for (const [tree, rev] of [[baseTree, BASE], [tree4a, BASE4A]] as const) {
+    const add = await run('git', ['worktree', 'add', '--detach', tree, rev])
+    if (add.code !== 0) throw new Error(`git worktree add ${rev} failed:\n${add.out}`)
+    added.push(tree)
+    symlinkSync(resolve(ROOT, 'node_modules'), resolve(tree, 'node_modules'))
+    const head = (await run('git', ['rev-parse', '--short=8', 'HEAD'], tree)).out.trim()
+    note(`${tree === baseTree ? 'base' : '4a'} worktree ${tree} @ ${head}`)
+  }
+  note(`current ${ROOT}`)
 
-  ;[base, cur] = await Promise.all([startServer('base', baseTree, launcher, docs), startServer('current', ROOT, launcher, docs)])
-  note(`base server ${base.url}; current server ${cur.url}`)
+  ;[base, s4a, cur] = await Promise.all([startServer('base', baseTree, launcher, docs), startServer('4a', tree4a, launcher, docs), startServer('current', ROOT, launcher, docs)])
+  note(`base server ${base.url}; 4a server ${s4a.url}; current server ${cur.url}`)
 
   const legs: Array<[string, () => Promise<string>]> = [
     ['(a)', () => legA(cur!, baseTree)],
     ['(b)', () => legB(cur!)],
     ['(c)', () => legC(base!)],
     ['(d)', () => legD(cur!)],
+    ['(e)', () => legE(cur!, tree4a)],
+    ['(f)', () => legF(s4a!)],
+    ["(f')", () => legF2(s4a!)],
+    ['(g)', () => legG(cur!)],
   ]
   for (const [name, fn] of legs) {
     try { console.log(`PASS ${name} ${await withTimeout(fn(), LEG_MS, name)}`) }
@@ -310,17 +441,19 @@ try {
       console.log(`FAIL ${name} ${e instanceof Fail ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
     }
   }
-  if (failed) for (const s of [base, cur]) if (s) note(`--- ${s.name} server log (tail) ---\n${s.log().split('\n').slice(-15).join('\n')}`)
+  if (failed) for (const s of [base, s4a, cur]) if (s) note(`--- ${s.name} server log (tail) ---\n${s.log().split('\n').slice(-15).join('\n')}`)
 } catch (e) {
   failed = true
   console.log(`FAIL setup ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
 } finally {
-  await stopServer(base); await stopServer(cur)
-  if (worktreeAdded && !KEEP) {
-    const rm = await run('git', ['worktree', 'remove', '--force', baseTree])
-    if (rm.code !== 0) { failed = true; console.log(`FAIL cleanup git worktree remove: ${rm.out}`) }
+  await stopServer(base); await stopServer(s4a); await stopServer(cur)
+  if (added.length && !KEEP) {
+    for (const tree of added) {
+      const rm = await run('git', ['worktree', 'remove', '--force', tree])
+      if (rm.code !== 0) { failed = true; console.log(`FAIL cleanup git worktree remove ${tree}: ${rm.out}`) }
+    }
     await run('git', ['worktree', 'prune'])
-  } else if (worktreeAdded) note(`--keep: base worktree left at ${baseTree}`)
+  } else if (added.length) note(`--keep: worktrees left at ${added.join(', ')}`)
   if (!KEEP) rmSync(runDir, { recursive: true, force: true })
 }
 process.exit(failed ? 1 : 0)

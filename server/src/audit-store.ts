@@ -8,6 +8,7 @@ import type { AuditRowInput } from './audit'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 import type { MarkSpec } from './render'
 import type { SheetClock } from './sheet/clock'
+import type { WireSizes } from './sheet/view-state'
 
 /** §9.3: rows are kept 90 days, then deleted. */
 export const AUDIT_RETENTION_SEC = 90 * 24 * 3600
@@ -27,10 +28,12 @@ export interface DeliveryRecord { sid: string; unitIndex: number; scale: number;
  * applied to. Deduplicated like `DeliveryRecord`.
  */
 export interface TileDeliveryRecord { sid: string; sheetId: string; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: 'light' | 'dark'; col: number; row: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
-/** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7: the identity view in 4a), with the session clock. Write-once. */
-export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: [] }; clock: SheetClock; at: number }
-/** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated. */
-export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
+/** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7; Stage 4b: the session's canonical sizes, `[]` for the identity view), with the session clock. Write-once. */
+export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: WireSizes }; clock: SheetClock; at: number }
+/** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated.
+ * Stage 4b (P8): a sheet copy also carries its wire `sheetId` and `rect`, the bounding source rect of its selection
+ * (`fromUnit`/`toUnit` then hold the sheet index); absent on a units-mode record. No text is stored. */
+export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; sheetId?: string; rect?: { r0: number; c0: number; r1: number; c1: number }; at: number }
 /** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */
 export interface PrintRecord { sid: string; pages: number; fromUnit: number; toUnit: number; scale: 1 | 2; at: number }
 /** One notes image answered to a sid (Stage 3c): the unit, scale and notes characters drawn (0 for a slide without notes). Never deduplicated (C4). */
@@ -72,7 +75,7 @@ CREATE INDEX IF NOT EXISTS deliveries_unit ON deliveries (unit_index);
 CREATE TABLE IF NOT EXISTS tile_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, zoom_step INTEGER NOT NULL, dpr INTEGER NOT NULL, palette TEXT NOT NULL, col INTEGER NOT NULL, row INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen, zoom_step, dpr, palette, col, row, ref_sha256, status));
 CREATE INDEX IF NOT EXISTS tile_deliveries_tile ON tile_deliveries (sheet_id, zoom_step, dpr, palette, col, row);
 CREATE TABLE IF NOT EXISTS sheet_views (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, spec TEXT NOT NULL, clock TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen));
-CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL, sheet_id TEXT, rect TEXT);
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
 CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS prints_sid ON prints (sid);
@@ -136,6 +139,10 @@ export class AuditStore {
     if (!servicesColumns.includes('notes')) db.exec('ALTER TABLE services ADD COLUMN notes INTEGER')
     // One created before piece 5 has no `services.media` column; add it, null = not recorded (reads as media off).
     if (!servicesColumns.includes('media')) db.exec('ALTER TABLE services ADD COLUMN media TEXT')
+    // One created before Stage 4b has no `copies.sheet_id`/`copies.rect`; add them, null = a units-mode copy.
+    const copiesColumns = db.query<{ name: string }, []>('PRAGMA table_info(copies)').all().map((c) => c.name)
+    if (!copiesColumns.includes('sheet_id')) db.exec('ALTER TABLE copies ADD COLUMN sheet_id TEXT')
+    if (!copiesColumns.includes('rect')) db.exec('ALTER TABLE copies ADD COLUMN rect TEXT')
     // The sidecars now exist (WAL mode, schema written). Do not rely on the VFS
     // copying the db's mode, nor on the umask: pre-existing or recreated
     // sidecars hold session rows (IPs, viewer ids) until checkpoint.
@@ -200,11 +207,16 @@ export class AuditStore {
   /** Appends one copy/a11y record (repeats are kept); throws for a sid with no row. */
   putCopy(r: CopyRecord): void {
     this.writable()
-    this.db.query('INSERT INTO copies (sid, kind, paragraphs, from_unit, to_unit, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, r.kind, r.paragraphs, r.fromUnit, r.toUnit, r.at)
+    const rect = r.rect ? JSON.stringify({ r0: r.rect.r0, c0: r.rect.c0, r1: r.rect.r1, c1: r.rect.c1 }) : null
+    this.db.query('INSERT INTO copies (sid, kind, paragraphs, from_unit, to_unit, at, sheet_id, rect) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(r.sid, r.kind, r.paragraphs, r.fromUnit, r.toUnit, r.at, r.sheetId ?? null, rect)
   }
   copies(sid: string): CopyRecord[] {
-    return this.db.query<{ sid: string; kind: CopyRecord['kind']; paragraphs: number; from_unit: number; to_unit: number; at: number }, [string]>('SELECT * FROM copies WHERE sid = ? ORDER BY rowid').all(sid)
-      .map((r) => ({ sid: r.sid, kind: r.kind, paragraphs: r.paragraphs, fromUnit: r.from_unit, toUnit: r.to_unit, at: r.at }))
+    return this.db.query<{ sid: string; kind: CopyRecord['kind']; paragraphs: number; from_unit: number; to_unit: number; at: number; sheet_id: string | null; rect: string | null }, [string]>('SELECT * FROM copies WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({
+        sid: r.sid, kind: r.kind, paragraphs: r.paragraphs, fromUnit: r.from_unit, toUnit: r.to_unit,
+        ...(r.sheet_id !== null ? { sheetId: r.sheet_id } : {}), ...(r.rect !== null ? { rect: JSON.parse(r.rect) as NonNullable<CopyRecord['rect']> } : {}),
+        at: r.at,
+      }))
   }
   /** Appends one print job record (repeats are kept); throws for a sid with no row. */
   putPrint(r: PrintRecord): void {

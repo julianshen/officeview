@@ -38,7 +38,9 @@ export const TILE_RATE = Object.freeze({ perWindow: 600, windowMs: 10_000, burst
 /** TEST and measure only (`StreamServerOptions.rates`): one window replaces a class's windows, its burst included. */
 export type RateOverrides = Partial<Record<'message' | 'tile', { perWindow: number; windowMs: number }>>
 
-export type RateClass = 'message' | 'unit' | 'text' | 'print' | 'notes' | 'media'
+export type RateClass = 'message' | 'unit' | 'text' | 'print' | 'notes' | 'media' | 'sheet'
+/** Stage 4b (parent §14): `sheet-fit` and `sheet-resize` ops per minute per session; refuse-only, never toward 4008. */
+export const SHEET_RATE_PER_MIN = 30
 /** Piece 5 (spec §4.3): `media-request`s per minute per session; refuse-only, never toward 4008, apart from `unit`. */
 export const MEDIA_RATE_PER_MIN = 6
 
@@ -47,7 +49,8 @@ export const MEDIA_RATE_PER_MIN = 6
  * third breach inside 60 s is a CLOSE (4008). A `'text'` overflow is only a
  * refusal: it never counts toward the breach window. `'print'` (Stage 3b):
  * 10 jobs/min, refuse-only like `'text'`. `'notes'` (Stage 3c): 30 notes
- * images/min, refuse-only. `'media'` (piece 5): 6 `media-request`s/min, refuse-only. */
+ * images/min, refuse-only. `'media'` (piece 5): 6 `media-request`s/min, refuse-only. `'sheet'` (Stage 4b): 30
+ * `sheet-fit`/`sheet-resize` ops/min, refuse-only; with `sheetBusy`, the one in flight. */
 export class SessionRates {
   private messages: Window
   private burst: Window | undefined
@@ -57,6 +60,12 @@ export class SessionRates {
   private prints = new Window(PRINT_RATE_PER_MIN, 60_000)
   private notes = new Window(NOTES_RATE_PER_MIN, 60_000)
   private media = new Window(MEDIA_RATE_PER_MIN, 60_000)
+  private sheets = new Window(SHEET_RATE_PER_MIN, 60_000)
+  /**
+   * Stage 4b: the one `'sheet'` op in flight per session. An op sets it before its first await and clears it in a
+   * `finally`; the socket's close and a superseding resume clear it too, so a re-issued op sees a clean flag.
+   */
+  sheetBusy = false
   private breaches = new Window(2, 60_000)
   /** `o` (TEST and measure only): a `message` or `tile` override is that class's only window. */
   constructor(o: RateOverrides = {}) {
@@ -81,6 +90,7 @@ export class SessionRates {
     if (kind === 'print') return this.prints.hit(now) ? 'ok' : 'refuse'
     if (kind === 'notes') return this.notes.hit(now) ? 'ok' : 'refuse'
     if (kind === 'media') return this.media.hit(now) ? 'ok' : 'refuse'
+    if (kind === 'sheet') return this.sheets.hit(now) ? 'ok' : 'refuse'
     const ok = kind === 'unit' ? this.units.hit(now) : ((this.burst?.hit(now) ?? true) && this.messages.hit(now))
     if (ok) return 'ok'
     return this.breaches.hit(now) ? 'refuse' : 'close'

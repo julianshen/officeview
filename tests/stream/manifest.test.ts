@@ -165,3 +165,27 @@ describe('MANIFEST tiles mode (Stage 4a)', () => {
     expect('tiles' in v.manifest).toBe(false)
   })
 })
+
+describe('MANIFEST sheetView (Stage 4b)', () => {
+  const TILES = () => ({ px: 512, zoomSteps: [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4], dprs: [1, 2], palettes: ['light', 'dark'], maxBatch: 64 })
+  const tilesManifest = () => ({ ...exampleManifest(), kind: 'xlsx' as const, sheetMode: 'tiles' as const, sheets: [{ sheetId: '0', name: 'First' }], tiles: TILES() })
+  it('sheetView: 1 with tiles passes', () => {
+    const v = validateManifest({ ...tilesManifest(), sheetView: 1 })
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.sheetView).toBe(1)
+  })
+  it('an absent sheetView is undefined, and the key is absent', () => {
+    const v = validateManifest(tilesManifest())
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.sheetView).toBeUndefined()
+    expect('sheetView' in v.manifest).toBe(false)
+  })
+  it.each([[2], [0], [true], ['1'], [null]])('sheetView %p rejects the manifest', (sheetView) => {
+    expect(validateManifest({ ...tilesManifest(), sheetView })).toEqual({ ok: false, field: 'sheetView' })
+  })
+  it('sheetView: 1 without sheetMode rejects the manifest', () => {
+    expect(validateManifest({ ...exampleManifest(), sheetView: 1 })).toEqual({ ok: false, field: 'sheetView' })
+  })
+})

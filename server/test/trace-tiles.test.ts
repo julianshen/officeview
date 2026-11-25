@@ -153,3 +153,34 @@ describe('traceTiles (R10)', () => {
     await c.h.stop()
   }, 120_000)
 })
+
+describe('traceTiles of a resized view (Stage 4b, P11)', () => {
+  test('a capture of a resized view traces', async () => {
+    const grid = await grid500x100()
+    const path = dbPath(), store = AuditStore.open(path)
+    const h = await start({ doc: grid, keys: keys1, policy: { visibleMark: 'fixed', forensicMark: true }, audit: new AuditTable({ store }) })
+    const sids: string[] = [], tiles = new Map<string, Map<string, Uint8Array>>()
+    const want = [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 1, row: 1 }]
+    // Two sids share one width of column B, the third has another: two references, each rebuilt at its own sizes.
+    for (const px of [150, 150, 230]) {
+      const c = new Client(h.url)
+      const m = await c.hello({ features: ['sheet-view@1'] }); await c.ready()
+      const v = (await c.text({ reqId: 9, type: 'sheet-resize', sheetId: '0', viewGen: 0, axis: 'col', index: 1, size: px })).end
+      if (v.type !== 'sheet-view' || v.viewGen !== 1) throw new Error(`resize: ${JSON.stringify(v)}`)
+      const r = await c.tiles(10, { sheetId: '0', viewGen: 1, zoomStep: ZOOM_STEP, dpr: 1, palette: 'light', tiles: want }, { ms: 60_000 })
+      if (r.end.type !== 'tiles-done' || r.end.refused.length || r.tiles.length !== 4) throw new Error(`tiles: ${JSON.stringify(r.end)}`)
+      const own = new Map<string, Uint8Array>()
+      for (const t of r.tiles) own.set(`${t.col},${t.row}`, t.png)
+      sids.push(m.session.sid); tiles.set(m.session.sid, own)
+      c.close()
+    }
+    expect(store.sheetView(sids[0]!, '0', 1)!.spec.sizes).toEqual([{ axis: 'col', index: 1, px: 150 }])
+    const s: Served = { h, store, path, sids, tiles }
+    for (const owner of [sids[1]!, sids[2]!]) {
+      const a = await traceOf(s, grid, paneCapture(tiles.get(owner)!))
+      console.log('[4b task4] resized lossless', JSON.stringify(brief(a)))
+      expect(a).toMatchObject({ kind: 'traced', sid: owner, target: 'tiles' })
+    }
+    await h.stop()
+  }, 30_000)
+})

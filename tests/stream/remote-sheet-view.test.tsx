@@ -221,3 +221,29 @@ describe('RemoteSheetView (tiles mode)', { timeout: 30_000 }, () => {
     expect(doc.print).not.toHaveBeenCalled()
   })
 })
+
+// Stage 4b Task 10 (P1, S4 §6.11): with `sheetView: 1` the same fake mounts Find and Copy, and selection works.
+describe('RemoteSheetView (tiles mode, 4b sheetView)', { timeout: 30_000 }, () => {
+  it('4b stream mounts Find and Copy', async () => {
+    const { doc, sheets } = fakeDoc()
+    ;(doc.manifest as Record<string, unknown>).sheetView = 1
+    doc.manifest.can.copy = true
+    ;(sheets as { view?: unknown }).view = {
+      find: vi.fn(async () => ({ hits: [], total: 0, truncated: false })), copy: vi.fn(async () => ''), a11y: vi.fn(async () => []),
+      fit: vi.fn(async () => 64), resize: vi.fn(),
+    }
+    const v = view(doc)
+    const g = await grid(v)
+    expect(v.getByRole('searchbox')).toBeTruthy()
+    expect(v.getByRole('button', { name: 'Copy selection' })).toBeTruthy()
+    await waitFor(() => expect(v.container.querySelectorAll('[role="gridcell"]').length).toBeGreaterThan(10))
+    const area = g.firstElementChild as HTMLElement
+    fireEvent.click(g, { clientX: parseFloat(area.style.left) + 64 + 10, clientY: parseFloat(area.style.top) + 20 + 5 })
+    await waitFor(() => expect(g.getAttribute('aria-activedescendant')).toMatch(/-cell-16385$/))
+    expect(g.getAttribute('aria-multiselectable')).toBe('true')
+    expect(v.container.querySelectorAll('[role="gridcell"][aria-selected="true"]')).toHaveLength(1)
+    // Units-mode text ops are still never sent on a tiles session.
+    expect(doc.copy).not.toHaveBeenCalled()
+    expect(doc.search).not.toHaveBeenCalled()
+  })
+})

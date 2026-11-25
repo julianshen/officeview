@@ -439,3 +439,30 @@ describe('sheet request deadlines (fix round 1)', () => {
     expect(await l).toEqual(layout)
   }, 20_000)
 })
+
+/** Stage 4b Task 12 (P1, F1): the HELLO each `streamSheets` value sends. */
+describe('4b default HELLO (P1, F1)', () => {
+  async function helloOf(o: { streamSheets?: 'tiles' | 'units' }) {
+    const socks: FakeSocket[] = []
+    const client = () => { const s = new FakeSocket(); socks.push(s); return s as never }
+    const p = openRemoteDocument({ kind: 'stream', url: 'wss://x/stream' }, { client, faces: async () => [], ...o })
+    void p.catch(() => {})
+    await settle(); socks[0]!.open(); await settle()
+    const hello = socks[0]!.of('hello')[0]!
+    socks[0]!.frame(1, hello.reqId, encodeManifest(unitsManifest()))
+    ;(await p).close()
+    return hello
+  }
+
+  it('openRemoteDocument sends sheet-view@1 by default', async () => {
+    expect((await helloOf({})).features).toEqual(['sheet-view@1'])
+  })
+
+  it('explicit tiles sends exactly sheet-tiles@1', async () => {
+    expect((await helloOf({ streamSheets: 'tiles' })).features).toEqual(['sheet-tiles@1'])
+  })
+
+  it("streamSheets: 'units' sends Stage 3's HELLO", async () => {
+    expect(Object.keys(await helloOf({ streamSheets: 'units' })).sort()).toEqual(['client', 'recVersions', 'reqId', 'type'])
+  })
+})

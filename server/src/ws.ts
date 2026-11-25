@@ -33,6 +33,7 @@ import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthD
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
+import type { SheetTextReply } from './sheet/text-ops'
 import { showBuildGrant, showMorphGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
@@ -42,14 +43,18 @@ import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, p
 import { IpRates, SessionRates, type RateOverrides } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type MediaUnitRefs, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
-import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
+import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, TEXT_MESSAGE_BYTES, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { encodeSheetLayout, encodeTileBody, LayoutTooLarge, MAX_SHEETS, SHEET_NAME_CHARS, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { a11yArgs as sheetA11yArgs, copyArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
+import { sessionLayout, type ServerSheetLayout } from './sheet/layout'
+import { runSheetA11y } from './sheet/a11y-turn'
+import { runSheetCopy } from './sheet/copy-turn'
+import { SessionViews, ViewStateLedger, type WireSizes } from './sheet/view-state'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -57,7 +62,7 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted' | 'unsupported-op' | 'stale-view' | 'layout-too-large'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted' | 'unsupported-op' | 'stale-view' | 'layout-too-large' | 'hidden-target' | 'coverage-unknown' | 'view-state-limit'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
 /**
@@ -86,9 +91,41 @@ const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, X
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
 /** R6: the ops an XLSX tiles session refuses `unsupported-op`. */
 const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 'copy', 'a11y'])
+/** Stage 4b (P1): the ops served only to a `sheet-view@1` session; every other session refuses them `unsupported-op`. */
+const SHEET_VIEW_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y', 'sheet-fit', 'sheet-resize'])
+/** Stage 4b: the SHEET_VIEW_OPS that ride the `'text'` rate class (the rest ride `'sheet'`). */
+const SHEET_TEXT_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y'])
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
+
+/** Stage 4b (P6): a find job's `[row, col]` hits as wire hits of `sheetIndex`, or undefined when any is not a pair of
+ * in-range integers (the caller refuses). */
+function findHits(sheetIndex: number, hits: readonly unknown[]): Array<[number, number, number]> | undefined {
+  const out: Array<[number, number, number]> = []
+  for (const h of hits) {
+    if (!Array.isArray(h) || h.length !== 2) return undefined
+    const [row, col] = h as unknown[]
+    if (!Number.isInteger(row) || !Number.isInteger(col) || (row as number) < 0 || (col as number) < 0 || (row as number) >= SHEET_MAX_ROWS || (col as number) >= SHEET_MAX_COLS) return undefined
+    out.push([sheetIndex, row as number, col as number])
+  }
+  return out
+}
+/** `sheet-find-result` messages of `hits`, each ≤ `limit` bytes of JSON UTF-8; none for no hits. */
+function chunkFindHits(reqId: number, hits: ReadonlyArray<readonly [number, number, number]>, limit = TEXT_MESSAGE_BYTES): Array<{ reqId: number; type: 'sheet-find-result'; hits: Array<readonly [number, number, number]> }> {
+  const base = enc.encode(JSON.stringify({ reqId, type: 'sheet-find-result', hits: [] })).length
+  const out: Array<{ reqId: number; type: 'sheet-find-result'; hits: Array<readonly [number, number, number]> }> = []
+  let cur: Array<readonly [number, number, number]> = [], size = base
+  for (const h of hits) {
+    // ASCII digits, commas and brackets: the JSON length is the UTF-8 length; a separating comma after the first.
+    const n = JSON.stringify(h).length
+    if (cur.length && size + 1 + n > limit) { out.push({ reqId, type: 'sheet-find-result', hits: cur }); cur = []; size = base }
+    size += (cur.length ? 1 : 0) + n
+    cur.push(h)
+  }
+  if (cur.length) out.push({ reqId, type: 'sheet-find-result', hits: cur })
+  return out
+}
 
 export interface StreamServerOptions {
   keys: Keys
@@ -138,6 +175,8 @@ export interface StreamServerOptions {
    * `performance.now()`). Unset, no clock is read. */
   onTileTiming?(t: { t0: number; t1: number; zoomStep: number; dpr: number }): void
   media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
+  /** Stage 4b (P12): the process's view-state ledger (default 16 MiB; tests inject a smaller one). */
+  viewStateLedger?: ViewStateLedger
 }
 
 /** Piece 5 (Task 9): one audio use of the session on one slide: its encode item (`mediaJobsFor`), or the refusal the
@@ -216,7 +255,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4b (P6): the sid's in-flight `sheet-find` (one per sid; a newer one supersedes it). */ sheetFind?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4b (P1): true iff the document is in tiles mode and `features` hold `sheet-view@1`; fixed for the sid (a resume presents the same features). */ sheetView: boolean; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState; /** Stage 4b (S4 §6.3): the sid's per-sheet sizes and `viewGen`; survives resume, disposed at teardown. */ views: SessionViews }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -226,6 +265,12 @@ export function createStreamServer(o: StreamServerOptions) {
    * layout (no cell data). Bounded; the oldest entry goes first. */
   const extents = new Map<string, Promise<SheetExtent>>()
   const EXTENTS_MAX = 1024
+  /** Stage 4b: identity layouts (with the server-only `coverageUnknown`) by the extent's base key, for the extents of
+   * sized views and `sheet-resize`'s checks. Bounded; the oldest entry goes first. */
+  const baseLayouts = new Map<string, Promise<ServerSheetLayout>>()
+  const BASE_LAYOUTS_MAX = 16
+  /** Stage 4b (P12): the process cap on view-state bytes. */
+  const viewLedger = o.viewStateLedger ?? new ViewStateLedger()
   /** sid → §14 scratch lease (≤ 2 Layer-1 encodes in flight). */
   const leases = new Map<string, ScratchLease>()
   const forensicStats = { marked: 0, unmarked: 0, carriers: [] as number[], leased: 0 }
@@ -389,7 +434,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision), sheetMode })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, clock, tiles: { batches: new Map(), slots: new TileSlots(o.pool.admission.caps.perSessionOutstanding), views: new Set() }, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, sheetView: sheetMode === 'tiles' && features.includes(SHEET_VIEW_FEATURE), clock, tiles: { batches: new Map(), slots: new TileSlots(o.pool.admission.caps.perSessionOutstanding), views: new Set() }, views: new SessionViews(viewLedger), copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -431,6 +476,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
     // D1: the superseded socket's close is an implicit media-end (its deliveries stop on their own alive check).
     if (old !== ws) endMedia(sd)
+    // F21: a `'sheet'` op of the old socket is over; the re-issued op sees a clean flag.
+    const rates = sessionRates.get(s.sid); if (rates) rates.sheetBusy = false
     // A job on the old socket cannot continue on the new one.
     if (sd.print) { sd.print.stopped = true; sd.print.wake?.() }
     stopTiles(sd)
@@ -457,9 +504,11 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
+    if (sd?.sheetFind) { sd.sheetFind.stopped = true; sd.sheetFind = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
     if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
     if (sd) stopTiles(sd)
+    sd?.views.dispose()
     endMedia(sd)
     if (sd) releaseDoc(sd.doc.docRef)
   }
@@ -493,6 +542,8 @@ export function createStreamServer(o: StreamServerOptions) {
         sheetMode: 'tiles' as const,
         sheets: (sd.doc.sheets ?? []).map((name, i) => ({ sheetId: String(i), name })),
         tiles: { px: TILE_PX, zoomSteps: [...TILE_ZOOM_STEPS], dprs: [...TILE_DPRS], palettes: [...TILE_PALETTES], maxBatch: TILE_BATCH_MAX },
+        // Stage 4b (P1): only when the client asked for `sheet-view@1` (a 4a-opted session gets 4a's manifest, key for key).
+        ...(sd.sheetView ? { sheetView: 1 as const } : {}),
       } : {}),
     }
     ws.data.phase = 'manifest'
@@ -737,9 +788,15 @@ export function createStreamServer(o: StreamServerOptions) {
     const alive = textAlive(ws, s.sid, sd)
     let parts: object[]
     try {
-      const layout = await o.pool.sheetLayout(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: Number(id), clock: sd.clock }, undefined, ws.data.gone.signal)
+      const base = await o.pool.sheetLayout(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: Number(id), clock: sd.clock }, undefined, ws.data.gone.signal) as ServerSheetLayout
       if (!alive()) return
-      rememberExtent(extentKey(sd, Number(id)), layout)
+      const key = extentKey(sd, Number(id))
+      if (!baseLayouts.has(key)) putBaseLayout(key, Promise.resolve(base))
+      // Stage 4b (P11, F2): a sheet-view session's layout carries its current viewGen and (non-empty) session sizes; any
+      // other session gets the identity layout, key for key 4a's. Read synchronously, so they agree with each other.
+      const sizes = sd.sheetView ? sd.views.canonical(Number(id)) : []
+      const layout = sessionLayout(base, sd.sheetView ? sd.views.viewGen(Number(id)) : 0, sizes)
+      rememberExtent(sizedExtentKey(key, sizes), layout)
       parts = encodeSheetLayout(layout)
     } catch (e) {
       if (!alive()) return
@@ -749,8 +806,11 @@ export function createStreamServer(o: StreamServerOptions) {
     for (const p of parts) send(ws, { reqId, ...p })
   }
 
-  /** Stage 4a (F8): the extent cache key (the layout is the servable snapshot's, keyed like it by the session clock). */
+  /** Stage 4a (F8): the identity layout's cache key (the layout is the servable snapshot's, keyed like it by the session clock). */
   const extentKey = (sd: { doc: DocState; clock: SheetClock }, sheetIndex: number) => `${sd.doc.docRef}|${sd.doc.contentPolicyId}|${sd.doc.fingerprint}|${sheetIndex}|${sd.clock.day}|${sd.clock.timeZone}`
+  /** Stage 4b: the extent cache key of a view: the base key, plus the hash of its canonical sizes when it has any (the
+   * identity view keeps 4a's key). Never the viewGen: two views with equal sizes have one extent. */
+  const sizedExtentKey = (base: string, sizes: WireSizes) => sizes.length ? `${base}|${createHash('sha256').update(JSON.stringify(sizes.map((e) => [e.axis, e.index, e.px]))).digest('hex')}` : base
   function extentOf(layout: StreamSheetLayout): SheetExtent {
     const m = streamSheetGeometry(layout).metrics
     return { colsCss: m.cols.totalCss(), rowsCss: m.rows.totalCss() }
@@ -762,13 +822,26 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** A `sheet-layout` answer gives the sheet's extent for free (the client asks for it before any tile). */
   function rememberExtent(key: string, layout: StreamSheetLayout) { if (!extents.has(key)) putExtent(key, Promise.resolve(extentOf(layout))) }
-  /** The sheet's whole domain in CSS px, built from its layout on the docRef's worker (the same axes `sheet-layout`
-   * gives the client, so the tile grid agrees), once per key. Rejects when the layout cannot be built. The job takes
-   * no socket's abort signal: other sids may await the same promise. */
-  function sheetExtent(sid: string, sd: { doc: DocState; policy: EffectivePolicy; clock: SheetClock }, sheetIndex: number): Promise<SheetExtent> {
+  function putBaseLayout(key: string, p: Promise<ServerSheetLayout>) {
+    baseLayouts.delete(key); baseLayouts.set(key, p)
+    while (baseLayouts.size > BASE_LAYOUTS_MAX) baseLayouts.delete(baseLayouts.keys().next().value!)
+    p.catch(() => { if (baseLayouts.get(key) === p) baseLayouts.delete(key) })
+  }
+  /** Stage 4b: the sheet's identity layout from the docRef's worker, once per key (no socket's abort signal: other
+   * sids may await the same promise). Rejects when the layout cannot be built. */
+  function baseLayout(sid: string, sd: { doc: DocState; policy: EffectivePolicy; clock: SheetClock }, sheetIndex: number): Promise<ServerSheetLayout> {
     const key = extentKey(sd, sheetIndex)
+    let p = baseLayouts.get(key)
+    if (!p) putBaseLayout(key, p = o.pool.sheetLayout(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex, clock: sd.clock }) as Promise<ServerSheetLayout>)
+    return p
+  }
+  /** The sheet's whole domain in CSS px under the view's `sizes`, from its identity layout with the sizes merged (the
+   * same axes `sheet-layout` gives the client, so the tile grid agrees), once per key. Rejects when the layout cannot
+   * be built. */
+  function sheetExtent(sid: string, sd: { doc: DocState; policy: EffectivePolicy; clock: SheetClock }, sheetIndex: number, sizes: WireSizes): Promise<SheetExtent> {
+    const key = sizedExtentKey(extentKey(sd, sheetIndex), sizes)
     let p = extents.get(key)
-    if (!p) putExtent(key, p = o.pool.sheetLayout(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex, clock: sd.clock }).then(extentOf))
+    if (!p) putExtent(key, p = baseLayout(sid, sd, sheetIndex).then((l) => extentOf(sessionLayout(l, 0, sizes))))
     return p
   }
 
@@ -796,10 +869,14 @@ export function createStreamServer(o: StreamServerOptions) {
    * basis (`tileBasisLabel`), the frame, the `tile_deliveries` row, the send; then `tiles-done`. A batch stopped
    * before the rate charge (a `sheet-cancel` during validation) charges and sends nothing but `tiles-done`.
    */
-  async function tilesOp(ws: WS, msg: Record<string, unknown>, sd0: { doc: DocState }, batch: TileBatch) {
+  async function tilesOp(ws: WS, msg: Record<string, unknown>, sd0: { doc: DocState; views: SessionViews }, batch: TileBatch) {
     const reqId = batch.reqId
-    const args = tilesArgs(msg, (sd0.doc.sheets ?? []).length)
+    const args = tilesArgs(msg, (sd0.doc.sheets ?? []).length, (i) => sd0.views.viewGen(i))
     if (typeof args === 'string') return refuse(ws, reqId, args)
+    // Stage 4b: the view's sizes, read in the same tick as its viewGen; the one value this batch's extent, keys, jobs and
+    // `sheet_views` row use. A later resize of the sheet stops the batch (P14).
+    const sizes = sd0.views.canonical(args.sheetIndex)
+    batch.sheetIndex = args.sheetIndex
     const a = await textOp(ws, msg)
     if (!a) return
     const { s, sd } = a
@@ -808,7 +885,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const alive = () => textAlive(ws, s.sid, sd)()
     let extent: SheetExtent
     // A sheet whose layout cannot be built (over an R14 cap, a diagnostic geometry) has no grid to bound tiles on.
-    try { extent = await sheetExtent(s.sid, sd, args.sheetIndex) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    try { extent = await sheetExtent(s.sid, sd, args.sheetIndex, sizes) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
     if (!alive()) return
     if (!tilesInGrid(args, extent)) return refuse(ws, reqId, 'policy-refused')
     const done = (refused: Array<TileCoord & { code: TileRefusalCode }>, retryAfterMs: number) => {
@@ -822,34 +899,35 @@ export function createStreamServer(o: StreamServerOptions) {
     // R7: the view and clock this sid's tiles of the sheet are drawn under, durable before its first tile.
     const viewKey = `${args.sheetId}|${args.viewGen}`
     if (run.length && !sd.tiles.views.has(viewKey)) {
-      try { audit.recordSheetView({ sid: s.sid, sheetId: args.sheetId, viewGen: args.viewGen, spec: { sort: null, filters: [], sizes: [] }, clock: { day: sd.clock.day, timeZone: sd.clock.timeZone } }) } catch { return refuse(ws, reqId, 'policy-refused') }
+      try { audit.recordSheetView({ sid: s.sid, sheetId: args.sheetId, viewGen: args.viewGen, spec: { sort: null, filters: [], sizes }, clock: { day: sd.clock.day, timeZone: sd.clock.timeZone } }) } catch { return refuse(ws, reqId, 'policy-refused') }
       sd.tiles.views.add(viewKey)
     }
     const refused = await runTiles({
       batch, tiles: run, slots: sd.tiles.slots, alive,
-      deliver: (t) => deliverTile(alive, s.sid, sd, args, t, reqId, ws.data.gone.signal),
+      deliver: (t) => deliverTile(alive, s.sid, sd, args, sizes, t, reqId, ws.data.gone.signal),
       send: (frames) => { sendFrames(ws, frames); if (timing) timing({ t0, t1: performance.now(), zoomStep: args.zoomStep, dpr: args.dpr }) },
     })
     done([...refused, ...limited], limited.length ? retryAfterMs : 0)
   }
 
-  /** The canonical-tier key of one tile (S4 §6.5): the §9.3 fields with `policyDetails.viewStateHash` (the identity
-   * view and the session clock), `scaleBucket` = dpr, `unitId` = sheetIndex, and the `tile` field. Never the sid. */
-  function tileKeyFields(doc: DocState, mark: MarkSpec, clock: SheetClock, a: TilesArgs, t: TileCoord): RenderKeyFields {
+  /** The canonical-tier key of one tile (S4 §6.5): the §9.3 fields with `policyDetails.viewStateHash` (the view's sizes,
+   * Stage 4b, and the session clock), `scaleBucket` = dpr, `unitId` = sheetIndex, and the `tile` field. Never the sid
+   * and never the viewGen: sessions with equal sizes share the canonical tile, different sizes never do. */
+  function tileKeyFields(doc: DocState, mark: MarkSpec, clock: SheetClock, a: TilesArgs, sizes: WireSizes, t: TileCoord): RenderKeyFields {
     const unit = keyFields(doc, mark, a.sheetIndex, a.dpr, 'final-raster')
-    return { ...unit, policyDetails: { projection: doc.contentPolicyId, viewStateHash: viewStateHash({ sort: null, filters: [], sizes: [], authorHiddenTier: 'none', clock }) }, tile: { sheetIndex: a.sheetIndex, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row } }
+    return { ...unit, policyDetails: { projection: doc.contentPolicyId, viewStateHash: viewStateHash({ sort: null, filters: [], sizes, authorHiddenTier: 'none', clock }) }, tile: { sheetIndex: a.sheetIndex, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row } }
   }
   /** One tile for a session: the canonical tile (the render cache, else the pool, then cached), Layer-1 over it on
    * the tile's own basis, the frame, then the durable `tile_deliveries` row (forensic sessions, as units). In that
    * order, so a tile over its frame cap leaves no row. `undefined`: the caller died meanwhile (send nothing). */
-  async function deliverTile(alive: () => boolean, sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; clock: SheetClock; forensic?: Issued }, a: TilesArgs, t: TileCoord, reqId: number, signal: AbortSignal): Promise<Uint8Array[][] | TileRefusalCode | undefined> {
+  async function deliverTile(alive: () => boolean, sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; clock: SheetClock; forensic?: Issued }, a: TilesArgs, sizes: WireSizes, t: TileCoord, reqId: number, signal: AbortSignal): Promise<Uint8Array[][] | TileRefusalCode | undefined> {
     // A long batch can outlive the parse: every tile re-charges it.
     if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
     const mark = markOf(sd.policy, sd.decision)
-    const key = renderKey(tileKeyFields(sd.doc, mark, sd.clock, a, t))
+    const key = renderKey(tileKeyFields(sd.doc, mark, sd.clock, a, sizes, t))
     let tile = renderCache.get(key) as RenderedTile | undefined
     if (!tile) {
-      try { tile = await o.pool.tile(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, mark, clock: sd.clock }, TILE_BYTES_ESTIMATE, signal) } catch (e) { return !alive() ? undefined : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
+      try { tile = await o.pool.tile(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, mark, clock: sd.clock, sizes }, TILE_BYTES_ESTIMATE, signal) } catch (e) { return !alive() ? undefined : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
       // Fail closed: only the tile asked for (F24: its palette too) is cached or sent.
       if (tile.w !== TILE_PX || tile.h !== TILE_PX || tile.palette !== a.palette) return 'policy-refused'
       renderCache.put(key, tile, tile.png.length)
@@ -881,6 +959,239 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid) || !isU32(msg.target)) return
     const b = sd.tiles.batches.get(msg.target)
     if (b) b.stopped = true
+  }
+
+  /**
+   * Stage 4b (P11–P14): `sheet-resize {reqId, token, sheetId, viewGen, axis, index, size}` or `{…, reset: true}` on a
+   * `sheet-view@1` session. In order, each failure one `refused` that changes nothing:
+   * - the token (`textOp`);
+   * - the arguments (`resizeArgs`), else `policy-refused`;
+   * - the `'sheet'` rate (refuse-only), then the one `'sheet'` op in flight (`sheetBusy`), both `rate-limited`; the flag
+   *   is set here, before the op's next await, and its `finally` clears it only while this socket still owns the sid
+   *   (a superseded socket's late op never drops the new socket's flag);
+   * - `stale-view` for a `viewGen` other than the sheet's;
+   * - the fingerprint (else close `layout-changed`) and the document ledger, then the sheet's identity layout;
+   * - `hidden-target` when the row or column's authored size is 0 (a collapsed run of the layout);
+   * - `coverage-unknown` under `'visible-only'` when the sheet's coverage is unknown;
+   * - `views.apply`, which may refuse `view-state-limit`.
+   * Then a change stops the sid's tile batches of that sheet (P14: their late tiles carry the old viewGen) and the
+   * answer is `sheet-view {sheetId, viewGen, change}` with the applied (clamped) size. Nothing is applied once the
+   * socket no longer owns the sid.
+   */
+  async function onSheetResize(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = resizeArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    const rates = ws.data.rates
+    if (rates.check('sheet', now()) !== 'ok' || rates.sheetBusy) return refuse(ws, reqId, 'rate-limited')
+    rates.sheetBusy = true
+    try {
+      if (args.viewGen !== sd.views.viewGen(args.sheetIndex)) return refuse(ws, reqId, 'stale-view')
+      if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+      if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+      const alive = textAlive(ws, s.sid, sd)
+      let base: ServerSheetLayout
+      try { base = await baseLayout(s.sid, sd, args.sheetIndex) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      if (!('reset' in args)) {
+        const runs = args.axis === 'row' ? base.collapsedRows : base.collapsedCols
+        if (runs.some((r) => r.start <= args.index && args.index <= r.end)) return refuse(ws, reqId, 'hidden-target')
+      }
+      if (sd.policy.contentPolicy === 'visible-only' && base.coverageUnknown) return refuse(ws, reqId, 'coverage-unknown')
+      // Synchronous from the viewGen re-check to the send: no other op can interleave.
+      if (args.viewGen !== sd.views.viewGen(args.sheetIndex)) return refuse(ws, reqId, 'stale-view')
+      const r = sd.views.apply(args.sheetIndex, 'reset' in args ? { reset: true } : { axis: args.axis, index: args.index, size: args.size })
+      if (r === 'view-state-limit') return refuse(ws, reqId, 'view-state-limit')
+      if (r.viewGen !== args.viewGen) for (const b of sd.tiles.batches.values()) if (b.sheetIndex === args.sheetIndex) b.stopped = true
+      send(ws, { reqId, type: 'sheet-view', sheetId: args.sheetId, viewGen: r.viewGen, change: 'reset' in args ? { reset: true } : { axis: args.axis, index: args.index, size: r.applied! } })
+    } finally {
+      if (owns(ws, s.sid)) rates.sheetBusy = false
+    }
+  }
+
+  /**
+   * Stage 4b (P9, P12): `sheet-fit {reqId, token, sheetId, viewGen, axis, index, pane, regions?}` on a `sheet-view@1`
+   * session. In `onSheetResize`'s order, each failure one `refused` that changes nothing: the token; the arguments
+   * (`fitArgs`), else `policy-refused`; the `'sheet'` rate, then `sheetBusy` (`rate-limited`; set before the next await,
+   * cleared in the `finally` only while this socket owns the sid); `stale-view`; the fingerprint and the document ledger;
+   * `hidden-target` for a collapsed row or column of the identity layout. Then the `sheet-text` fit job over the sheet's
+   * text view at the session's sizes (read in the same tick as the viewGen check), answered `sheet-fit-result {size}`.
+   * No `coverage-unknown`: an unknown-coverage sheet's text view is blank, so it fits to the blank size. Fit never
+   * changes view state; it is served with copy and a11y off.
+   */
+  async function onSheetFit(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = fitArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    const rates = ws.data.rates
+    if (rates.check('sheet', now()) !== 'ok' || rates.sheetBusy) return refuse(ws, reqId, 'rate-limited')
+    rates.sheetBusy = true
+    try {
+      if (args.viewGen !== sd.views.viewGen(args.sheetIndex)) return refuse(ws, reqId, 'stale-view')
+      // The sizes of that viewGen: no resize can land meanwhile (one 'sheet' op in flight).
+      const sizes = sd.views.canonical(args.sheetIndex)
+      if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+      if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+      const alive = textAlive(ws, s.sid, sd)
+      let base: ServerSheetLayout
+      try { base = await baseLayout(s.sid, sd, args.sheetIndex) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      const runs = args.axis === 'row' ? base.collapsedRows : base.collapsedCols
+      if (runs.some((r) => r.start <= args.index && args.index <= r.end)) return refuse(ws, reqId, 'hidden-target')
+      let r: SheetTextReply
+      try {
+        r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'fit', sheetIndex: args.sheetIndex, axis: args.axis, index: args.index, pane: args.pane, ...(args.regions?.length ? { regions: args.regions } : {}), sizes }, undefined, ws.data.gone.signal)
+      } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      // Fail closed: only a fit answer with a finite size travels.
+      if (r.op !== 'fit' || !Number.isFinite(r.size) || r.size < 0) return refuse(ws, reqId, 'policy-refused')
+      send(ws, { reqId, type: 'sheet-fit-result', size: r.size })
+    } finally {
+      if (owns(ws, s.sid)) rates.sheetBusy = false
+    }
+  }
+
+  /**
+   * Stage 4b (P6, F15): `sheet-find {reqId, token, query, matchCase?, scope?}` on a `sheet-view@1` session. In order:
+   * the token (`textOp`); `findArgs`, else `policy-refused` (uncharged); the `'text'` rate (refuse-only, never toward
+   * 4008); the fingerprint (else close `layout-changed`) and the document ledger. Then it supersedes the sid's running
+   * find (answered `sheet-find-done {total: sent, truncated: true}`, as `supersede` does) and waits for its last job.
+   *
+   * Batched by sheet, as `runSearch` batches units: one `sheet-text` find job per sheet in workbook order (or the one
+   * `scope` sheet), each at that sheet's session sizes and with `limit` = 5,000 less the hits sent. Before each job it
+   * re-checks ownership, the stream phase, the session entry and supersession, and re-touches the ledger. Each job's
+   * hits go out as `sheet-find-result {hits: [[sheetIndex, row, col], …]}` chunks (≤ 48 KiB); `sheet-find-done {total,
+   * truncated}` ends the answer, `total` the hits sent and `truncated` true iff more matches existed. Once 5,000 are
+   * sent, later sheets run with `limit` 0, which only asks whether a match exists. Hits never carry text. A pool
+   * failure is a refusal (`rate-limited` for admission, else `policy-refused`) with no done after it.
+   */
+  async function onSheetFind(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const sheetCount = (sd.doc.sheets ?? []).length
+    const args = findArgs(msg, sheetCount)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    const out = (m: object) => send(ws, m)
+    const prev = sd.sheetFind
+    if (prev && !prev.stopped) {
+      prev.stopped = true
+      if (prev.alive()) prev.send({ reqId: prev.reqId, type: 'sheet-find-done', total: prev.sent, truncated: true })
+    }
+    let settle!: () => void
+    const run: SearchRun = { reqId, sent: 0, stopped: false, settled: new Promise<void>((r) => { settle = r }), send: out, alive }
+    sd.sheetFind = run
+    const current = () => !run.stopped && sd.sheetFind === run && alive()
+    const fail = (e?: unknown) => { run.stopped = true; refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') }
+    try {
+      // One find in flight per sid: wait for the superseded run's pool job.
+      if (prev) await prev.settled
+      const sheets = args.scope === 'workbook' ? Array.from({ length: sheetCount }, (_, i) => i) : [Number(args.scope)]
+      let truncated = false
+      for (const sheetIndex of sheets) {
+        if (!current()) return
+        // A long walk can outlive the parse: every job re-charges it.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return fail()
+        const limit = FIND_MAX_HITS - run.sent
+        let r: SheetTextReply
+        try {
+          r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'find', query: args.query, matchCase: args.matchCase, sheetIndex, sizes: sd.views.canonical(sheetIndex), limit }, undefined, ws.data.gone.signal)
+        } catch (e) { return current() ? fail(e) : undefined }
+        if (!current()) return
+        // Fail closed: only validated integer positions travel, rebuilt here (never the reply's own entries).
+        const hits = r.op === 'find' && Array.isArray(r.hits) && r.hits.length <= limit && typeof r.more === 'boolean' ? findHits(sheetIndex, r.hits) : undefined
+        if (!hits || r.op !== 'find') return fail()
+        for (const m of chunkFindHits(reqId, hits)) out(m)
+        run.sent += hits.length
+        if (r.more) { truncated = true; break }
+      }
+      if (current()) { run.stopped = true; out({ reqId, type: 'sheet-find-done', total: run.sent, truncated }) }
+    } finally {
+      run.stopped = true
+      if (sd.sheetFind === run) sd.sheetFind = undefined
+      settle()
+    }
+  }
+
+  /**
+   * Stage 4b (P7, P8): `sheet-copy {reqId, token, sheetId, viewGen, selection}` on a `sheet-view@1` session. In order:
+   * the token (`textOp`); `copyArgs` (the P7 interval-only selection), else `policy-refused` (uncharged: no rate, no
+   * paragraphs); the `'text'` rate (refuse-only); the fingerprint (else close `layout-changed`). Then `runSheetCopy`
+   * queues it on the sid's copy queue: the caps in force (off ⇒ `text-unavailable`), `stale-view` when the sheet's
+   * viewGen is no longer the request's (ruling F8: after the token and the charge, before any count or audit row), the
+   * pool's copy job over the text view at that viewGen's sizes, the 4 MiB cap, the per-copy and session caps, the
+   * audit row (`sheetId`, the bounding `rect`, the sheet index as the unit range), the shared counter and the
+   * `copy-result` chunks. A queued copy re-charges the document ledger when it runs.
+   */
+  async function onSheetCopy(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = copyArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    const i = args.sheetIndex
+    await runSheetCopy({
+      slot: sd, reqId, sheetIndex: i, sheetId: args.sheetId, viewGen: args.viewGen, selection: args.selection,
+      view: () => ({ viewGen: sd.views.viewGen(i), sizes: sd.views.canonical(i) }),
+      caps: () => sd.policy.copy,
+      job: (sizes, maxBytes) => {
+        // A queued copy can outlive the parse: charge it when it runs.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'copy', sheetIndex: i, selection: args.selection, sizes, maxBytes }, undefined, ws.data.gone.signal)
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'copy', ...r }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
+    })
+  }
+
+  /**
+   * Stage 4b (P10): `sheet-a11y {reqId, token, sheetId, viewGen, rows, cols}` on a `sheet-view@1` session, in `onA11y`'s
+   * order: the token (`textOp`); `a11yArgs` (≤ 2,000 cells), else `policy-refused` (uncharged); the `'text'` rate
+   * (refuse-only), charged before the off refusal; `off` ⇒ `text-unavailable`; the fingerprint (else close
+   * `layout-changed`). Then `runSheetA11y` queues it on the sid's copy queue: the mode in force (a `focused` request is
+   * 1×1), `stale-view` when the sheet's viewGen is no longer the request's (ruling F8: after the token and the charge,
+   * before any count or audit row), the pool's a11y job over the text view at that viewGen's sizes, the shared session
+   * quota (`focused` with text), the audit row (`sheetId`, the window's bounding `rect`, the sheet index as the unit
+   * range) and the `sheet-a11y-result` chunks. A queued request re-charges the document ledger when it runs.
+   */
+  async function onSheetA11y(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = sheetA11yArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    // Every valid authenticated a11y request is charged, 'off' sessions included.
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (sd.policy.textA11y === 'off') return refuse(ws, reqId, 'text-unavailable')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    const i = args.sheetIndex
+    await runSheetA11y({
+      slot: sd, reqId, sheetIndex: i, sheetId: args.sheetId, viewGen: args.viewGen, rows: args.rows, cols: args.cols,
+      view: () => ({ viewGen: sd.views.viewGen(i), sizes: sd.views.canonical(i) }),
+      mode: () => sd.policy.textA11y,
+      caps: () => sd.policy.copy,
+      job: (sizes) => {
+        // A queued request can outlive the parse: charge it when it runs.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'a11y', sheetIndex: i, rows: args.rows, cols: args.cols, sizes }, undefined, ws.data.gone.signal)
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'a11y', ...r }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
+    })
   }
 
   /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
@@ -1468,6 +1779,12 @@ export function createStreamServer(o: StreamServerOptions) {
     // Stage 4a (R6): an XLSX tiles session serves no unit or Stage 3 text op (each would render units); print works.
     const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
     if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
+    // Stage 4b (P1): the sheet-view ops need `sheet-view@1` (units mode and a 4a tiles session refuse them).
+    if (SHEET_VIEW_OPS.has(m.type as string) && !sessionDoc.get(ws.data.sid ?? '')?.sheetView) {
+      // Controller ruling: an off-mode find, copy or a11y is charged one 'text' check first (refuse-only, as Stage 3's text ops); fit and resize are not charged.
+      if (SHEET_TEXT_OPS.has(m.type as string) && ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, m.reqId, 'rate-limited')
+      return refuse(ws, m.reqId, 'unsupported-op')
+    }
     // The tile ops (never served in units mode): `sheet-layout` (Task 6), `tiles` and `sheet-cancel` (Task 9).
     if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') {
       if (mode !== 'tiles') return refuse(ws, m.reqId, 'unsupported-op')
@@ -1475,6 +1792,12 @@ export function createStreamServer(o: StreamServerOptions) {
       if (m.type === 'tiles') return onTiles(ws, m)
       return onSheetCancel(ws, m)
     }
+    // Stage 4b: a sheet-view session's ops (the gate above admits only those).
+    if (m.type === 'sheet-resize') return onSheetResize(ws, m)
+    if (m.type === 'sheet-fit') return onSheetFit(ws, m)
+    if (m.type === 'sheet-find') return onSheetFind(ws, m)
+    if (m.type === 'sheet-copy') return onSheetCopy(ws, m)
+    if (m.type === 'sheet-a11y') return onSheetA11y(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
@@ -1540,6 +1863,8 @@ export function createStreamServer(o: StreamServerOptions) {
         if (!sid) return
         const s = table.get(sid)
         if (!s || s.activeSocket !== (ws as unknown)) return
+        // F21: the one `'sheet'` op in flight dies with its (active) socket; a superseded socket's close leaves the new one's flag alone.
+        ws.data.rates.sheetBusy = false
         // D1: a socket close is an implicit media-end, a detach included (a resume sends media-show again).
         endMedia(sessionDoc.get(sid))
         if (!serverClosed && (code === 1001 || code === 1006) && (s.status === 'manifest' || s.status === 'stream')) return detach(sid)
@@ -1559,6 +1884,10 @@ export function createStreamServer(o: StreamServerOptions) {
     hiddenOf: (sid: string) => sessionDoc.get(sid)?.doc.hidden,
     /** TEST-ONLY: the sid's session clock (Stage 4a, R9). */
     sheetClockOf: (sid: string) => sessionDoc.get(sid)?.clock,
+    /** TEST-ONLY: whether the sid serves the 4b sheet-view ops (Stage 4b, P1). */
+    sheetViewOf: (sid: string) => sessionDoc.get(sid)?.sheetView,
+    /** TEST-ONLY: the sid's per-session rate state (Stage 4b, F21). */
+    sheetRatesOf: (sid: string) => sessionRates.get(sid),
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */

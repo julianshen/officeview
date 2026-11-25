@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto'
 import type { TilePalette } from '../../src/stream/sheet-wire'
 import type { SheetClock } from './sheet/clock'
+import type { WireSizes } from './sheet/view-state'
 
 export const RENDER_CACHE_BYTES = 512 * 1024 * 1024
 export const DOCUMENT_CACHE_BYTES = 1024 * 1024 * 1024
@@ -47,11 +48,12 @@ export function renderKey(f: RenderKeyFields): string {
   return h.digest('hex')
 }
 
-/** Stage 4a (S4 §6.3, §6.5): the view a sheet tile is drawn under — the identity view in 4a — with the session clock. */
-export interface SheetViewState { sort: null; filters: []; sizes: []; authorHiddenTier: 'none'; clock: SheetClock }
+/** Stage 4a (S4 §6.3, §6.5): the view a sheet tile is drawn under, with the session clock. Stage 4b: `sizes` are the
+ * session's canonical sizes (`[]` is the identity view, which hashes exactly as in 4a). */
+export interface SheetViewState { sort: null; filters: []; sizes: WireSizes; authorHiddenTier: 'none'; clock: SheetClock }
 /** The SHA-256 hex of the canonical JSON of `v` (only its listed fields): `policyDetails.viewStateHash` of a tile key. */
 export function viewStateHash(v: SheetViewState): string {
-  const view = { sort: v.sort, filters: v.filters, sizes: v.sizes, authorHiddenTier: v.authorHiddenTier, clock: { day: v.clock.day, timeZone: v.clock.timeZone } }
+  const view = { sort: v.sort, filters: v.filters, sizes: v.sizes.map((e) => ({ axis: e.axis, index: e.index, px: e.px })), authorHiddenTier: v.authorHiddenTier, clock: { day: v.clock.day, timeZone: v.clock.timeZone } }
   return createHash('sha256').update(canonical(view)).digest('hex')
 }
 

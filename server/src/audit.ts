@@ -107,7 +107,8 @@ export class AuditTable {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putSheetView({ ...r, at: Math.floor(Date.now() / 1000) })
   }
-  /** One copy (or counted a11y answer) is about to go to `sid`: durable before the send. Throws for an unknown or expired sid. */
+  /** One copy (or counted a11y answer) is about to go to `sid`: durable before the send (a sheet copy with its `sheetId` and
+   * bounding `rect`, Stage 4b P8). Throws for an unknown or expired sid. */
   recordCopy(r: Omit<CopyRecord, 'at'>): void {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putCopy({ ...r, at: Math.floor(Date.now() / 1000) })

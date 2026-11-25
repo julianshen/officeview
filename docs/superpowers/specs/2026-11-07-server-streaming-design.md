@@ -379,6 +379,24 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    resume whose decision resolves to another zone closes `auth-failed`. It
    lives on the session entry beside `features`, not in the effective
    policy.
+   *Amendment (2026-11-24, Stage 4b, as built; S4 design §6.10 and "As
+   built (4b)" P1, F1, F2, F19):* a second feature, `sheet-view@1`, also
+   selects tiles mode for an XLSX document, and adds `sheetView: 1` to the
+   tiles manifest (never to a units manifest, a DOCX or a PPTX, or a
+   document that falls back to units). The client rejects any other
+   `sheetView` value, and `sheetView` without `sheetMode`. Only a
+   `sheetView` session is served `sheet-find`, `sheet-copy`, `sheet-a11y`,
+   `sheet-fit` and `sheet-resize`; every other session refuses them
+   `unsupported-op` (the three text ops are charged one `'text'` check
+   first). `sheet-tiles@1` alone gives 4a's manifest and 4a's
+   `sheet-layout` bytes, key for key: session sizes travel only to a
+   `sheetView` session. The client's default HELLO carries exactly
+   `['sheet-view@1']`; the host option `streamSheets: 'tiles'` sends exactly
+   `['sheet-tiles@1']` (4a behaviour), and `'units'` sends no `features`.
+   A 4a server ignores `sheet-view@1`, so a default 4b client gets units
+   mode with Stage 3 text there. The server closes a resume whose
+   `features` differ `auth-failed` (4a); the client also ends a session
+   whose resumed manifest changes `sheetView`, `layout-changed`.
 2. **Version compatibility is set intersection** — the server picks a version
    it supports **from the client's set**; the empty intersection closes with
    `unsupported-version` (never a downgraded guess).
@@ -489,9 +507,12 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `print-too-large` | op refusal, never a CLOSE (added 2026-11-13, Stage 3b); carries `limit` and `requested` over `maxPages`, neither when the job fits at no print scale | a print job over `maxPages`, or one whose pages fit neither scale 2 nor scale 1 (`planPrint`); the client also fails a job locally with this code (no `limit`) over its 192 MiB blob ceiling (Stage 3 design §4.2) |
    | `print-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-13) | a print job that would take the session's printed pages past `maxSessionPages` |
    | `invalid-unit` | op refusal, never a CLOSE (added 2026-11-14, Stage 3c) | a `notes` request for a unit out of range, not an integer, or a hidden slide (Stage 3 design §4.3) |
-   | `unsupported-op` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | an op the session's sheet mode does not serve: `unit`, `search`, `select`, `copy` or `a11y` on an XLSX tiles session, or `tiles`, `sheet-layout` or `sheet-cancel` on a units session (S4 design R6) |
-   | `stale-view` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a well-formed `tiles` request whose `viewGen` is not the session's current view (always 0 in 4a) |
+   | `unsupported-op` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | an op the session's sheet mode does not serve: `unit`, `search`, `select`, `copy` or `a11y` on an XLSX tiles session, or `tiles`, `sheet-layout` or `sheet-cancel` on a units session (S4 design R6); widened 2026-11-24 (Stage 4b): `sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` on a session without `sheetView` |
+   | `stale-view` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a well-formed `tiles` request whose `viewGen` is not the session's current view (always 0 in 4a); widened 2026-11-24 (Stage 4b): a `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` whose `viewGen` is not the sheet's current one. It never advances `viewGen`, and a refused copy or a11y read is neither counted nor audited |
    | `layout-too-large` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a `sheet-layout` over a list cap (65,536 entries per list, 1,024 filter ranges) or over 64 messages (S4 design R14) |
+   | `hidden-target` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` or `sheet-fit` of an author-hidden (collapsed) row or column, as locally ("is hidden; it cannot be resized") |
+   | `coverage-unknown` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` under `visible-only` on a sheet whose drawing coverage is unknown (unresolved anchors, an unbounded effect, an uncomputable transform); 4c adds sort and filter |
+   | `view-state-limit` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` past 4,096 sized indices per axis per sheet, or past the 16 MiB process view-state ledger (§14 amendment) |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -615,6 +636,25 @@ session (§18 Never carries the same qualification).
   refused `unsupported-format` under `visible-only`; it now opens, **in
   units mode too**. A genuinely unknown `state` flag elsewhere still fails
   closed.
+
+*Amendment (2026-11-24, Stage 4b, as built; S4 design §10 item 1, owner
+confirmation of 2026-11-23, "As built (4b)" P2–P5):*
+- **Merge-covered and undrawn cells are blank to text answers, and are
+  blanked in one accessor, not in `projectXlsx`.** Under `visible-only`,
+  `sheetTextView` (`server/src/sheet/text-view.ts`) gives the only sheet
+  that find, copy, a11y and fit read. In it these cells are blank: the
+  non-anchor cells of a merge; a non-empty cell whose formatted display
+  text is `''` under its CF-effective style (`;;;` and the like); a cell
+  whose data bar or icon set has `showValue="0"`; and the base-covered and
+  current-view-covered cells (§12 amendment). Tiles and units mode keep the
+  merge-tail and undrawn values, so nothing visible changes and units-mode
+  formulas and CF are unaffected. Tile-side CF (colour-scale anchors, data
+  bars) still reads merge-tail values.
+- **Fail closed.** Unknown coverage blanks every cell of the sheet for text
+  answers. A CF text scope that is refused, over budget or throws blanks
+  every cell of every CF range of that sheet; a CF batch that is missing
+  blanks every cell of each `showValue="0"` rule.
+- Under `'full'` the text view is the identity.
 
 The client never participates; it renders what arrives.
 
@@ -1162,6 +1202,20 @@ tiles; the presenter notes sidecar namespace
   byte-identical to Stage 3's (a golden pins it). Canonical tiles are
   pre-forensic and live in the render cache under the same 512 MiB
   ceiling; a tile key can never equal a unit key.
+- *Amendment (2026-11-24, Stage 4b, as built; S4 design §6.3, §10 item 5,
+  "As built (4b)" P11, P12):* `sizes` in `viewStateHash` are the session's
+  `WireSizes` (`server/src/sheet/view-state.ts`): a canonical list with
+  `col` entries before `row` entries, each ascending by index, every size
+  clamped by `clampSize`. An unresized sheet hashes exactly as 4a's
+  identity view (a golden pins it). A resize advances the sheet's
+  `viewGen`, and the tile key, the pool job, the `sheet_views` row and the
+  tracer's rebuild all read one sizes snapshot taken in the same tick, so
+  two sids with equal sizes and clock share canonical tiles and different
+  sizes never do. The sid is still never in the hash. View state lives per
+  `(sid, sheet)`, survives a resume and is purged at teardown. Per
+  document, the server caches 8 sized geometries and 16 text views (keyed
+  by sheet, clock and `sha256(sizes)`); the stream server keeps 16
+  identity layouts for its size checks.
 
 ### 9.4 Marks: visible + forensic, per session (normative)
 
@@ -1243,6 +1297,25 @@ pairs.
   audited, and removes the textarea at once. As built, the join rule is
   Stage 3 design §4.1 amendment item 4, and the §7.7 decoration exemption
   applies.
+- *Amendment (2026-11-24, Stage 4b, as built; S4 design §6.7, §10 item 2,
+  "As built (4b)" P2, P6–P10, P16):* **for sheets the analytic rule is the
+  sole join rule.** A cell's text is servable iff it is non-blank in the
+  text view (§6.4 and §12 amendments). No answer depends on which tiles a
+  session scrolled through, so the same request gives the same answer from
+  any scroll history (tested from three histories). The ink rule ("where a
+  visual pass exists") is a **test oracle** only: every cell whose ink an
+  authored render changes, with drawings on against drawings off, must
+  already be blank in the text view. A counterexample is fixed by widening
+  the analytic rule, never by consulting tiles at answer time. On the T8
+  fixtures the oracle is evidence; on the current corpus it is not, because
+  no corpus XLSX has a drawing over text. The answers run the local engines
+  (`WorkbookFind`, `serializeSelection`, `formatCellPresentation`,
+  `autoFitSize`) in the pool worker over the text view, so parity holds by
+  construction. Find answers carry positions only (`[sheetIndex, row,
+  col]`), never hit text; copy is formatted display text as TSV, with one
+  empty field per withheld cell; a11y lists only servable non-empty cells.
+  The client builds no `WorkbookFind` and calls no `copySelection` for a
+  stream (spy-tested).
 
 ## 12. XLSX in stream mode
 
@@ -1319,6 +1392,28 @@ pairs.
   `:545` and `:808`. `SheetTileRenderer` is
   `src/components/xlsx/sheetTiles.ts:158` and `renderSheetViewport` is
   `src/xlsx/view/renderViewport.ts:188`.
+
+*Amendment (2026-11-24, Stage 4b, as built; S4 design §10 items 2 and 3,
+"As built (4b)" P5, P16):*
+- **The join for sheet answers** is the analytic rule alone; the ink rule
+  is a test oracle (§11 amendment). This replaces "where a visual pass
+  exists" for every sheet answer: find, copy, a11y and fit now, filter
+  values in 4c.
+- **Covered stays covered, the answers half.** A base-covered cell is blank
+  to every answer for the session, also after a resize uncovers it. A cell
+  covered only in the **current** view (a resize slid it under a one-cell
+  anchor) is blank to text answers too: the server measures coverage again
+  on the projected, unblanked sheet with its drawings placed by the
+  session's sizes, and the union of the two coverages is blank. A current
+  view whose coverage is unknown blanks every cell. Tiles stay
+  base-blanked only, because a current-view-covered cell is already
+  covered on screen. Sort and filter keys, which use base coverage only,
+  are 4c's.
+- **4b's interactions:** selection and keyboard navigation are
+  client-only, under authored frozen panes (the viewer has no freeze
+  command). `sheet-resize` and `sheet-fit` are per-session view state
+  (§9.3 amendment); `sheet-find`, `sheet-copy` and `sheet-a11y` are the
+  §11 answers. Sort, filter and value lists are 4c.
 
 ## 12a. Presentation mode for streamed decks
 
@@ -1805,6 +1900,29 @@ outcomes.
   to the moment its last fragment is handed to the socket, one tile per
   request, serially, warm document cache, cold render cache, mark on
   (`docs/validation/streaming-s4a.md`).
+  *Amendment (2026-11-24, Stage 4b, as built; S4 design §6.8, §10 item 4,
+  "As built (4b)" P12, P12a, F17):*
+  - **`'sheet'`** is a new per-sid class: `SHEET_RATE_PER_MIN` = 30 ops per
+    minute (sliding window) and one op in flight, covering `sheet-fit` and
+    `sheet-resize` in 4b (4c adds sort, filter, `filter-values` and
+    `range-detect`). It is refuse-only: an overflow, and an op sent while
+    one is in flight, are refused `rate-limited`, and neither counts toward
+    the 4008 breach window. The class is charged before the in-flight
+    check. A malformed request is refused `policy-refused` uncharged. A
+    fit is two ops (`sheet-fit`, then `sheet-resize`).
+  - **`'text'`** (60/min) also covers `sheet-find`, `sheet-copy` and
+    `sheet-a11y`, including those refused off-mode (`unsupported-op`) and
+    a11y refused `text-unavailable`.
+  - **View-state ceiling.** At most 4,096 sized indices per axis per sheet
+    (`MAX_SESSION_SIZES`, the local cap), and a 16 MiB process ledger at
+    128 B per entry; past either, `view-state-limit`. Charging view state
+    to the document-cache admission (S4 design §6.3, "required") is
+    deferred to 4c, whose sort bands need it; 4b's view state is at most
+    1 MiB per sheet.
+  - **Client pacing.** One `sheet-resize` in flight per viewer, key-repeat
+    steps folded into one pending target; a find sent 250 ms after the last
+    keystroke, a newer one superseding it; a11y windows fetched after a
+    250 ms rest (unit) or 400 ms (focused), at most 30 requests per 60 s.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1844,6 +1962,20 @@ outcomes.
   `u32 w, u32 h, u32 pngLen, PNG` with `w = h = 512`. `zoomStep` indexes the
   11 `SHEET_ZOOM_STEPS`, `dpr` ∈ {1, 2}. `sheet-cancel { target }` stops a
   batch; an unknown target is ignored. Every new text message is ≤ 64 KiB.
+
+  *Amendment (2026-11-24, Stage 4b, as built; S4 design §6.7, §6.8):* the
+  4b requests (`sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit`,
+  `sheet-resize`) are ≤ 64 KiB each; a find query is ≤ 256 UTF-16 units; a
+  selection holds ≤ 256 ranges; an a11y request asks ≤ 2,000 cells. Every
+  answer message (`sheet-find-result`, `sheet-find-done`,
+  `sheet-a11y-result`, `sheet-fit-result`, `sheet-view`, and `copy-result`
+  for a sheet copy) is ≤ 48 KiB, chunked with `seq`/`last` where it can be
+  larger. A find sends ≤ 5,000 hits; a copy is ≤ 4 MiB of UTF-8, refused
+  `copy-too-large` beyond, never truncated. The client checks every answer
+  against its request (hits on listed sheets, a11y cells inside the asked
+  window and not repeated, `total` equal to the hits delivered, a
+  `sheet-view` for the asked sheet and line), and a bad answer fails only
+  that request.
 
   *Amendment (2026-11-14, Stage 3 piece 4, D1):* one charged show request
   may answer with **several** `SHOW_PLAN` messages under its `reqId`, each
@@ -2275,6 +2407,28 @@ render pipeline.
     - (d) Open, pre-existing (units mode): an XLSX unit over 8192 px gives
       a manifest the client rejects, so such a workbook does not open in
       units mode. Tiles mode advertises the refusal unit for it (5d6fc8d7).
+
+14. **Stage 4b sheet text as built (2026-11-24; S4 design §10 item 6 and
+    "As built (4b)"; `docs/validation/streaming-s4b.md`).**
+    - (a) **Fit reveals a width bound of servable text.** A fit answers the
+      size the local `autoFitSize` gives over servable cells. The viewer
+      can already scroll to that text; fit is on for every session, copy
+      off included, under the `'sheet'` rate.
+    - (b) Find answers positions only, but repeated probing can still
+      reconstruct text, with copy off too (item 9); `'text'` limits the
+      rate.
+    - (c) Tile-side CF still reads merge-tail values, so a tail value can
+      move a colour-scale or data-bar result that paints. Text answers
+      never carry it.
+    - (d) The ink oracle is proven on fixtures only; the current corpus has
+      no XLSX with a drawing over text, so on the corpus it checks nothing.
+    - (e) A whole-sheet select-all copy is refused `copy-too-large`, as it
+      is locally. Copy the used range instead.
+    - (f) Server fit has no browser layout for wrapped or rotated rows; it
+      uses the local wrapped-lines estimate, so such a row's fitted height
+      may differ from a local browser fit.
+    - (g) A host that opted into 4a with `streamSheets: 'tiles'` gets no
+      4b text until it drops the option.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

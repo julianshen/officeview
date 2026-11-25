@@ -22,6 +22,8 @@
  *   ?doc=million-rows|grid500x100|frozen (Stage 4a Task 14): the synthetic workbooks of server/test/sheet-fixtures.ts
  *          (`millionRows`, `grid500x100`, `frozenMerges`) instead of a corpus file. Tiles mode is the client's choice
  *          (its HELLO `features`): the harness page maps its own `?sheets=tiles` to `streamSheets: 'tiles'`.
+ *   ?doc=text-grid|slid-under-anchor (Stage 4b Task 12): `textGrid` and `slidUnderAnchor` of the same file, for the
+ *          default client (`sheet-view@1`; the harness page's `?sheets=view`).
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity; `media`: the ffmpeg probe passed)
  *
@@ -35,7 +37,7 @@ import { createMediaServices, MEDIA_ENABLED_DEFAULT } from '../src/media/service
 import { Pool } from '../src/pool'
 import { createStreamServer } from '../src/ws'
 import { cubeDeck, flyInDeck, morphDeck, narrationDeck, navDeck, stillSoundDeck, transitionSoundDeck, videoDeck } from '../../src/testdata/show-decks'
-import { frozenMerges, grid500x100, millionRows } from './sheet-fixtures'
+import { frozenMerges, grid500x100, millionRows, slidUnderAnchor, textGrid } from './sheet-fixtures'
 
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `http://localhost:${process.env.IV_HARNESS_PORT ?? 4173}`]
@@ -60,8 +62,12 @@ const DECKS = {
   // Piece 5 Task 14 (X26): `video` is kept only for the D22 still check.
   video: videoDeck(), narration: narrationDeck(), 'transition-sound': transitionSoundDeck(),
 } as const
-/** TEST-ONLY `?doc=million-rows|grid500x100|frozen` (Stage 4a Task 14): synthetic workbooks, built once. */
-const SHEET_DOCS = { 'million-rows': millionRows(), grid500x100: grid500x100(), frozen: frozenMerges() } as const
+/** TEST-ONLY `?doc=million-rows|grid500x100|frozen` (Stage 4a Task 14) and `text-grid|slid-under-anchor` (Stage 4b
+ * Task 12): synthetic workbooks, built once. */
+const SHEET_DOCS = {
+  'million-rows': millionRows(), grid500x100: grid500x100(), frozen: frozenMerges(),
+  'text-grid': textGrid(), 'slid-under-anchor': slidUnderAnchor(),
+} as const
 const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
 const hooks = {
   ...demo,

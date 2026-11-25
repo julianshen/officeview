@@ -34,7 +34,7 @@ import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from '.
 import { MediaSendLog } from './media-pacing'
 import { UNIT_FIRST_CAP, UNIT_RESEND_CAP, UNIT_SPAN_MS, UnitSendLog, type UnitBudgetView } from './unit-budget'
 import { SheetChannel, type DecodedTile, type TilesRequest, type TilesResult } from './sheet-channel'
-import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
+import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, SHEET_TEXT_TYPES, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 export type { PrintedPage } from './print-wire'
@@ -341,8 +341,10 @@ interface MediaShowReq {
 }
 
 /** Re-issued after a resume; copy and a11y are not (the server may already
- * have counted them against the copy quota). */
-const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
+ * have counted them against the copy quota). Stage 4b (P13): `sheet-find` and
+ * `sheet-fit` are re-issued; `sheet-copy`, `sheet-a11y` (counted, audited) and
+ * `sheet-resize` (it may have advanced the view) are not. */
+const REISSUED = new Set<TextRequest['type']>(['search', 'select', 'sheet-find', 'sheet-fit'])
 
 const abortError = () => Object.assign(new Error('The stream session was closed.'), { name: 'AbortError' })
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
@@ -501,10 +503,17 @@ export class StreamSession {
    * select with code 'closed' (the server sends it nothing more). On resume a
    * sent search/select is re-issued — `on` first receives `{ type: 'restart' }`
    * — while a sent copy/a11y rejects with 'session-rotated' and is never re-issued.
+   *
+   * Stage 4b: the `sheet-*` ops are sent only on a `sheet-view@1` session (else
+   * `unsupported-op`, without sending). A newer `sheet-find` supersedes an older
+   * one ('closed'), as the server does. On resume `sheet-find` and `sheet-fit`
+   * are re-issued; `sheet-copy`, `sheet-a11y` and `sheet-resize` reject
+   * 'session-rotated' (P13).
    */
   async text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     if (signal?.aborted) throw signal.reason ?? abortError()
+    if (SHEET_TEXT_TYPES.has(request.type) && (this.manifest.sheetMode !== 'tiles' || this.manifest.sheetView !== 1)) throw new StreamSessionError('unsupported-op', 'this session does not serve the sheet-view ops')
     return new Promise<void>((resolve, reject) => {
       // The one settlement path: idempotent, drops the request and its abort listener.
       let settled = false
@@ -524,6 +533,9 @@ export class StreamSession {
       signal?.addEventListener('abort', onAbort, { once: true })
       if (request.type === 'select') {
         for (const r of [...this.texts.values()]) if (r.request.type === 'select') r.reject(new StreamSessionError('closed', 'superseded by a newer select'))
+      }
+      if (request.type === 'sheet-find') {
+        for (const r of [...this.texts.values()]) if (r.request.type === 'sheet-find') r.reject(new StreamSessionError('closed', 'superseded by a newer find'))
       }
       this.issueText(req)
     })
@@ -1419,7 +1431,7 @@ export class StreamSession {
     }
     // Over-limit answers fail closed (never truncated); the session carries on.
     if (bytes > TEXT_MESSAGE_BYTES) return req.reject(new StreamSessionError('policy-refused', `${String(m.type)} message over 48 KiB of UTF-8`))
-    const msg = textMessage(req.request.type, m, req.seq, this.manifest.units.count)
+    const msg = textMessage(req.request, m, req.seq, { unitCount: this.manifest.units.count, sheetCount: this.manifest.sheets?.length ?? 0 })
     if (!msg) return req.reject(new StreamSessionError('policy-refused', `malformed ${String(m.type)} answer`))
     const over = admit(req.tally, msg)
     if (over) return req.reject(new StreamSessionError('policy-refused', over))
@@ -1711,7 +1723,9 @@ export class StreamSession {
     if (this.state !== 'resuming') return
     if (m.docRef !== prior.docRef || m.layoutFingerprint !== prior.layoutFingerprint || m.session.sid !== prior.session.sid || m.units.count !== prior.units.count
       // Stage 4a: the sheet mode and its sheet list are fixed for the sid.
-      || m.sheetMode !== prior.sheetMode || JSON.stringify(m.sheets ?? null) !== JSON.stringify(prior.sheets ?? null)) {
+      || m.sheetMode !== prior.sheetMode || JSON.stringify(m.sheets ?? null) !== JSON.stringify(prior.sheets ?? null)
+      // Stage 4b: so are the sheet-view ops (`RemoteSheets.view` is read once).
+      || m.sheetView !== prior.sheetView) {
       return this.end(new StreamSessionError('layout-changed'), 1000)
     }
     this.manifest = m

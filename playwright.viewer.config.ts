@@ -61,6 +61,12 @@ const SLIDESHOW_SPECS = /slideshow-.*\.spec\.ts/
 // Stage 1d stream specs need server/test/app.ts (the second webServer below).
 const STREAM_SPECS = /(^|[\\/])stream-[^\\/]*\.spec\.ts$/
 const STREAM_PORT = Number(process.env.OV_STREAM_PORT ?? 4181)
+// Stage 4b: the `stream-4b` project (stream-sheet-4b.spec.ts) has its own stream harness, so its sessions never count
+// toward the `stream` project's per-IP gate (§14: 30 new sessions/min; the `stream` project alone fills that minute).
+// Its ports are OV_STREAM_4B_PORT .. +2 (default OV_STREAM_PORT + 10); workers read the same variable.
+const STREAM_4B_SPECS = /(^|[\\/])stream-sheet-4b\.spec\.ts$/
+const STREAM_4B_PORT = Number(process.env.OV_STREAM_4B_PORT ?? STREAM_PORT + 10)
+process.env.OV_STREAM_4B_PORT = String(STREAM_4B_PORT)
 const projects: Project[] = [
   { name: 'chromium', testIgnore: [SLIDESHOW_SPECS, STREAM_SPECS], use: { ...devices['Desktop Chrome'] } },
 ]
@@ -78,7 +84,8 @@ projects.push({
   },
 })
 
-projects.push({ name: 'stream', testMatch: STREAM_SPECS, use: { ...devices['Desktop Chrome'] } })
+projects.push({ name: 'stream', testMatch: STREAM_SPECS, testIgnore: STREAM_4B_SPECS, use: { ...devices['Desktop Chrome'] } })
+projects.push({ name: 'stream-4b', testMatch: STREAM_4B_SPECS, use: { ...devices['Desktop Chrome'] } })
 
 export default defineConfig({
   testDir: 'tests/browser',
@@ -105,6 +112,13 @@ export default defineConfig({
     command: `bun --preload ./scripts/stream-s0/napi-preload.ts server/test/app.ts`,
     url: `http://127.0.0.1:${STREAM_PORT + 1}/__stream-harness`,
     env: { OV_STREAM_PORT: String(STREAM_PORT), IV_HARNESS_PORT: String(PORT) },
+    reuseExistingServer: false,
+    timeout: 60_000,
+  }, {
+    // The `stream-4b` project's own stream harness: the same server/test/app.ts on OV_STREAM_4B_PORT.
+    command: `bun --preload ./scripts/stream-s0/napi-preload.ts server/test/app.ts`,
+    url: `http://127.0.0.1:${STREAM_4B_PORT + 1}/__stream-harness`,
+    env: { OV_STREAM_PORT: String(STREAM_4B_PORT), IV_HARNESS_PORT: String(PORT) },
     reuseExistingServer: false,
     timeout: 60_000,
   }],
