@@ -822,3 +822,20 @@ export async function layoutRow(kind: 'rotated' | 'wrapped', text: string): Prom
     })
   })
 }
+
+/** `zeroHeightRow`: the texts on either side of the zero-height row, and the sentinel it holds. */
+export const ZERO_HEIGHT = Object.freeze({ above: 'ZEROH-ABOVE', sentinel: 'ZEROH-SENTINEL-7Q', below: 'ZEROH-BELOW' })
+/**
+ * PR #112 review (zero-height rows): A1 and A3 hold `above` and `below`; row 2 is authored `ht="0" customHeight="1"`
+ * with no `hidden` flag (buildSheetGeometry collapses it; `baseHidden` does not hold it) and holds the sentinel in A2
+ * and B2 (column B holds nothing else, so its fit shows whether the sentinel is measured).
+ */
+export async function zeroHeightRow(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows = [
+    { r: 1, cells: [textCell(st, 'A1', ZERO_HEIGHT.above)] },
+    { r: 2, cells: [textCell(st, 'A2', ZERO_HEIGHT.sentinel), textCell(st, 'B2', ZERO_HEIGHT.sentinel)] },
+    { r: 3, cells: [textCell(st, 'A3', ZERO_HEIGHT.below)] },
+  ]
+  return sheetWorkbook(rows, st.list, (zip) => patchSheetXml(zip, 0, (xml) => setRowAttrs(xml, [2], { ht: '0', customHeight: '1' })))
+}

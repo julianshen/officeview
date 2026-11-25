@@ -7,6 +7,8 @@
  * `blankCell` semantics (value removed, style kept):
  * - P5, current-view coverage: `baseCoverage` over the projected sheet with its drawings placed by the session sizes;
  * - P3, merge tails: every merge cell but the anchor;
+ * - zero-height rows (PR #112 review): every cell of a row the geometry collapses at the session sizes (authored `ht="0"`, hidden or
+ *   not), but an anchor whose merge reaches a drawn row;
  * - P4, undrawn: a non-empty value whose display text under its CF-effective painted style (`TextView.styleAt`, the table
  *   or pivot region style over its own, through the CF scope) is `''` (`;;;` and the like); a cell
  *   whose CF bar or icon has `showValue="0"` (from the snapshot's CF batch); and, fail closed, every cell of every CF
@@ -159,8 +161,11 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
 
   // P5: current-view coverage, over the unblanked sheet (spill reads its cells) with the drawings the sizes place.
   let currentCovered: ((row: number, col: number) => boolean) | undefined
+  // The row sizes the viewer draws at: a zero-height row draws no cell (zero-height rows, below).
+  let rows = snap.geometry.metrics.rows
   if (hasSessionSizes(sizes)) {
     const sized = buildSheetGeometry(projected, { sizes })
+    if (sized.kind === 'ready') rows = sized.metrics.rows
     const placed = sized.kind === 'ready' ? sized.sizedDrawings ?? projected.drawings : projected.drawings
     const current = baseCoverage({ ...projected, ...(placed ? { drawings: placed as XlsxSheet['drawings'] } : {}) }, sized)
     if (current.kind !== 'known') return blankEverything()
@@ -186,6 +191,10 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
       if (currentCovered?.(row, col)) return true
       const merge = merges.first({ r0: row, r1: row, c0: col, c1: col })
       if (merge && (merge.minRow !== row || merge.minCol !== col)) return true
+      // Zero-height rows: a row the geometry collapses (an authored `ht="0"` without `hidden`, which `baseHidden`
+      // does not hold; a session size never reopens it) draws none of its cells, unless it anchors a merge that reaches
+      // a drawn row.
+      if (rows.size(row) === 0 && !(merge && rows.start(merge.maxRow) + rows.size(merge.maxRow) > rows.start(row))) return true
       if (scopeUnavailable && inRanges(cfRanges, row, col)) return true
       if (batch && (batch.barAt(row, col)?.showValue === false || batch.iconAt(row, col)?.showValue === false)) return true
       if (hiddenValueRanges.length && inRanges(hiddenValueRanges, row, col)) return true
