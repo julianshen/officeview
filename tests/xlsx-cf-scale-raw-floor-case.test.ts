@@ -500,7 +500,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 // As recorded at ce3f701d: the cases measured then (stage2-scale-literal-lower, a3f85309, is rehearsed by its own case test).
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment' && x.id !== 'stage2-scale-formula-bounds').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   // This capture's 67 evidence cells (the guard-boundary shape outside the literal num-segment withhold).

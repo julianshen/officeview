@@ -17,7 +17,8 @@
  *
  * Nothing here is registered or reachable from production.
  *
- * Run: `npx tsx scripts/cf-refs/formula-bounds-census.ts` (prints the table of docs/validation/xlsx-cf-recipes-stage2.md §14.1).
+ * Run: `npx tsx scripts/cf-refs/formula-bounds-census.ts` (prints the table of docs/validation/xlsx-cf-recipes-stage2.md §14.1);
+ * `--all` includes the capture of stage2-scale-formula-bounds (recipe §14.7).
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -98,9 +99,17 @@ function percentResult(formula: string | undefined, cells: SheetNumbers): number
   return m ? cells.get(`${m[1]}${m[2]}`) : undefined
 }
 
-export async function formulaBoundsCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT): Promise<{ collection: SegmentCollection; rows: FormulaBoundsRow[] }> {
+/**
+ * The capture that followed this census (stage2-scale-formula-bounds, d2660d46): `{ include: 'pre-capture' }` (the default,
+ * the census as run before the capture, recipe §14.1) leaves it out; `'all'` includes it (recipe §14.7).
+ */
+export const FORMULA_BOUNDS_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-formula-bounds']
+
+export async function formulaBoundsCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection; rows: FormulaBoundsRow[] }> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
-  const collection = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const everything = await collectSegmentCells(m, rootDir, { include: 'all' })
+  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'pre-capture') === 'all' || !FORMULA_BOUNDS_POST_CAPTURE_CASES.includes(x.caseId)
+  const collection: SegmentCollection = { cells: everything.cells.filter(keep), excluded: everything.excluded.filter(keep), faults: everything.faults }
   const rows: FormulaBoundsRow[] = []
   const sheets = new Map<string, SheetNumbers>()
   const numbersOf = async (caseId: string): Promise<SheetNumbers> => {
@@ -180,7 +189,7 @@ function sqrefCovers(sqref: string, ref: string): boolean {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { collection, rows } = await formulaBoundsCensusOf()
+  const { collection, rows } = await formulaBoundsCensusOf(undefined, REPO_ROOT, { include: process.argv.includes('--all') ? 'all' : 'pre-capture' })
   console.log(`segment cells ${collection.cells.length}, faults ${collection.faults.length}; formula-bounded ${rows.length}`)
   const count = (key: (r: FormulaBoundsRow) => string): string => {
     const t = new Map<string, number>()

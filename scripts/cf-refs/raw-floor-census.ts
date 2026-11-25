@@ -117,7 +117,7 @@ export const RAW_FLOOR_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-ra
  * Captures after this census's own follow-up, left out in every mode: the census is recorded as of ce3f701d (recipe §11.7).
  * stage2-scale-literal-lower (a3f85309) is counted by scripts/cf-refs/literal-lower-census.ts.
  */
-export const RAW_FLOOR_LATER_CASES: readonly string[] = ['stage2-scale-literal-lower', 'stage2-scale-upper-segment']
+export const RAW_FLOOR_LATER_CASES: readonly string[] = ['stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds']
 
 /** Every captured cell of the manifest's measured colour-scale cases, through production's own pipeline. */
 export async function rawFloorCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof rawFloorCensus>> {

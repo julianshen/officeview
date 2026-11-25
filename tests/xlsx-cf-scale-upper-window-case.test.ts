@@ -399,7 +399,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 /** The Stage 2 cases measured as of ed0fccb6 (the later stage2-scale-raw-floor left out). */
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment' && x.id !== 'stage2-scale-formula-bounds').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('as recorded (nothing registered): no violation over the measured Stage 2 cases, this capture included; E4 and D19 withheld', async () => {

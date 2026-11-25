@@ -135,7 +135,7 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 }
 
 describe('stage2-scale-formula-bounds: the case', () => {
-  it('is appended last; owns its three ids; both questions unregistered and in the registry (pre-registered), the twins recorded', async () => {
+  it('is appended last; owns its three ids; both questions unregistered and in the registry (captured d2660d46: no single reading matched, so nothing is registered), the twins recorded', async () => {
     expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
     expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-upper-segment', ID])
     for (const id of [CAP, NEAR, TWIN]) {
@@ -146,7 +146,7 @@ describe('stage2-scale-formula-bounds: the case', () => {
     expect(NEAR).toBe(CF_FORMULA_BOUNDS_NEAR_TOP_CAP)
     expect([...S2_FORMULA_BOUNDS_READINGS]).toEqual([...CF_FORMULA_BOUNDS_READINGS])
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
     expect(c.scaleReadings!.map(x => [x.id, x.capabilityId, Object.keys(x.hypotheses), x.role ?? (x.record ? 'record' : 'evidence')])).toEqual([
       ...[...EVIDENCE, ...COINCIDE].map(id => [id, CAP, ['as-literal', 'fifteen-digit'], 'evidence']),
@@ -448,7 +448,8 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   }, HEAVY)
 })
 
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
+/** The measured Stage 2 cases before this capture (d2660d46): the rehearsal's earlier captures. */
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== ID).map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('each registration: no violation over the measured Stage 2 cases and nothing moves (no committed Stage 2 capture holds a formula bound that resolves)', async () => {
@@ -512,6 +513,68 @@ describe('the rehearsal: each registration against every committed capture, and 
       }
     }
   }, 900_000)
+})
+
+const sidecarFills = (): Map<string, string> => {
+  const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, caseOf().captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+  return new Map(sc.observedCells.map(o => [o.ref, o.fillRgb.toUpperCase()]))
+}
+const PERCENT = ['E2', 'E3', 'E4', 'E5', 'E6']
+
+describe('the capture (Excel 16.115, d2660d46): no single reading matched the main question; nothing is registered', () => {
+  it('verifyCfCase: verified; scale:formula-bounds refused (formula-hypothesis-none); scale:formula-bounds-near-top matched as-literal', () => {
+    const res = verifyCfCase(caseOf(), { rootDir: REPO_ROOT })
+    expect(res.kind).toBe('verified')
+    if (res.kind !== 'verified') return
+    expect(res.matchedHypotheses).toEqual({ [NEAR]: 'as-literal' })
+    expect((res.refusedCapabilities ?? []).map(x => [x.capabilityId, x.code])).toEqual([[CAP, 'formula-hypothesis-none']])
+  })
+
+  it('sound: every pixel equals its DisplayFormat fill (200/200, minimum contrast 129); controls white; positive controls and all 93 twins as predicted', () => {
+    const c = caseOf()
+    const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string; bgRgb: number[]; bgContrastDelta: number }> }
+    expect(sc.observedCells.length).toBe(200)
+    for (const o of sc.observedCells) expect(o.bgRgb.map(x => x.toString(16).toUpperCase().padStart(2, '0')).join(''), o.ref).toBe(o.fillRgb.slice(2).toUpperCase())
+    expect(Math.min(...sc.observedCells.filter(o => o.fillRgb !== 'FFFFFFFF').map(o => o.bgContrastDelta))).toBe(129)
+    const fills = sidecarFills()
+    for (const e of c.expected.cells.filter(x => !x.matched)) expect(fills.get(e.ref), e.ref).toBe('FFFFFFFF')
+    for (const p of layout.positiveControls) expect(fills.get(p.ref), p.ref).toBe(p.token)
+    for (const t of layout.twins) expect(fills.get(t.ref), t.ref).toBe(t.fill)
+  })
+
+  it('every designated cell: as-literal at every decisive cell but the five of f2-percent, where Excel drew fifteen-digit; every kept, clear and control cell as both predict', () => {
+    const fills = sidecarFills()
+    const byGroup: Record<string, string> = {}
+    for (const cell of designated) {
+      const ex = fills.get(cell.ref)!, a = s2FormulaBoundsPrediction(cell, 'as-literal'), b = s2FormulaBoundsPrediction(cell, 'fifteen-digit')
+      const v = ex === a && ex === b ? 'both' : ex === a ? 'as-literal' : ex === b ? 'fifteen-digit' : 'none'
+      expect(v === 'none', cell.ref).toBe(false)
+      if (cell.role !== 'decisive') { expect(v, cell.ref).toBe('both'); continue }
+      byGroup[cell.configuration] = byGroup[cell.configuration] === undefined || byGroup[cell.configuration] === v ? v : 'mixed'
+    }
+    expect(byGroup).toEqual({
+      'f2-num-hi': 'as-literal', 'f2-formula-lo': 'as-literal', 'f2-painted': 'as-literal', 'f2-expr': 'as-literal', 'f2-percent': 'fifteen-digit',
+      'f3-lower': 'as-literal', 'f3-upper': 'as-literal', 'f3-upper-mixed': 'as-literal', 'near-top': 'as-literal',
+    })
+    // The percent group (record only, never registered): its threshold as Excel drew it is also min + (max − min)·p/100 = 100
+    // exactly (multiplication first), not production's lerp min + (p/100)·(max − min) = 100.00000000000001.
+    expect([0 + (33.333333333333336 / 100) * 300, 0 + (300 * 33.333333333333336) / 100]).toEqual([100.00000000000001, 100])
+  })
+
+  it('production as committed (nothing registered): no violation over every measured Stage 2 case, this capture included; the 54 formula-bounded cells of the settled shapes withheld and justified', async () => {
+    const r = await stage2Conformance(manifest, REPO_ROOT, [ID])
+    expect(r.violations).toEqual([])
+    expect([r.total, r.exact, r.withheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([200, 146, WITHHELD_TODAY, UPPER_WITHHELD, WITHHELD_TODAY - UPPER_WITHHELD])
+    const all = await stage2Conformance(manifest, REPO_ROOT, [...STAGE2_MEASURED, ID])
+    expect(all.violations).toEqual([])
+  }, HEAVY)
+
+  it('either reading registered would be caught: as-literal exactly at the five f2-percent cells, fifteen-digit at the 38 other decisive cells', async () => {
+    const lit = await withRegistration('as-literal', () => stage2Conformance(manifest, REPO_ROOT, [ID]))
+    expect(lit.violations.map(v => v.split(':')[1]).sort()).toEqual(PERCENT)
+    const fif = await withRegistration('fifteen-digit', () => stage2Conformance(manifest, REPO_ROOT, [ID]))
+    expect(fif.violations.map(v => v.split(':')[1]).sort()).toEqual(designated.filter(c => decisive(c) && !PERCENT.includes(c.ref)).map(c => c.ref).sort())
+  }, HEAVY)
 })
 
 describe('a committed input survives regeneration', () => {

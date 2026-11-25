@@ -53,3 +53,15 @@ describe('the formula-bounds census', () => {
     expect(rows.filter(r => r.discriminating)).toEqual([])
   })
 }, HEAVY)
+
+describe('after the capture of stage2-scale-formula-bounds (d2660d46): the census on every capture (recipe §14.7)', () => {
+  let all: FormulaBoundsRow[] = []
+  beforeAll(async () => { all = (await formulaBoundsCensusOf(undefined, undefined, { include: 'all' })).rows }, HEAVY)
+  it('248 formula-bounded cells (81 of the capture); as-literal equals Excel at 243, fifteen-digit at 210; 43 discriminate', () => {
+    expect([all.length, all.filter(r => r.caseId === 'stage2-scale-formula-bounds').length]).toEqual([248, 81])
+    expect(all.filter(r => r.asLiteral !== r.excel).map(r => `${r.caseId}:${r.ref}`)).toEqual(['E2', 'E3', 'E4', 'E5', 'E6'].map(x => `stage2-scale-formula-bounds:${x}`))
+    expect(all.filter(r => r.fifteenDigit === r.excel).length).toBe(210)
+    expect(all.filter(r => r.discriminating).length).toBe(43)
+    expect(all.filter(r => r.production !== undefined && r.production !== r.excel)).toEqual([])
+  })
+}, HEAVY)

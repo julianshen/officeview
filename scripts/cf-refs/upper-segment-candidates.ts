@@ -353,12 +353,14 @@ export function survivorClasses(ids: readonly string[], candidates: readonly Upp
  * search as run before the capture, recipe §13.1) leaves it out; `'all'` includes it (recipe §13.7).
  */
 export const UPPER_SEGMENT_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-upper-segment']
+/** Captures after this search's own follow-up, left out in every mode: the census is recorded as of 2ee3735a (recipe §13.7). */
+export const UPPER_SEGMENT_LATER_CASES: readonly string[] = ['stage2-scale-formula-bounds']
 
 export async function upperSegmentCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection; rows: CensusRow[] }> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
   const all = await collectSegmentCells(m, rootDir, { include: 'all' })
   if (all.faults.length > 0) throw new Error(`upper-segment: harness faults ${all.faults.join('; ')}`)
-  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'pre-capture') === 'all' || !UPPER_SEGMENT_POST_CAPTURE_CASES.includes(x.caseId)
+  const keep = (x: { caseId: string }): boolean => !UPPER_SEGMENT_LATER_CASES.includes(x.caseId) && ((opts.include ?? 'pre-capture') === 'all' || !UPPER_SEGMENT_POST_CAPTURE_CASES.includes(x.caseId))
   const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, rows: upperSegmentCensus(collection) }
 }

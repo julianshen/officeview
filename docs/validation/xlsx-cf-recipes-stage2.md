@@ -1714,7 +1714,7 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **Registered:** `index-position` for both ids, as §13.2 says: both `CF_STAGE2_NONDISCRIMINATING` entries removed, `CF_UPPER_SEGMENT_PRODUCTION_READINGS` and `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS` set, published through the audit (353 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.22.
 - **The census with the capture:** `npx tsx scripts/cf-refs/upper-segment-candidates.ts --all` covers 381 upper-segment interior cells; the same 7 survivors (one class) reproduce every one; truncation misses 203. Without `--all` it reproduces §13.1.
 
-## 14. The formula-bounds follow-up (`stage2-scale-formula-bounds`; recipe pending)
+## 14. The formula-bounds follow-up (`stage2-scale-formula-bounds`; captured d2660d46, no reading matched, nothing registered)
 
 A colour-scale segment bounded by a formula-resolved cfvo (`num:formula`, `percent:formula`, `percentile:formula`) stays withheld in every shape whose rule a capture settled, because no capture held a formula bound there. Brief: `.superpowers/sdd/cf-formula-bounds/brief.md`; Phase 1 report: `.superpowers/sdd/cf-formula-bounds/phase1-report.md`.
 
@@ -1890,3 +1890,12 @@ npx tsx scripts/cf-refs/audit.ts --stage 2
 ```
 
 The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-formula-bounds` (run twice, byte-identical; the manifest change is insertions only). After the build, check that Excel's resave kept every AH cell's double and every cfvo formula text (the structural verifier compares formula cfvo by text and literal ones by double). The registration rule is §14.2.
+
+### 14.7 Run result (captured, d2660d46, Excel 16.115)
+
+- **The build:** repair-free on the first attempt; all 210 numeric cells and all 30 rules' cfvo (the formula text kept as written) and colours identical input vs saved; Excel added `calcPr calcId="0"`.
+- **The capture is sound:** every pixel equals its DisplayFormat fill (200/200, minimum contrast 129); the 15 controls are white; the positive controls show FFF8696B and FF63BE7B; all 93 twins show their fills.
+- **The evidence:** `as-literal` at every decisive cell of seven main groups (35) and at the three near-top probes; `fifteen-digit` at the five decisive cells of f2-percent (E2..E6); every kept, clear and control cell as both readings predict. `verifyCfCase`: `scale:formula-bounds` `formula-hypothesis-none`, `scale:formula-bounds-near-top` matched `as-literal`.
+- **Not registered** (§14.2): no single reading matched the main configurations, and the near-top id is registrable only at the main id's reading. The formula-bound withholds stay. Details: `docs/validation/xlsx-cf.md` §14.z.23.
+- **The census with the capture:** `npx tsx scripts/cf-refs/formula-bounds-census.ts --all` covers 248 formula-bounded cells (81 of this capture); `as-literal` equals Excel at 243 (all but E2..E6), `fifteen-digit` at 210; 43 discriminate. Without `--all` it reproduces §14.1.
+- **Hypothesis only (post-capture, never registered):** the percent threshold computed multiplication first, min + (max − min)·p/100 = 100, reproduces E2..E10 as well as `fifteen-digit` does; with it, `as-literal` explains every cell of the capture.

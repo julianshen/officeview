@@ -191,7 +191,7 @@ describe('the reviewer\'s overflow sheet (pre-capture fix round 2): default prod
 describe('the reach: every newly withheld cell of every measured case is the shape, and Stage 5\'s list is derived', () => {
   it('per case (through production\'s own segment evaluations): the cells in the shape are exactly the recorded reach', async () => {
     // Recorded as of the captures before stage2-scale-upper-segment (2ee3735a), whose case is pinned by its own test.
-    const LATER = ['stage2-scale-upper-segment']
+    const LATER = ['stage2-scale-upper-segment', 'stage2-scale-formula-bounds']
     const cells = (await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })).cells.filter(c => !LATER.includes(c.caseId))
     // The literal-num withhold takes precedence (num / num bounds, f·2^20 not an integer): those cells keep its reason.
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)
