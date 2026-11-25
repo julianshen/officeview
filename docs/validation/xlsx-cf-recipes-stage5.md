@@ -187,6 +187,20 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
   - Each per-kind id is `discriminating` with a sole survivor: blank `zero`, and `withheld` for text, the empty string and error.
   - All four ids are registered and published (§14.z.14). The umbrella is superseded and stays a recorded refusal.
 
+### 2e. The icon percent order (the percent-order follow-up, 2026-11-26)
+
+`stage5-icon-percent-order` (appended last) pre-registers `lerp-first` and `multiply-first` for `icon:percent-order` and `icon:percentile-order`; production, the readings and the narrowing were committed before it (e44463a4). Design, every bucket and the registration rule: `docs/validation/xlsx-cf-recipes-stage2.md` §15.2 and §15.5.
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-icon-percent-order
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-icon-percent-order
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- **Expected:** a repair-free open with every value kept (the long probe texts 8.699999999999989, 12.899999999999991, 14.999999999999998, 67.49999999999999, 9.999999999999998 included); `formulaEvaluation` `discriminating` for both ids; both tolerance controls (ipc-tol, ipl-tol) matched.
+- **Stop and record** (never retried, never refitted): a repair or a changed value (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon; `formula-hypothesis-none` (then the pre-committed narrowing for that id), `non-discriminating` or `formula-replication-shortfall`; a failed tolerance control.
+
 ## 3. Unresolved shapes (record only)
 
 ```

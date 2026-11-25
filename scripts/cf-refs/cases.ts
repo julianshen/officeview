@@ -5417,9 +5417,13 @@ function s2poTwins(lineSteps: readonly number[], firstCol: number): { twins: S2P
   let col = firstCol
   for (const span of fx.twinSpans) {
     const mine = lineSteps.filter(k => (span === fx.twinSpans[0] ? k <= span.to : k > fx.twinSpans[0].to) && k >= span.from && k <= span.to)
-    for (let i = 0; i < mine.length; i += rows) {
+    // Columns filled evenly (never a short last column).
+    const per = Math.ceil(mine.length / Math.ceil(mine.length / rows))
+    for (let i = 0; i < mine.length; i += per) {
       const name = s2llCol(col++)
-      const chunk = mine.slice(i, i + rows)
+      const chunk = mine.slice(i, i + per)
+      // A twin rule over one cell would be the degenerate single-cell scope: never.
+      if (chunk.length < 2) throw new Error(`${S2_PERCENT_ORDER_ID}: a twin rule of one cell at ${name}`)
       const sqref = s2llSqref(name, fx.firstRow, fx.firstRow + chunk.length - 1)
       chunk.forEach((k, j) => {
         const t: S2PercentOrderTwin = { ref: `${name}${fx.firstRow + j}`, fill: s2UwLine(k), text: String((k - span.from) / 128), rule: { sqref, cfvo: ['0', '1'], colors: [s2UwLine(span.from), s2UwLine(span.to)] } }
@@ -10809,6 +10813,11 @@ export function s5IconPoBlocks(): S5IconPoBlock[] {
     { id: 'ipc-tol', col: 'E', cap: S5_ICON_PERCENT_ORDER_CAP, type: 'percent', p: [50, 75], role: 'negative-control',
       values: [lo, 15, s5poDown(15), 67.5, s5poDown(67.5), hi],
       designated: s5poAt('control', 1, 2, 3, 4) },
+    // The percentile tolerance control: n = 7, percentile 50 is the 4th order statistic (10) under both orders (rank 4); a
+    // value one ulp below it.
+    { id: 'ipl-tol', col: 'F', cap: S5_ICON_PERCENTILE_ORDER_CAP, type: 'percentile', p: [50, 90], role: 'negative-control',
+      values: [-50, 0, s5poDown(10), 10, 20, 30, 40],
+      designated: s5poAt('control', 1, 2, 3, 6) },
   ]
 }
 
@@ -10848,16 +10857,22 @@ function iconPercentOrderFixture(): S5Fixture {
   const twinSlots = new Map<string, string>()
   const twinSpecs: Array<{ sqref: string; cfvo: S5Cfvo[] }> = []
   const twinOf = (b: S5IconPoBlock, at: number, k: number): string => twinSlots.get(`${b.id}:${k}:${at}`)!
-  let twinCol = TWIN_FIRST_COL
+  // Twin blocks two to a column (bands at rows 2 and 15), keeping the sheet narrow enough for one text-scope batch.
+  const TWIN_BANDS = [S5_ICON_PO_FIRST_ROW, S5_ICON_PO_FIRST_ROW + 13] as const
+  let slot = 0
   for (const b of blocks) for (const k of [0, 1, 2]) {
-    const members = b.designated.filter(d => S5_ICON_PO_READINGS.some(r => s5IconPoBucket(b, b.values[d.at]!, r) === k))
-    if (members.length === 0) continue
-    const col = colLetter(twinCol++)
+    // A twin block holds every designated value of its block (a scope of one cell would be the degenerate single-cell shape).
+    if (!b.designated.some(d => S5_ICON_PO_READINGS.some(r => s5IconPoBucket(b, b.values[d.at]!, r) === k))) continue
+    const members = b.designated
+    if (members.length < 2 || members.length > 12) throw new Error(`${S5_ICON_PO_ID}: ${b.id} twin block of ${members.length} cells`)
+    const col = colLetter(TWIN_FIRST_COL + Math.floor(slot / TWIN_BANDS.length))
+    const r0 = TWIN_BANDS[slot % TWIN_BANDS.length]!
+    slot++
     const vs = members.map(d => b.values[d.at]!)
-    members.forEach((d, j) => { twinSlots.set(`${b.id}:${k}:${d.at}`, `${col}${S5_ICON_PO_FIRST_ROW + j}`); cells[`${col}${S5_ICON_PO_FIRST_ROW + j}`] = b.values[d.at]! })
+    members.forEach((d, j) => { twinSlots.set(`${b.id}:${k}:${d.at}`, `${col}${r0 + j}`); cells[`${col}${r0 + j}`] = b.values[d.at]! })
     const below = Math.floor(Math.min(...vs)) - 2, above = Math.ceil(Math.max(...vs)) + 2
     const t = k === 2 ? [below, below + 1] : k === 1 ? [below, above] : [above, above + 1]
-    twinSpecs.push({ sqref: `${col}${S5_ICON_PO_FIRST_ROW}:${col}${S5_ICON_PO_FIRST_ROW + members.length - 1}`, cfvo: [{ type: 'percent', val: '0' }, { type: 'num', val: String(t[0]) }, { type: 'num', val: String(t[1]) }] })
+    twinSpecs.push({ sqref: `${col}${r0}:${col}${r0 + members.length - 1}`, cfvo: [{ type: 'percent', val: '0' }, { type: 'num', val: String(t[0]) }, { type: 'num', val: String(t[1]) }] })
   }
   const configurations: S5Configuration[] = blocks.map(b => {
     const refs = b.designated.map(d => refOf(b, d.at))
