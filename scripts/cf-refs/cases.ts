@@ -4752,6 +4752,413 @@ function stage2UpperSegmentCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The formula-bounds follow-up (brief cf-formula-bounds): colour-scale segments bounded by a formula-resolved cfvo stay
+// withheld in every shape whose rule a capture settled (the guard-boundary shape, registered raw-floor; the 3-colour upper
+// segment's integer and window classes, index-position; the near-top sub-shape), because no capture held a formula bound
+// there. The census (scripts/cf-refs/formula-bounds-census.ts; recipe §14.1) found 167 formula-bounded captured cells, none
+// disagreeing with `as-literal` and none able to tell the readings apart (every formula result equals its 15-digit rounding).
+// Two readings pre-registered (scale:formula-bounds, REGISTRABLE):
+// - `as-literal`: the formula's double is used exactly as the same literal: each shape paints by its registered reading;
+// - `fifteen-digit`: the formula result is first rounded to 15 significant digits (Number(x.toPrecision(15))), then the same.
+// The formula bounds resolve to doubles that are NOT their 15-digit rounding (0.30000000000000004, 2.0999999999999996,
+// 210.00000000000003, 419.99999999999994, 315.00000000000006, 426.99999999999994, 33.333333333333336), held in literal cells of
+// column AH (no cell formula: nothing depends on cached values or calc mode) and referenced by `num` / `formula` / `percent`
+// cfvo; two expression cfvo (0.1*3, its own group; 1/3*630 = 210 exactly, a coincident control) are evaluated by Excel itself.
+// The formula-bounded near-top sub-shape is its own question (scale:formula-bounds-near-top). Every prediction comes from the
+// independent model `s2FormulaBoundsPrediction`, never from the viewer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_FORMULA_BOUNDS_ID = 'stage2-scale-formula-bounds'
+/** The question: formula-bounded segments of the settled shapes. Registrable. */
+export const S2_FORMULA_BOUNDS_CAP = 'scale:formula-bounds'
+/** The formula-bounded near-top sub-shape: its own question, registrable only with the same reading as the main one. */
+export const S2_FORMULA_BOUNDS_NEAR_TOP_CAP = 'scale:formula-bounds-near-top'
+/** The twins (the P-line twin line and the endpoint twins): comparison references only. */
+export const S2_FORMULA_BOUNDS_TWIN = 'scale:formula-bounds-twin'
+export const S2_FORMULA_BOUNDS_READINGS = ['as-literal', 'fifteen-digit'] as const
+export type S2FormulaBoundsReading = (typeof S2_FORMULA_BOUNDS_READINGS)[number]
+/**
+ * A cell's role: `decisive` (the readings differ), `kept` (they agree, at a cell production withholds today: the settled
+ * shape with a formula bound), `clear` (they agree and production paints it today), `control` (an endpoint or a value beyond
+ * the bounds: both agree).
+ */
+export type S2FormulaBoundsRole = 'decisive' | 'kept' | 'clear' | 'control'
+export type S2FormulaBoundsCfvo = Readonly<{ type: 'num' | 'min' | 'max' | 'percent' | 'formula'; val?: string; f?: string }>
+
+export interface S2FormulaBoundsBlock {
+  /** The evidence configuration (replication group). */
+  id: string
+  col: string
+  /** A near-top block: its own question (S2_FORMULA_BOUNDS_NEAR_TOP_CAP). */
+  nearTop?: true
+  /** Painted today: its decisive cells are painted by production now (the as-literal shape is not withheld). */
+  paintedToday?: true
+  cfvo: readonly S2FormulaBoundsCfvo[]
+  colors: readonly string[]
+  values: ReadonlyArray<{ text: string; role: S2FormulaBoundsRole }>
+}
+
+/** The literal cells the reference cfvo read (column AH, outside every rule and the capture range), as their doubles' shortest text. */
+export const S2_FORMULA_BOUNDS_CELLS: Readonly<Record<string, string>> = {
+  AH2: '0.30000000000000004', AH3: '0.30000000000000004', AH4: '2.0999999999999996', AH5: '33.333333333333336', AH6: '0.30000000000000004',
+  AH7: '210.00000000000003', AH8: '419.99999999999994', AH9: '315.00000000000006', AH10: '426.99999999999994', AH11: '0.3',
+}
+const s2fbV = (role: S2FormulaBoundsRole, ...texts: string[]): Array<{ text: string; role: S2FormulaBoundsRole }> => texts.map(text => ({ text, role }))
+const s2fbNum = (val: string): S2FormulaBoundsCfvo => ({ type: 'num', val })
+const s2fbRef = (type: 'num' | 'formula' | 'percent', ref: string): S2FormulaBoundsCfvo => ({ type, f: `$${/^[A-Z]+/.exec(ref)![0]}$${/\d+$/.exec(ref)![0]}` })
+const S2FB_P = s2UwLine(0), S2FB_Q = s2UwLine(210)
+/** Distinct spans 210, 105, 30, all descending from DD0. */
+const S2FB_DD0 = 'FFF09B32', S2FB_DD1 = 'FF1E3214'
+
+/** The blocks (columns A..M, rows 2..13). Classes and outcomes per cell are pinned in the case test and listed in recipe §14.4. */
+export function s2FormulaBoundsBlocks(): S2FormulaBoundsBlock[] {
+  return [
+    { id: 'f2-num-hi', col: 'A', cfvo: [s2fbNum('0'), s2fbRef('num', 'AH2')], colors: [S2FB_P, S2FB_Q],
+      values: [...s2fbV('decisive', '0.01', '0.03', '0.07', '0.09', '0.14'), ...s2fbV('clear', '0.1', '0.2'), ...s2fbV('control', '0')] },
+    { id: 'f2-formula-lo', col: 'B', cfvo: [s2fbRef('formula', 'AH3'), s2fbNum('1')], colors: [S2FB_Q, S2FB_P],
+      values: [...s2fbV('decisive', '0.31', '0.36', '0.4', '0.43', '0.45'), ...s2fbV('kept', '0.35', '0.57'), ...s2fbV('clear', '0.46'), ...s2fbV('control', '1')] },
+    { id: 'f2-painted', col: 'C', paintedToday: true, cfvo: [s2fbNum('0'), s2fbRef('formula', 'AH4')], colors: [S2FB_DD1, S2FB_DD0],
+      values: [...s2fbV('decisive', '0.01', '0.02', '0.04', '0.08', '0.09'), ...s2fbV('clear', '0.03', '0.05'), ...s2fbV('control', '0')] },
+    { id: 'f2-expr', col: 'D', cfvo: [s2fbNum('0'), { type: 'formula', f: '0.1*3' }], colors: [S2FB_Q, S2FB_P],
+      values: [...s2fbV('decisive', '0.01', '0.03', '0.07', '0.08', '0.13'), ...s2fbV('clear', '0.05'), ...s2fbV('control', '0')] },
+    { id: 'f2-percent', col: 'E', cfvo: [s2fbRef('percent', 'AH5'), { type: 'max' }], colors: [S2FB_P, S2FB_Q],
+      values: [...s2fbV('decisive', '120', '140', '160', '180', '200'), ...s2fbV('clear', '220', '250'), ...s2fbV('control', '0', '300')] },
+    { id: 'f3-lower', col: 'F', cfvo: [s2fbNum('0'), s2fbRef('num', 'AH6'), s2fbNum('0.6')], colors: [S2FB_Q, S2FB_P, S2FB_Q],
+      values: [...s2fbV('decisive', '0.02', '0.04', '0.06', '0.12', '0.15'), ...s2fbV('clear', '0.05', '0.1'), ...s2fbV('control', '0', '0.6')] },
+    { id: 'f3-upper', col: 'G', cfvo: [s2fbNum('-210'), s2fbRef('num', 'AH7'), s2fbRef('formula', 'AH8')], colors: [S2FB_Q, S2FB_P, S2FB_Q],
+      values: [...s2fbV('decisive', '217', '220', '230', '233', '244'), ...s2fbV('kept', '211', '214', '225'), ...s2fbV('clear', '212.5'), ...s2fbV('control', '-210')] },
+    { id: 'f3-upper-mixed', col: 'H', cfvo: [s2fbNum('0'), s2fbNum('105'), s2fbRef('formula', 'AH9')], colors: [S2FB_DD1, S2FB_DD0, S2FB_DD1],
+      values: [...s2fbV('decisive', '112', '125', '140', '152', '166'), ...s2fbV('clear', '107.5'), ...s2fbV('control', '0', '105')] },
+    // The near-top sub-shape: values 1 and 7 ulps below the smaller of the formula maximum and its rounding (kept), and one
+    // probe where one reading has an endpoint and the other a near-top interior cell (decisive).
+    { id: 'nt-q-p', col: 'I', nearTop: true, cfvo: [s2fbNum('-0.3'), s2fbNum('0'), s2fbRef('num', 'AH2')], colors: [S2FB_P, S2FB_Q, S2FB_P],
+      values: [...s2fbV('decisive', '0.3'), ...s2fbV('kept', '0.29999999999999993', '0.2999999999999996')] },
+    { id: 'nt-dd', col: 'J', nearTop: true, cfvo: [s2fbNum('-2.1'), s2fbNum('0'), s2fbRef('formula', 'AH4')], colors: [S2FB_DD0, S2FB_DD1, S2FB_DD0],
+      values: [...s2fbV('decisive', '2.0999999999999996'), ...s2fbV('kept', '2.099999999999999', '2.0999999999999965')] },
+    { id: 'nt-p-q', col: 'K', nearTop: true, cfvo: [s2fbNum('7'), s2fbNum('217'), s2fbRef('num', 'AH10')], colors: [S2FB_Q, S2FB_P, S2FB_Q],
+      values: [...s2fbV('decisive', '426.99999999999994'), ...s2fbV('kept', '426.9999999999999', '426.9999999999996')] },
+    // Coincident doubles (both readings agree): an expression equal to its rounding (1/3*630 = 210) and a reference to 0.3.
+    { id: 'f2-coincide-expr', col: 'L', cfvo: [s2fbNum('0'), { type: 'formula', f: '1/3*630' }], colors: [S2FB_DD0, S2FB_DD1],
+      values: [...s2fbV('kept', '27', '54', '57', '108'), ...s2fbV('clear', '100'), ...s2fbV('control', '0', '210')] },
+    { id: 'f3-coincide-ref', col: 'M', cfvo: [s2fbNum('0'), s2fbRef('num', 'AH11'), s2fbNum('0.6')], colors: [S2FB_P, S2FB_Q, S2FB_P],
+      values: [...s2fbV('kept', '0.35', '0.36', '0.45'), ...s2fbV('clear', '0.3125'), ...s2fbV('control', '0.3', '0.6')] },
+  ]
+}
+
+/** The layout's fixed slots: data rows, the control row, the twin line's spans and the literal positive controls. */
+export const S2_FORMULA_BOUNDS = {
+  firstRow: 2,
+  lastDataRow: 13,
+  /** Row 14: each data column's unformatted control (the column's first designated value), the twins' and the positive controls'. */
+  controlRow: 14,
+  /** The column of the referenced literal cells (outside the capture range). */
+  boundCol: 'AH',
+  /** The P-line twin line: num 0 / 1 between two P-line steps 128 apart; a twin of step k has value (k − from)/128 (exact). */
+  twinSpans: [{ from: 0, to: 128 }, { from: 82, to: 210 }] as const,
+  /** Literal cellIs positive controls (readback of a dxf fill). */
+  literalControls: ['FFF8696B', 'FF63BE7B'] as const,
+}
+
+/**
+ * A formula cfvo's result, restated: an absolute reference to a cell of S2_FORMULA_BOUNDS_CELLS reads its double; a product /
+ * quotient chain of decimal literals (`0.1*3`, `1/3*630`) is evaluated left to right in IEEE doubles. Undefined otherwise.
+ */
+export function s2FormulaBoundsResult(f: string): number | undefined {
+  const ref = /^\$([A-Z]+)\$(\d+)$/.exec(f)
+  if (ref) { const t = S2_FORMULA_BOUNDS_CELLS[`${ref[1]}${ref[2]}`]; return t === undefined ? undefined : Number(t) }
+  if (!/^\d+(\.\d+)?([*/]\d+(\.\d+)?)*$/.test(f)) return undefined
+  const parts = f.split(/([*/])/)
+  let x = Number(parts[0])
+  for (let i = 1; i < parts.length; i += 2) x = parts[i] === '*' ? x * Number(parts[i + 1]) : x / Number(parts[i + 1])
+  return x
+}
+/** `fifteen-digit`'s rounding, restated: the double nearest the 15-significant-digit decimal. */
+export const s2FormulaBoundsRound = (x: number): number => Number(x.toPrecision(15))
+
+/** A block's thresholds under a reading, positional (cfvo order): literal num; min / max of the block's values; percent p as min + (p/100)·(max − min); a formula result (rounded under fifteen-digit) as its cfvo type. */
+export function s2FormulaBoundsThresholds(b: S2FormulaBoundsBlock, reading: S2FormulaBoundsReading): number[] {
+  const vs = b.values.map(x => Number(x.text))
+  const min = Math.min(...vs), max = Math.max(...vs)
+  return b.cfvo.map(c => {
+    if (c.type === 'min') return min
+    if (c.type === 'max') return max
+    let n: number
+    if (c.f !== undefined) {
+      const r = s2FormulaBoundsResult(c.f)
+      if (r === undefined) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${b.id} formula ${c.f} has no result`)
+      n = reading === 'fifteen-digit' ? s2FormulaBoundsRound(r) : r
+    } else n = Number(c.val)
+    return c.type === 'percent' ? min + (n / 100) * (max - min) : n
+  })
+}
+
+export interface S2FormulaBoundsCell {
+  ref: string
+  block: S2FormulaBoundsBlock
+  text: string
+  value: number
+  role: S2FormulaBoundsRole
+  /** The configuration: the block's id (decisive, kept, clear), `near-top`, or `controls`. */
+  configuration: string
+}
+
+/** Every cell of every block. */
+export function s2FormulaBoundsCells(): S2FormulaBoundsCell[] {
+  return s2FormulaBoundsBlocks().flatMap(b => {
+    if (b.values.length > S2_FORMULA_BOUNDS.lastDataRow - S2_FORMULA_BOUNDS.firstRow + 1) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${b.id} has too many values`)
+    return b.values.map((x, i): S2FormulaBoundsCell => ({
+      ref: `${b.col}${S2_FORMULA_BOUNDS.firstRow + i}`, block: b, text: x.text, value: Number(x.text), role: x.role,
+      configuration: x.role === 'control' ? 'controls' : b.nearTop ? 'near-top' : b.id,
+    }))
+  })
+}
+
+/** The segment a cell is in under a reading (thresholds sorted, colours positional; the 2-colour inversion and the midpoint-above-max re-sort), its clamped fraction, and whether it is strictly inside. */
+export function s2FormulaBoundsSegment(c: Pick<S2FormulaBoundsCell, 'block' | 'value'>, reading: S2FormulaBoundsReading): { upper: boolean; lo: number; hi: number; from: string; to: string; f: number; interior: boolean } {
+  const t = s2FormulaBoundsThresholds(c.block, reading), k = c.block.colors, v = c.value
+  let lo: number, hi: number, from: string, to: string, upper = false
+  if (t.length === 2) { [lo, hi] = t[0]! <= t[1]! ? [t[0]!, t[1]!] : [t[1]!, t[0]!]; [from, to] = [k[0]!, k[1]!] }
+  else {
+    const [mid, top] = t[1]! > t[2]! ? [t[2]!, t[1]!] : [t[1]!, t[2]!]
+    if (!(t[0]! < mid && mid < top)) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.block.id} thresholds are not ascending once re-sorted`)
+    upper = v > mid
+    ;[lo, hi] = upper ? [mid, top] : [t[0]!, mid]
+    ;[from, to] = upper ? [k[1]!, k[2]!] : [k[0]!, k[1]!]
+  }
+  if (!(lo < hi)) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.block.id} has equal thresholds`)
+  return { upper, lo, hi, from, to, f: Math.max(0, Math.min(1, (v - lo) / (hi - lo))), interior: v > lo && v < hi }
+}
+
+const s2fbD = (from: string, to: string, i: number): number => Math.abs(parseInt(to.slice(i, i + 2), 16) - parseInt(from.slice(i, i + 2), 16))
+/**
+ * Whether production withholds a cell today (no formula-bounds reading registered): strictly inside a formula-bounded segment
+ * of a settled shape. Lower / 2-colour: some ARGB channel's f·d within 1e-11 strictly below a whole number (the guard
+ * boundary). Upper: some RGB channel's f·d within 1e-11 of a whole k, 0 < k < d (integer and window classes), or within 1e-11
+ * below d (near-top). Computed at the formula's own double (production's substitution today).
+ */
+export function s2FormulaBoundsWithheldToday(c: Pick<S2FormulaBoundsCell, 'block' | 'value'>): boolean {
+  const s = s2FormulaBoundsSegment(c, 'as-literal')
+  if (!s.interior) return false
+  if (!s.upper) return [0, 2, 4, 6].some(i => { const p = s.f * s2fbD(s.from, s.to, i); return Math.floor(p + 1e-11) !== Math.floor(p) })
+  return [2, 4, 6].some(i => {
+    const d = s2fbD(s.from, s.to, i)
+    if (d === 0) return false
+    const p = s.f * d, k = Math.round(p)
+    return (k > 0 && k < d && Math.abs(p - k) <= 1e-11) || d - p <= 1e-11
+  })
+}
+/** Whether some RGB channel with d != 0 of an interior upper-segment cell has f·d within 1e-11 below d (the near-top sub-shape) under a reading. */
+export function s2FormulaBoundsNearTop(c: Pick<S2FormulaBoundsCell, 'block' | 'value'>, reading: S2FormulaBoundsReading): boolean {
+  const s = s2FormulaBoundsSegment(c, reading)
+  return s.upper && s.interior && [2, 4, 6].some(i => { const d = s2fbD(s.from, s.to, i); return d !== 0 && d - s.f * d <= 1e-11 })
+}
+
+/**
+ * What a reading predicts at a cell: the segment under that reading's thresholds, then the registered arithmetic, per ARGB
+ * channel (d = |c1 − c0|): a lower or 2-colour segment raw floor floor(f·d) on every channel when some channel's f·d lies
+ * within 1e-11 strictly below a whole number (raw-floor), else floor(f·d + 1e-11); an upper segment index-position,
+ * floor(((1 + f) − 1)·d) (equal to truncation outside the integer, window and near-top shapes).
+ */
+export function s2FormulaBoundsPrediction(c: Pick<S2FormulaBoundsCell, 'block' | 'value'>, reading: S2FormulaBoundsReading): string {
+  const s = s2FormulaBoundsSegment(c, reading)
+  const ch = [0, 2, 4, 6].map(i => ({ c0: parseInt(s.from.slice(i, i + 2), 16), c1: parseInt(s.to.slice(i, i + 2), 16) }))
+  const boundary = s.interior && ch.some(({ c0, c1 }) => { const p = s.f * Math.abs(c1 - c0); return Math.floor(p + 1e-11) !== Math.floor(p) })
+  const l = (1 + s.f) - 1
+  return ch.map(({ c0, c1 }) => {
+    const d = Math.abs(c1 - c0)
+    const k = s.upper ? Math.floor(l * d) : boundary ? Math.floor(s.f * d) : Math.floor(s.f * d + 1e-11)
+    return (c1 >= c0 ? c0 + k : c0 - k).toString(16).toUpperCase().padStart(2, '0')
+  }).join('')
+}
+
+const S2FB_CONFIGURATIONS: ReadonlyArray<{ id: string; role?: 'negative-control'; cap?: string; note: string }> = [
+  { id: 'f2-num-hi', note: '2-colour num 0 / num =$AH$2 (0.30000000000000004; rounded 0.3), P to Q: the guard-boundary shape at the formula double.' },
+  { id: 'f2-formula-lo', note: '2-colour formula =$AH$3 (0.30000000000000004) / num 1, Q to P: a formula minimum.' },
+  { id: 'f2-painted', note: '2-colour num 0 / formula =$AH$4 (2.0999999999999996; rounded 2.1), distinct spans ascending: cells production paints today (their as-literal products clear) that fifteen-digit would repaint at raw floor.' },
+  { id: 'f2-expr', note: '2-colour num 0 / formula =0.1*3 (an expression Excel evaluates; 0.30000000000000004), Q to P.' },
+  { id: 'f2-percent', note: '2-colour percent =$AH$5 (p = 33.333333333333336; rounded 33.3333333333333) / max over 0 .. 300, P to Q: the threshold moves with p.' },
+  { id: 'f3-lower', note: '3-colour num 0 / num =$AH$6 (0.30000000000000004) / num 0.6, Q / P / Q: the lower segment, guard-boundary products below an integer.' },
+  { id: 'f3-upper', note: '3-colour num -210 / num =$AH$7 (210.00000000000003; 210) / formula =$AH$8 (419.99999999999994; 420), Q / P / Q: the upper segment, index-position moved and kept doubles.' },
+  { id: 'f3-upper-mixed', note: '3-colour num 0 / num 105 / formula =$AH$9 (315.00000000000006; 315), distinct spans 210 / 105 / 30: a literal midpoint and a formula maximum.' },
+  { id: 'f2-coincide-expr', note: '2-colour num 0 / formula =1/3*630 (210 exactly, its own rounding), distinct spans descending: both readings agree; guard-boundary cells withheld today.' },
+  { id: 'f3-coincide-ref', note: '3-colour num 0 / num =$AH$11 (0.3, its own rounding) / num 0.6, P / Q / P: both readings agree; upper integer and window cells withheld today.' },
+  { id: 'near-top', cap: S2_FORMULA_BOUNDS_NEAR_TOP_CAP, note: 'The formula-bounded near-top sub-shape, its own question: upper-segment cells within 1e-11 below the full span (values ulps below a formula maximum; kept), and at each column one probe where one reading has the endpoint and the other a near-top interior cell (decisive).' },
+  { id: 'controls', role: 'negative-control', note: 'Negative controls: endpoints and values beyond the bounds, where both readings predict the endpoint colour; Excel must match it, never evidence.' },
+]
+
+export interface S2FormulaBoundsTwin {
+  ref: string
+  fill: string
+  text: string
+  rule: { sqref: string; cfvo: readonly string[]; colors: readonly string[] }
+}
+
+/** The twins, as stage2-scale-upper-segment's: the P-line twin line, then 3-colour num 0 / 1 / 2 endpoint twins; every product checked to be an IEEE integer. */
+function s2fbTwins(lineSteps: readonly number[], offLine: readonly string[], firstCol: number): { twins: S2FormulaBoundsTwin[]; lastCol: number } {
+  const fx = S2_FORMULA_BOUNDS
+  const rows = fx.lastDataRow - fx.firstRow + 1
+  const twins: S2FormulaBoundsTwin[] = []
+  let col = firstCol
+  const check = (t: S2FormulaBoundsTwin): void => {
+    const t0 = t.rule.cfvo.map(Number), v = Number(t.text)
+    const seg = t0.length === 3 && v > t0[1]! ? 1 : 0
+    const from = t.rule.colors[seg]!, to = t.rule.colors[seg + 1]!
+    const f = (v - t0[seg]!) / (t0[seg + 1]! - t0[seg]!)
+    for (const i of [0, 2, 4, 6]) {
+      const p = f * s2fbD(from, to, i)
+      if (!Number.isInteger(p)) throw new Error(`${S2_FORMULA_BOUNDS_ID}: twin ${t.ref} product ${p} is not an IEEE integer`)
+    }
+    if (s2UpperSegmentColour('lower', from, to, f) !== t.fill) throw new Error(`${S2_FORMULA_BOUNDS_ID}: twin ${t.ref} shows ${s2UpperSegmentColour('lower', from, to, f)}, not ${t.fill}`)
+    twins.push(t)
+  }
+  for (const span of fx.twinSpans) {
+    const mine = lineSteps.filter(k => (span === fx.twinSpans[0] ? k <= span.to : k > fx.twinSpans[0].to) && k >= span.from && k <= span.to)
+    for (let i = 0; i < mine.length; i += rows) {
+      const name = s2llCol(col++)
+      const chunk = mine.slice(i, i + rows)
+      const sqref = chunk.length === 1 ? `${name}${fx.firstRow}` : `${name}${fx.firstRow}:${name}${fx.firstRow + chunk.length - 1}`
+      chunk.forEach((k, j) => check({ ref: `${name}${fx.firstRow + j}`, fill: s2UwLine(k), text: String((k - span.from) / 128), rule: { sqref, cfvo: ['0', '1'], colors: [s2UwLine(span.from), s2UwLine(span.to)] } }))
+    }
+  }
+  const perCol = Math.floor(rows / 3)
+  for (let i = 0; i < offLine.length; i += 3 * perCol) {
+    const name = s2llCol(col++)
+    const chunk = offLine.slice(i, i + 3 * perCol)
+    for (let j = 0; j < chunk.length; j += 3) {
+      const trio = chunk.slice(j, j + 3)
+      const row = fx.firstRow + j
+      const colors = [trio[0]!, trio[1] ?? trio[0]!, trio[2] ?? trio[1] ?? trio[0]!]
+      const sqref = trio.length === 1 ? `${name}${row}` : `${name}${row}:${name}${row + trio.length - 1}`
+      const rule = { sqref, cfvo: ['0', '1', '2'], colors }
+      trio.forEach((fill, k) => check({ ref: `${name}${row + k}`, fill, text: String(k), rule }))
+    }
+  }
+  return { twins, lastCol: col - 1 }
+}
+
+/** The configurations, the twins and the literal positive controls; every prediction is a twin token (or a vouched literal). Throws on any cell outside its designed role. */
+export function s2FormulaBoundsLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: S2FormulaBoundsTwin[]; positiveControlCol: string } {
+  const fx = S2_FORMULA_BOUNDS
+  const cells = s2FormulaBoundsCells()
+  for (const c of cells) {
+    const [a, b] = S2_FORMULA_BOUNDS_READINGS.map(r => s2FormulaBoundsPrediction(c, r))
+    const interior = S2_FORMULA_BOUNDS_READINGS.map(r => s2FormulaBoundsSegment(c, r).interior)
+    const segs = S2_FORMULA_BOUNDS_READINGS.map(r => s2FormulaBoundsSegment(c, r).upper)
+    if (Number(String(c.value)) !== c.value || String(c.value) !== c.text) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.ref} text ${c.text} is not its double's shortest form`)
+    if (segs[0] !== segs[1]) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.ref} changes segment between the readings`)
+    const withheld = s2FormulaBoundsWithheldToday(c)
+    const near = S2_FORMULA_BOUNDS_READINGS.some(r => s2FormulaBoundsNearTop(c, r))
+    if (near !== (c.block.nearTop === true) && c.role !== 'control') throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.ref} (${c.text}) is ${c.block.nearTop ? 'not ' : ''}a near-top cell`)
+    const ok = c.role === 'decisive' ? a !== b && (c.block.nearTop ? interior[0] !== interior[1] : interior[0] && interior[1] && withheld !== (c.block.paintedToday === true))
+      : c.role === 'kept' ? interior[0] && interior[1] && withheld && a === b
+        : c.role === 'clear' ? interior[0] && interior[1] && !withheld && a === b
+          : !interior[0] && !interior[1] && a === b
+    if (!ok) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${c.ref} (${c.text}) is not a ${c.role} cell (${a} / ${b})`)
+  }
+  for (const [ref, text] of Object.entries(S2_FORMULA_BOUNDS_CELLS)) if (String(Number(text)) !== text) throw new Error(`${S2_FORMULA_BOUNDS_ID}: ${ref} text ${text} is not its double's shortest form`)
+  const vouched = (c: S2FormulaBoundsCell, fill: string): boolean => c.configuration === 'controls' && (fx.literalControls as readonly string[]).includes(fill)
+  const fills = [...new Set(cells.flatMap(c => S2_FORMULA_BOUNDS_READINGS.map(r => s2FormulaBoundsPrediction(c, r)).filter(f => !vouched(c, f))))].sort()
+  const lineSteps = [...new Set(fills.map(s2nsLineStep).filter((k): k is number => k !== undefined))].sort((a, b) => a - b)
+  const offLine = fills.filter(f => s2nsLineStep(f) === undefined)
+  const dataCols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  const { twins, lastCol } = s2fbTwins(lineSteps, offLine, s2llColIndex(dataCols.at(-1)!) + 1)
+  const twinOf = new Map(twins.map(t => [t.fill, t.ref]))
+  const positiveControlCol = s2llCol(lastCol + 1)
+  if (s2llColIndex(positiveControlCol) >= s2llColIndex(fx.boundCol)) throw new Error(`${S2_FORMULA_BOUNDS_ID}: the layout reaches the bound column ${fx.boundCol}`)
+  const positiveControls = fx.literalControls.map((token, i) => ({ ref: `${positiveControlCol}${fx.firstRow + i}`, token }))
+  const configurations: S5Configuration[] = S2FB_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    const tokenOf = (fill: string): string => (cfg.id === 'controls' && (fx.literalControls as readonly string[]).includes(fill) ? fill : `twin:${twinOf.get(fill)!}`)
+    const hypotheses = Object.fromEntries(S2_FORMULA_BOUNDS_READINGS.map(h => [h, Object.fromEntries(members.map(c => [c.ref, tokenOf(s2FormulaBoundsPrediction(c, h))]))]))
+    const twinRefs = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)).filter(t => t.startsWith('twin:')))].map(t => t.slice('twin:'.length)).sort()
+    return {
+      id: cfg.id, capabilityId: cfg.cap ?? S2_FORMULA_BOUNDS_CAP, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(twinRefs.length > 0 ? { twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])) } : {}),
+      ...(cfg.id === 'controls' ? { positiveControls: Object.fromEntries(positiveControls.map(p => [p.ref, p.token])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins, positiveControlCol }
+}
+
+/** The data columns and the control of each: the column's first designated cell's value, unformatted, in the control row. */
+export function s2FormulaBoundsColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2FormulaBoundsCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_FORMULA_BOUNDS.controlRow}`, text: cells.find(c => /^[A-Z]+/.exec(c.ref)![0] === col)!.text }))
+}
+
+/** The colour rules (one per block; formula cfvo as `f`), then the twins' (one per twin rule), in priority order; positive controls follow, unmarked. */
+export function s2FormulaBoundsMarkers(): CfPartMarker[] {
+  const { twins } = s2FormulaBoundsLayout()
+  const rules = [...new Map(twins.map(t => [t.rule.sqref, t.rule])).values()]
+  const blocks = s2FormulaBoundsBlocks().map(b => ({
+    cap: b.nearTop ? S2_FORMULA_BOUNDS_NEAR_TOP_CAP : S2_FORMULA_BOUNDS_CAP, sqref: s2llSqref(b.col, S2_FORMULA_BOUNDS.firstRow, S2_FORMULA_BOUNDS.firstRow + b.values.length - 1),
+    cfvo: b.cfvo.map(c => ({ ...c })), colors: [...b.colors], formulas: b.cfvo.filter(c => c.type === 'formula' && c.f !== undefined).map(c => c.f!),
+  }))
+  return [
+    ...blocks,
+    ...rules.map(r => ({ cap: S2_FORMULA_BOUNDS_TWIN, sqref: r.sqref, cfvo: r.cfvo.map(val => ({ type: 'num', val })), colors: [...r.colors], formulas: [] as string[] })),
+  ].map((m, i) => ({ ...s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1), formulas: m.formulas }))
+}
+
+/** The capture range: through the positive-control column and the control row (the bound column AH stays outside it). */
+export const s2FormulaBoundsRange = (): string => `A1:${s2FormulaBoundsLayout().positiveControlCol}${S2_FORMULA_BOUNDS.controlRow}`
+
+function stage2FormulaBoundsCase(): CfOracleCase {
+  const fx = S2_FORMULA_BOUNDS
+  const { configurations, positiveControls, twins } = s2FormulaBoundsLayout()
+  const all = s2FormulaBoundsCells()
+  const colControl = new Map(s2FormulaBoundsColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const twinControl = `${colOf(twins[0]!.ref)}${fx.controlRow}`
+  const pcControl = `${colOf(positiveControls[0]!.ref)}${fx.controlRow}`
+  const designated: CfCellExpectation[] = all.map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: pcControl, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: pcControl, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const count = (role: S2FormulaBoundsRole): number => all.filter(c => c.role === role).length
+  const groups = S2FB_CONFIGURATIONS.filter(c => !c.role && !c.cap).length
+  return {
+    id: S2_FORMULA_BOUNDS_ID,
+    stage: 2,
+    question:
+      `The formula-bounds follow-up (brief cf-formula-bounds; registrable): a colour-scale segment bounded by a formula-resolved cfvo (num / formula / percent with a reference or an expression), in the shapes whose rule a capture settled (the guard-boundary shape at raw-floor, the 3-colour upper segment at index-position): does Excel use the formula's double exactly as the same literal (as-literal), or round the result to 15 significant digits first (fifteen-digit)? ${count('decisive')} decisive cells in ${groups} replication groups (2-colour formula maximum, minimum and percent; 3-colour lower and upper segments, a literal midpoint with a formula maximum; both colour orders; P-line and distinct spans; one group of cells production paints today; one expression group; two groups of coincident doubles), ${count('kept')} cells where both readings agree at a shape withheld today, ${count('clear')} clear cells and ${count('control')} controls; the formula-bounded near-top sub-shape is its own question (scale:formula-bounds-near-top) in columns I..K. The formula results are literal cells of column AH (no cell formula) or expressions Excel evaluates. A P-line twin line and endpoint twins with IEEE-integer products show every predicted fill; two literal cellIs positive controls check the readback.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_FORMULA_BOUNDS_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_FORMULA_BOUNDS_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2FormulaBoundsRange(),
+    requiredAppearances: ['screen'],
+    markers: s2FormulaBoundsMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_FORMULA_BOUNDS_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_FORMULA_BOUNDS_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -5922,8 +6329,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   stage2RawFloorCase(),
   // 14. stage2-scale-literal-lower (the literal-lower follow-up)
   stage2LiteralLowerCase(),
-  // 15. stage2-scale-upper-segment (the upper-segment follow-up, appended last: earlier inputs stay byte-identical)
+  // 15. stage2-scale-upper-segment (the upper-segment follow-up)
   stage2UpperSegmentCase(),
+  // 16. stage2-scale-formula-bounds (the formula-bounds follow-up, appended last: earlier inputs stay byte-identical)
+  stage2FormulaBoundsCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -6096,6 +6505,14 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   // comparisons, never questions.
   'scale:upper-segment-twin':
     'The twins of stage2-scale-upper-segment (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
+  // The formula-bounds follow-up (stage2-scale-formula-bounds): both questions pre-registered, awaiting the capture (their entries
+  // are removed only once the capture matches a reading and it is registered in CF_FORMULA_BOUNDS_PRODUCTION_READINGS).
+  'scale:formula-bounds':
+    'Pre-registered by stage2-scale-formula-bounds (as-literal / fifteen-digit), awaiting its capture: formula-bounded segments of the settled shapes stay withheld until a matched reading is registered.',
+  'scale:formula-bounds-near-top':
+    'Pre-registered by stage2-scale-formula-bounds (its own question: the formula-bounded near-top sub-shape), awaiting its capture; painted only with the same reading as scale:formula-bounds.',
+  'scale:formula-bounds-twin':
+    'The twins of stage2-scale-formula-bounds (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
 }
 
 /**

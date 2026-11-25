@@ -135,7 +135,7 @@ const EVIDENCE = ['2c-num', '2c-minmax', '2c-percent', '2c-percentile', '2c-inve
 describe('stage2-scale-raw-floor: the case', () => {
   it('is appended last; owns its three ids; the question is registered as raw-floor (its entry removed), the literal id and twin line stay recorded', async () => {
     // Appended last at its time; the literal-lower follow-up stage2-scale-literal-lower is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual(['stage2-scale-upper-window', ID, 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-5)).toEqual(['stage2-scale-upper-window', ID, 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds'])
     for (const id of [CAP, LIT, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
     for (const id of [LIT, TWIN]) expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)

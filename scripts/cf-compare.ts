@@ -536,6 +536,9 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   // the case's anchor day for a clock case) and the workbook's other sheets, as render.ts passes them; Stages 1-4 keep
   // their Stage 1 clock injection.
   const stage5 = c.stage === 5
+  // The formula-bounds follow-up: a Stage 2 case whose colour-scale cfvo carry formulas (stage2-scale-formula-bounds) takes the
+  // document's evaluation context too, as render.ts always passes it; without it no formula bound resolves.
+  const evaluated = stage5 || c.markers.some(m => m.scale?.cfvo.some(v => (v as { f?: string }).f !== undefined) === true)
   const dateContext = c.clockRequirement && !stage5 ? {
     clockSerial: c.clockRequirement.anchorSerial,
     dateSystem: c.clockRequirement.dateSystem,
@@ -545,7 +548,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   const anchorNow = caseNowOf(c)
   const documentEvaluation = caseDocumentEvaluationOf(c, doc)
   const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, dateContext,
-    ...(stage5 ? { evaluation: cfEvaluationContextFor(documentEvaluation, anchorNow), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') } : {}) })
+    ...(evaluated ? { evaluation: cfEvaluationContextFor(documentEvaluation, anchorNow), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') } : {}) })
   const gen = cfRulesVersion(sheet.conditionalFormatting)
   const stamp = { owner: 'compare', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
@@ -615,7 +618,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       locale: 'en-US',
       budget,
       dateContext,
-      ...(stage5 ? { evaluation: documentEvaluation, now: anchorNow, documentSheets: doc.sheets } : {}),
+      ...(evaluated ? { evaluation: documentEvaluation, now: anchorNow, documentSheets: doc.sheets } : {}),
     })
   } catch (error) {
     // The resident text scope's whole-request admission (its O(rules x cells) estimate against the scratch bound, pinned

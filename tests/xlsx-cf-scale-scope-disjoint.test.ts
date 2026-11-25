@@ -228,7 +228,7 @@ describe('the capture (e448d831): union, and production against Excel', () => {
 describe('stage2-scale-scope-disjoint: the case', () => {
   it('is appended after the earlier cases and owns scale:scope-disjoint; the old case keeps its marker and capture as a cross-check', () => {
     // Appended last at its time; the num-segment follow-up (stage2-scale-num-segment) is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-7)).toEqual([ID, 'stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-8)).toEqual([ID, 'stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds'])
     expect(CF_STAGE2_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === CAP).map(e => e.caseId)).toEqual([ID])
     expect(capabilityOwnerCase(CAP, manifest)!.id).toBe(ID)

@@ -1713,3 +1713,180 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **The evidence:** Excel drew `index-position` at all 86 designated cells, in every group; the 48 decisive cells are off truncation, `truncate` matched none. The six mixed cells split their channels as predicted; the 26 kept cells drew truncation; the 8 decisive near-top probes drew one step below the maximum colour.
 - **Registered:** `index-position` for both ids, as §13.2 says: both `CF_STAGE2_NONDISCRIMINATING` entries removed, `CF_UPPER_SEGMENT_PRODUCTION_READINGS` and `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS` set, published through the audit (353 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.22.
 - **The census with the capture:** `npx tsx scripts/cf-refs/upper-segment-candidates.ts --all` covers 381 upper-segment interior cells; the same 7 survivors (one class) reproduce every one; truncation misses 203. Without `--all` it reproduces §13.1.
+
+## 14. The formula-bounds follow-up (`stage2-scale-formula-bounds`; recipe pending)
+
+A colour-scale segment bounded by a formula-resolved cfvo (`num:formula`, `percent:formula`, `percentile:formula`) stays withheld in every shape whose rule a capture settled, because no capture held a formula bound there. Brief: `.superpowers/sdd/cf-formula-bounds/brief.md`; Phase 1 report: `.superpowers/sdd/cf-formula-bounds/phase1-report.md`.
+
+**The exclusions on main** (each lifted only by a registered formula-bounds reading with its evidence):
+- `guardedInterpolation` (`src/xlsx/cf/colorScale.ts`): the guard-boundary shape (2-colour and 3-colour lower, registered `raw-floor`), withheld as `cf-unmeasured-guard-boundary` when any bounding cfvo is formula-resolved;
+- `upperSegmentReadingColour`: the upper integer and window classes (`index-position`), withheld as `cf-unmeasured-upper-segment-whole-product`, and the near-top sub-shape, `cf-unmeasured-upper-near-top`;
+- the justifications: `upperWholeShapeAt`, `upperNearTopShapeAt` and `guardBoundaryShapeAt` (`scripts/cf-refs/upper-whole-justify.ts`) kept a formula-bounded cell justified whatever was registered.
+
+`numSegmentUnmeasured` and the literal-lower reading key on two literal num cfvo, so a formula bound never enters the num-segment shape; the window reading (unregistered) admits formula bounds already.
+
+### 14.1 Census (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/formula-bounds-census.ts` (pinned by `tests/xlsx-cf-scale-formula-bounds-census.test.ts`) runs over every captured cell (`collectSegmentCells`, `{ include: 'all' }`): 1780 segment cells, 0 harness faults, **167 formula-bounded cells**, all Stage 5 (stage5-cfvo-formulas 56, -scope-v2 42, -scope 24, -relative-a1 20, -nonnumeric-v2 15, x14-scale 8, formula-authored 2).
+- **Shapes** (read with literal bounds): clear 87, endpoint 78, upper integer 2 (E4 and E5 of stage5-cfvo-nonnumeric-v2, the only ones production withholds).
+- **Formula results:** 0, 1, 4, 7, 11, 15, 20 and 50 (`num:formula`; 20 also as a percent and a percentile p). Each equals its 15-digit rounding.
+- **Against the readings:** no painted cell disagrees with `as-literal`; both readings equal Excel at all 167 cells (E4 and E5 included, where `index-position` keeps truncation); **0 cells can tell the readings apart.**
+- Every other captured cell under a formula cfvo has no resolved double (a text, blank, empty-string or error result: withheld, Excel no fill) or no DisplayFormat observation.
+
+### 14.2 Readings and the registration rule (Phase 1 task 2)
+
+Both readings are implemented in production (commit 03090f38) and selectable through `injectCfFormulaBoundsReadings` with the id's evidence; `CF_FORMULA_BOUNDS_PRODUCTION_READINGS` is empty (spread into `CF_STAGE2_PRODUCTION_READINGS`). Ids: `scale:formula-bounds` and `scale:formula-bounds-near-top`.
+- **`as-literal`:** the formula's double is used exactly as the same literal: the shape paints by its registered reading (raw floor in the guard-boundary shape, `index-position` in the upper classes).
+- **`fifteen-digit`:** the formula result is first rounded to 15 significant digits, `Number(x.toPrecision(15))` (`cfFormulaBoundFifteenDigit`; the p of a percent / percentile bound before its threshold is resolved), at the service's substitution, for every colour-scale formula bound (data bars and icon sets untouched); then the same. It moves thresholds, not steps, so it can also repaint cells production paints today.
+
+**Gates kept:** sRGB / truncate only; in the guard-boundary shape only between opaque endpoint colours (the upper segment keeps its own alpha gate); a non-finite result (a rounding that overflows included) withholds. The formula-bounded near-top sub-shape paints only when `scale:formula-bounds-near-top` is registered with the **same** reading as `scale:formula-bounds`, both with their evidence (and the registered upper near-top reading). Unregistered, production is unchanged.
+
+**Registration rule** (registrable, declared before the capture):
+- **One reading matches every designated cell of the main configurations:** remove the `CF_STAGE2_NONDISCRIMINATING` entry of `scale:formula-bounds` and set `CF_FORMULA_BOUNDS_PRODUCTION_READINGS['scale:formula-bounds']` to it.
+- **The near-top id** is judged on its own configuration: register it (and remove its entry) only at the same reading as the main id. Otherwise the main reading is registered and the formula-bounded near-top sub-shape stays withheld.
+- **No reading matches** (any decisive, kept, clear or control cell off it): a finding (`formula-hypothesis-none`), never fitted; the shapes stay withheld.
+- **`fifteen-digit` matches:** also a finding about cells production paints today (the `f2-painted` group, J2 and K2): registering it repaints them, as measured here.
+
+### 14.3 The case (Phase 1 task 3)
+
+`stage2-scale-formula-bounds`, appended last in `CF_STAGE2_CASES` (earlier inputs byte-identical). It owns `scale:formula-bounds`, `scale:formula-bounds-near-top` (both in `CF_STAGE2_NONDISCRIMINATING` until the capture) and `scale:formula-bounds-twin`.
+
+- **Size:** 200 cells in A1:W14, 28 colour rules and 2 cellIs positive controls; the text-scope estimate over the whole range is 4,214,842 bytes, 50.2% of the 8,388,608-byte cap (one batch).
+- **Cells:** 90 designated (43 decisive, 18 kept, 14 clear, 15 controls; 9 of them near-top), 93 twins, 2 literal positive controls (FFF8696B, FF63BE7B), 15 unformatted controls (row 14).
+- **The formula results** are literal cells of column AH (outside every rule and the capture range; written as their doubles' shortest text, checked to round-trip): AH2, AH3, AH6 0.30000000000000004 (rounded 0.3); AH4 2.0999999999999996 (2.1); AH5 33.333333333333336 (33.3333333333333); AH7 210.00000000000003 (210); AH8 419.99999999999994 (420); AH9 315.00000000000006 (315); AH10 426.99999999999994 (427); AH11 0.3 (itself). **No cell formula**, so nothing depends on cached values or calc mode; the cfvo formulas themselves are evaluated by Excel on open, as the Stage 5 cfvo cases do (no `calcPr`). Two expression cfvo Excel evaluates: `0.1*3` (0.30000000000000004, its own group) and `1/3*630` (210 exactly, a coincident control).
+- **Roles.** *Decisive:* the readings differ. *Kept:* they agree at a cell production withholds today. *Clear:* they agree and production paints it today. *Controls:* endpoints and values beyond the bounds. Every non-control cell is in an evidence configuration.
+
+| Group | Col | cfvo | Segment | Decisive / cells |
+|---|---|---|---|---|
+| f2-num-hi | A | num 0 / num =$AH$2 | 2-colour, P → Q | 5 / 7 |
+| f2-formula-lo | B | formula =$AH$3 / num 1 | 2-colour, Q → P | 5 / 8 |
+| f2-painted | C | num 0 / formula =$AH$4 | 2-colour, FF1E3214 → FFF09B32 (distinct, ascending); decisive cells painted today | 5 / 7 |
+| f2-expr | D | num 0 / formula =0.1*3 | 2-colour, Q → P | 5 / 6 |
+| f2-percent | E | percent =$AH$5 / max over 0..300 | 2-colour, P → Q | 5 / 7 |
+| f3-lower | F | num 0 / num =$AH$6 / num 0.6 | 3-colour lower, Q → P | 5 / 7 |
+| f3-upper | G | num −210 / num =$AH$7 / formula =$AH$8 | 3-colour upper, P → Q | 5 / 9 |
+| f3-upper-mixed | H | num 0 / num 105 / formula =$AH$9 | 3-colour upper, FFF09B32 → FF1E3214 (distinct, descending) | 5 / 6 |
+| f2-coincide-expr | L | num 0 / formula =1/3*630 | 2-colour, distinct descending; coincident | 0 / 5 |
+| f3-coincide-ref | M | num 0 / num =$AH$11 / num 0.6 | 3-colour upper, Q → P; coincident | 0 / 4 |
+| near-top (`scale:formula-bounds-near-top`) | I, J, K | num −0.3 / 0 / =$AH$2; num −2.1 / 0 / formula =$AH$4; num 7 / 217 / =$AH$10 | 3-colour upper; 1 and 7 ulps below the smaller maximum (kept) and one endpoint/near-top probe per column (decisive) | 3 / 9 |
+
+- **Decisive cells** lie where a channel product is an IEEE integer (or just above one) under one reading and just below it under the other; the near-top probes are an endpoint under one reading and a near-top interior cell under the other. Every one is found by the layout's model and asserted (`s2FormulaBoundsLayout` throws on any cell off its role, on a segment change between the readings, or on a near-top cell outside the near-top columns).
+- **Twins:** P-line fills on a twin line (num 0 / 1 between P-line steps 128 apart, value (k − from)/128); every other fill on a 3-colour endpoint twin (num 0 / 1 / 2). The layout throws if a twin's product is not an IEEE integer or its model colour is not its fill.
+
+### 14.4 Predictions
+
+Every designated cell under each reading (the model `s2FormulaBoundsPrediction`; `nt`: near-top under as-literal / fifteen-digit; Today: production unregistered).
+
+| Cell | Group | Value | Role | Segment (as-literal; near-top as-literal/fifteen-digit) | Today | as-literal | fifteen-digit |
+|---|---|---|---|---|---|---|---|
+| A2 | f2-num-hi | 0.01 | decisive | lower | withheld | FF1AEA2E | FF1BE92F ≠ |
+| A3 | f2-num-hi | 0.03 | decisive | lower | withheld | FF28DC3C | FF29DB3D ≠ |
+| A4 | f2-num-hi | 0.07 | decisive | lower | withheld | FF44C058 | FF45BF59 ≠ |
+| A5 | f2-num-hi | 0.09 | decisive | lower | withheld | FF52B266 | FF53B167 ≠ |
+| A6 | f2-num-hi | 0.14 | decisive | lower | withheld | FF758F89 | FF768E8A ≠ |
+| A7 | f2-num-hi | 0.1 | clear | lower | painted | FF5AAA6E | FF5AAA6E |
+| A8 | f2-num-hi | 0.2 | clear | lower | painted | FFA064B4 | FFA064B4 |
+| A9 | f2-num-hi | 0 | control | endpoint | painted | FF14F028 | FF14F028 |
+| B2 | f2-formula-lo | 0.31 | decisive | lower | withheld | FFE420F8 | FFE321F7 ≠ |
+| B3 | f2-formula-lo | 0.36 | decisive | lower | withheld | FFD52FE9 | FFD430E8 ≠ |
+| B4 | f2-formula-lo | 0.4 | decisive | lower | withheld | FFC93BDD | FFC83CDC ≠ |
+| B5 | f2-formula-lo | 0.43 | decisive | lower | withheld | FFC044D4 | FFBF45D3 ≠ |
+| B6 | f2-formula-lo | 0.45 | decisive | lower | withheld | FFBA4ACE | FFB94BCD ≠ |
+| B7 | f2-formula-lo | 0.35 | kept | lower | withheld | FFD82CEC | FFD82CEC |
+| B8 | f2-formula-lo | 0.57 | kept | lower | withheld | FF966EAA | FF966EAA |
+| B9 | f2-formula-lo | 0.46 | clear | lower | painted | FFB64ECA | FFB64ECA |
+| B10 | f2-formula-lo | 1 | control | endpoint | painted | FF14F028 | FF14F028 |
+| C2 | f2-painted | 0.01 | decisive | lower | painted | FF1F3214 | FF1E3214 ≠ |
+| C3 | f2-painted | 0.02 | decisive | lower | painted | FF203314 | FF1F3214 ≠ |
+| C4 | f2-painted | 0.04 | decisive | lower | painted | FF223414 | FF213314 ≠ |
+| C5 | f2-painted | 0.08 | decisive | lower | painted | FF263615 | FF253515 ≠ |
+| C6 | f2-painted | 0.09 | decisive | lower | painted | FF273615 | FF263615 ≠ |
+| C7 | f2-painted | 0.03 | clear | lower | painted | FF213314 | FF213314 |
+| C8 | f2-painted | 0.05 | clear | lower | painted | FF233414 | FF233414 |
+| C9 | f2-painted | 0 | control | endpoint | painted | FF1E3214 | FF1E3214 |
+| D2 | f2-expr | 0.01 | decisive | lower | withheld | FFE024F4 | FFDF25F3 ≠ |
+| D3 | f2-expr | 0.03 | decisive | lower | withheld | FFD232E6 | FFD133E5 ≠ |
+| D4 | f2-expr | 0.07 | decisive | lower | withheld | FFB64ECA | FFB54FC9 ≠ |
+| D5 | f2-expr | 0.08 | decisive | lower | withheld | FFAF55C3 | FFAE56C2 ≠ |
+| D6 | f2-expr | 0.13 | decisive | lower | withheld | FF8C78A0 | FF8B799F ≠ |
+| D7 | f2-expr | 0.05 | clear | lower | painted | FFC341D7 | FFC341D7 |
+| D8 | f2-expr | 0 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| E2 | f2-percent | 120 | decisive | lower | withheld | FF28DC3C | FF29DB3D ≠ |
+| E3 | f2-percent | 140 | decisive | lower | withheld | FF3DC751 | FF3EC652 ≠ |
+| E4 | f2-percent | 160 | decisive | lower | withheld | FF52B266 | FF53B167 ≠ |
+| E5 | f2-percent | 180 | decisive | lower | withheld | FF679D7B | FF689C7C ≠ |
+| E6 | f2-percent | 200 | decisive | lower | withheld | FF7C8890 | FF7D8791 ≠ |
+| E7 | f2-percent | 220 | clear | lower | painted | FF9272A6 | FF9272A6 |
+| E8 | f2-percent | 250 | clear | lower | painted | FFB153C5 | FFB153C5 |
+| E9 | f2-percent | 0 | control | endpoint | painted | FF14F028 | FF14F028 |
+| E10 | f2-percent | 300 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| F2 | f3-lower | 0.02 | decisive | lower | withheld | FFD92BED | FFD82CEC ≠ |
+| F3 | f3-lower | 0.04 | decisive | lower | withheld | FFCB39DF | FFCA3ADE ≠ |
+| F4 | f3-lower | 0.06 | decisive | lower | withheld | FFBD47D1 | FFBC48D0 ≠ |
+| F5 | f3-lower | 0.12 | decisive | lower | withheld | FF9371A7 | FF9272A6 ≠ |
+| F6 | f3-lower | 0.15 | decisive | lower | withheld | FF7E8692 | FF7D8791 ≠ |
+| F7 | f3-lower | 0.05 | clear | lower | painted | FFC341D7 | FFC341D7 |
+| F8 | f3-lower | 0.1 | clear | lower | painted | FFA064B4 | FFA064B4 |
+| F9 | f3-lower | 0 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| F10 | f3-lower | 0.6 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| G2 | f3-upper | 217 | decisive | upper | withheld | FF1AEA2E | FF1BE92F ≠ |
+| G3 | f3-upper | 220 | decisive | upper | withheld | FF1DE731 | FF1EE632 ≠ |
+| G4 | f3-upper | 230 | decisive | upper | withheld | FF27DD3B | FF28DC3C ≠ |
+| G5 | f3-upper | 233 | decisive | upper | withheld | FF2ADA3E | FF2BD93F ≠ |
+| G6 | f3-upper | 244 | decisive | upper | withheld | FF35CF49 | FF36CE4A ≠ |
+| G7 | f3-upper | 211 | kept | upper | withheld | FF14F028 | FF14F028 |
+| G8 | f3-upper | 214 | kept | upper | withheld | FF17ED2B | FF17ED2B |
+| G9 | f3-upper | 225 | kept | upper | withheld | FF22E236 | FF22E236 |
+| G10 | f3-upper | 212.5 | clear | upper | painted | FF16EE2A | FF16EE2A |
+| G11 | f3-upper | -210 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| H2 | f3-upper-mixed | 112 | decisive | upper | withheld | FFEA9832 | FFE99831 ≠ |
+| H3 | f3-upper-mixed | 125 | decisive | upper | withheld | FFDD9230 | FFDC9130 ≠ |
+| H4 | f3-upper-mixed | 140 | decisive | upper | withheld | FFCE8A2E | FFCD8A2D ≠ |
+| H5 | f3-upper-mixed | 152 | decisive | upper | withheld | FFC2842C | FFC1842C ≠ |
+| H6 | f3-upper-mixed | 166 | decisive | upper | withheld | FFB47D2A | FFB37D2A ≠ |
+| H7 | f3-upper-mixed | 107.5 | clear | upper | painted | FFEE9A32 | FFEE9A32 |
+| H8 | f3-upper-mixed | 0 | control | endpoint | painted | FF1E3214 | FF1E3214 |
+| H9 | f3-upper-mixed | 105 | control | endpoint | painted | FFF09B32 | FFF09B32 |
+| I2 | nt-q-p | 0.3 | decisive | upper (nt/) | withheld | FF15EF29 | FF14F028 ≠ |
+| I3 | nt-q-p | 0.29999999999999993 | kept | upper (nt/nt) | withheld | FF15EF29 | FF15EF29 |
+| I4 | nt-q-p | 0.2999999999999996 | kept | upper (nt/nt) | withheld | FF15EF29 | FF15EF29 |
+| J2 | nt-dd | 2.0999999999999996 | decisive | endpoint (/nt) | painted | FFF09B32 | FFEF9A31 ≠ |
+| J3 | nt-dd | 2.099999999999999 | kept | upper (nt/nt) | withheld | FFEF9A31 | FFEF9A31 |
+| J4 | nt-dd | 2.0999999999999965 | kept | upper (nt/nt) | withheld | FFEF9A31 | FFEF9A31 |
+| K2 | nt-p-q | 426.99999999999994 | decisive | endpoint (/nt) | painted | FFE61EFA | FFE51FF9 ≠ |
+| K3 | nt-p-q | 426.9999999999999 | kept | upper (nt/nt) | withheld | FFE51FF9 | FFE51FF9 |
+| K4 | nt-p-q | 426.9999999999996 | kept | upper (nt/nt) | withheld | FFE51FF9 | FFE51FF9 |
+| L2 | f2-coincide-expr | 27 | kept | lower | withheld | FFD68E2F | FFD68E2F |
+| L3 | f2-coincide-expr | 54 | kept | lower | withheld | FFBB812B | FFBB812B |
+| L4 | f2-coincide-expr | 57 | kept | lower | withheld | FFB87F2A | FFB87F2A |
+| L5 | f2-coincide-expr | 108 | kept | lower | withheld | FF856623 | FF856623 |
+| L6 | f2-coincide-expr | 100 | clear | lower | painted | FF8C6924 | FF8C6924 |
+| L7 | f2-coincide-expr | 0 | control | endpoint | painted | FFF09B32 | FFF09B32 |
+| L8 | f2-coincide-expr | 210 | control | endpoint | painted | FF1E3214 | FF1E3214 |
+| M2 | f3-coincide-ref | 0.35 | kept | upper | withheld | FFC440D8 | FFC440D8 |
+| M3 | f3-coincide-ref | 0.36 | kept | upper | withheld | FFBD47D1 | FFBD47D1 |
+| M4 | f3-coincide-ref | 0.45 | kept | upper | withheld | FF7D8791 | FF7D8791 |
+| M5 | f3-coincide-ref | 0.3125 | clear | upper | painted | FFDE26F2 | FFDE26F2 |
+| M6 | f3-coincide-ref | 0.3 | control | endpoint | painted | FFE61EFA | FFE61EFA |
+| M7 | f3-coincide-ref | 0.6 | control | endpoint | painted | FF14F028 | FF14F028 |
+
+### 14.5 Rehearsal (Phase 1 task 4)
+
+`tests/xlsx-cf-scale-formula-bounds-case.test.ts` (23 tests), with `tests/xlsx-cf-scale-formula-bounds-readings.test.ts` (12, the production property over a probe grid):
+- **Production vs the model:** unregistered (or without the ids' evidence), production withholds exactly the 54 cells of the settled shapes (31 guard boundary, 23 upper) and paints every other cell at `as-literal`'s prediction. Under each reading with both ids, every designated cell paints the reading; with the main id alone, or the near-top id at the other reading, the cells near-top under that reading stay withheld.
+- **Synthetic worlds:** each planted reading selects exactly itself for both ids; one flipped decisive cell per group, or one kept or coincident cell one step off, gives `formula-hypothesis-none`; a near-top probe off refuses only the near-top id; broken controls refuse.
+- **The audit gate:** registry kept, unverified; entries removed and unregistered, `supported-structural`; the matched reading registered, both verified (the only additions); the main id alone, the near-top id withheld; the other reading, withheld. A no-match plant keeps the withhold (200 cells, 54 justified, 0 violations).
+- **Committed captures:** under each registration no Stage 2 cell moves (no measured Stage 2 case holds a resolving formula bound); Stage 5 agrees with Excel and only E4 and E5 of stage5-cfvo-nonnumeric-v2 change, newly painted at Excel's fill (FFD8E082, FFB1D580).
+- **Planted worlds through conformance and cf-compare** (interactive, paged): pass unregistered and under the world's own registration; unregistered, a fifteen-digit world is caught exactly at the 7 decisive cells production paints today (C2..C6, J2, K2); the other reading registered is caught at all 43 decisive cells.
+
+### 14.6 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-formula-bounds.xlsx   # 020ee61675a6281ee50ea0e8108a4ce32d0cb4c4118825cbce8aff103de74c25
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-formula-bounds
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-formula-bounds
+npx vitest run tests/xlsx-cf-scale-formula-bounds-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-formula-bounds` (run twice, byte-identical; the manifest change is insertions only). After the build, check that Excel's resave kept every AH cell's double and every cfvo formula text (the structural verifier compares formula cfvo by text and literal ones by double). The registration rule is §14.2.
