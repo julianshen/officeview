@@ -1,8 +1,8 @@
 /**
  * Icon-set threshold resolution, buckets and evaluation (Stage 4, Task 26).
  *
- * - Thresholds compose the shared primitives only: `lerp` for `percent`, `percentileOrderStatistic` for `percentile`
- *   (over the session's ascending copy), the literal for `num`. This module orders nothing and computes no percentile.
+ * - Thresholds compose the shared primitives only: `percentThreshold` for `percent`, `percentileOrderStatistic` for `percentile`
+ *   (over the session's ascending copy), each in the order its percent-order id selects (`lerp-first` unregistered), the literal for `num`. This module orders nothing and computes no percentile.
  * - Every reading is a hypothesis (Rulings S4-C/D/E) until its `icon:*` capability is verified. Where a capability names
  *   several readings and nothing pins the viewer's, the reading is taken from `iconSelectionEvidence`, and without a
  *   selection the shape stays unresolved.
@@ -12,7 +12,7 @@
  */
 import type { CfDefinition, CfIconDescriptor, CfIconRef, CfIconSetName, CfLiteral, CfOutcome } from './model'
 import type { CfRangeStatistics } from './statistics'
-import { lerp, percentileOrderStatistic } from './colorScale'
+import { CF_ICON_PERCENT_ORDER_CAP, CF_ICON_PERCENTILE_ORDER_CAP, cfPercentOrder, orderedThreshold, percentileOrderStatistic, percentThreshold } from './colorScale'
 import { hasEvidence as defaultHasEvidence, iconSelectionEvidence } from './evidence'
 
 type CfIconSetDefinition = Extract<CfDefinition, { kind: 'iconSet' }>
@@ -118,6 +118,9 @@ export function resolveIconThresholds(
     if (selected !== 'inc' && selected !== 'exc') return unmeasured()
     variant = selected
   }
+  // The percent-order follow-up: each bound type's arithmetic order, by its own icon id (`lerp-first` unregistered).
+  const percentOrder = cfPercentOrder(CF_ICON_PERCENT_ORDER_CAP, check)
+  const percentileOrder = cfPercentOrder(CF_ICON_PERCENTILE_ORDER_CAP, check)
   const out: number[] = []
   for (const t of def.thresholds) {
     const b = t.bound
@@ -125,9 +128,19 @@ export function resolveIconThresholds(
     if (b.type === 'num') value = b.value
     else if (b.type === 'min') value = stats?.min
     else if (b.type === 'max') value = stats?.max
-    else if (b.type === 'percent') value = stats && stats.min !== undefined && stats.max !== undefined ? lerp(stats.min, stats.max, b.value / 100) : undefined
-    else if (b.type === 'formula') return unresolved('cf-formula-unevaluated')
-    else value = stats && variant ? percentileOrderStatistic(stats.sortedAsc, b.value, variant) : undefined
+    else if (b.type === 'percent') {
+      const min = stats?.min, max = stats?.max
+      const t = min !== undefined && max !== undefined ? orderedThreshold(percentOrder, r => percentThreshold(min, max, b.value, r)) : undefined
+      if (t === 'differs') return unresolved('cf-unmeasured-percent-order')
+      value = t
+    } else if (b.type === 'formula') return unresolved('cf-formula-unevaluated')
+    else {
+      const sorted = stats?.sortedAsc, v = variant
+      // PERCENTILE.EXC under a non-default order is unmeasured: `percentileOrderStatistic` gives none, so it withholds.
+      const t = sorted && v ? orderedThreshold(percentileOrder, r => percentileOrderStatistic(sorted, b.value, v, r)) : undefined
+      if (t === 'differs') return unresolved('cf-unmeasured-percent-order')
+      value = t
+    }
     if (value === undefined) return unresolved('cf-no-numeric-values')
     if (!Number.isFinite(value)) return unresolved('cf-non-finite-value')
     out.push(value)

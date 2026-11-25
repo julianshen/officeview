@@ -6,11 +6,12 @@
  * - `stage2NumSegmentShape`: the num-segment finding (capture e448d831, a87121e8), recomputed from the case's own marker
  *   and the cell's value, never a cell list;
  * - `stage2UpperSegmentWholeProductShape`: the upper-segment whole-product withhold (owner ruling after stage2-scale-num-segment);
- * - `stage2GuardBoundaryShape`: the guard-boundary withhold (owner ruling after stage2-scale-upper-window).
+ * - `stage2GuardBoundaryShape`: the guard-boundary withhold (owner ruling after stage2-scale-upper-window);
+ * - `stage2PercentOrderShape`: the percent-order narrowing, when it is selected (the percent-order follow-up).
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, literalLowerPaints, upperNearTopShapeAt, upperSegmentReadingPaints, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, literalLowerPaints, percentOrderShapeAt, upperNearTopShapeAt, upperSegmentReadingPaints, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -135,4 +136,13 @@ export function stage2FormulaBound(cfvo: { type: string; val?: string; f?: strin
  */
 export function stage2GuardBoundaryShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
   return markers.some(m => guardBoundaryShapeAt(m, ref, value, values, cfvo => stage2FormulaBound(cfvo, values)))
+}
+
+/**
+ * The percent-order follow-up: the pre-committed narrowing (production's `cf-unmeasured-percent-order`), recomputed
+ * independently of production (`percentOrderShapeAt`): a colour-scale rule whose narrowed percent / percentile cfvo gives
+ * different thresholds under the two orders withholds every cell of the rule. Justifies nothing while no id is narrowed.
+ */
+export function stage2PercentOrderShape(markers: readonly MarkerLike[], ref: string, values: ReadonlyMap<string, number>): boolean {
+  return markers.some(m => percentOrderShapeAt(m, ref, values, cfvo => stage2FormulaBound(cfvo, values)))
 }

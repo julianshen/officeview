@@ -2,7 +2,7 @@ import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
-import { cfFormulaBoundFifteenDigit, fifteenDigitFormulaBounds, resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
+import { cfFormulaBoundFifteenDigit, cfScalePercentOrders, fifteenDigitFormulaBounds, resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
 import { evaluateDataBar, resolveBarThresholds } from './dataBar'
 import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
@@ -553,7 +553,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
                   if (visual.kind !== 'ready') { outcomes.push(visual); continue }
                   const def = visual.value as Extract<CfDefinition, { kind: 'colorScale' }>
-                  const thresh = resolveScaleThresholds(def.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap) })
+                  const thresh = resolveScaleThresholds(def.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap), percentOrders: cfScalePercentOrders(cap => evidence.allows(cap)) })
                   if (thresh.kind !== 'ready') {
                     outcomes.push(thresh)
                     continue

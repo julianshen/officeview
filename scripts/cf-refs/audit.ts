@@ -84,7 +84,7 @@ import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
-import { CF_FORMULA_BOUNDS_PRODUCTION_READINGS, CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
+import { CF_FORMULA_BOUNDS_PRODUCTION_READINGS, CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS, CF_PERCENT_ORDER_PRODUCTION_READINGS, CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
 import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
 import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
@@ -279,6 +279,10 @@ export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
   ...(CF_UPPER_SEGMENT_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_FORMULA_BOUNDS_PRODUCTION_READINGS as Readonly<Record<string, string>>),
+  // The percent-order follow-up: the colour-scale order ids and scale:formula-bounds-v2 (both empty until
+  // stage2-scale-percent-order's capture matches a reading and it is registered there).
+  ...(Object.fromEntries(Object.entries(CF_PERCENT_ORDER_PRODUCTION_READINGS).filter(([id]) => id.startsWith('scale:'))) as Readonly<Record<string, string>>),
+  ...(CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS as Readonly<Record<string, string>>),
 }
 
 export function auditStage2Manifest(
@@ -1054,7 +1058,12 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
  * beside the published set (`renderFormulaSelectionsBlock`, Task 39).
  * A capability with a matched reading but no entry (`formula:truth-range`, `formula:fn-today`, ...) is withheld.
  */
-export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
+export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = {
+  ...CF_FORMULA_PRODUCTION_READINGS,
+  // The percent-order follow-up: the icon order ids (empty until stage5-icon-percent-order's capture matches a reading and it
+  // is registered in CF_PERCENT_ORDER_PRODUCTION_READINGS, colorScale.ts).
+  ...(Object.fromEntries(Object.entries(CF_PERCENT_ORDER_PRODUCTION_READINGS).filter(([id]) => id.startsWith('icon:'))) as Readonly<Record<string, string>>),
+}
 
 /**
  * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses

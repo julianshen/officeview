@@ -12,7 +12,7 @@ import { parseXlsx } from '../../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
-import { STAGE2_WITHHELD_FINDINGS, stage2GuardBoundaryShape, stage2NumSegmentShape, stage2UpperSegmentWholeProductShape } from '../../scripts/cf-refs/stage2-withhold'
+import { STAGE2_WITHHELD_FINDINGS, stage2GuardBoundaryShape, stage2NumSegmentShape, stage2PercentOrderShape, stage2UpperSegmentWholeProductShape } from '../../scripts/cf-refs/stage2-withhold'
 import type { CfManifest } from '../../scripts/cf-refs/cases'
 
 export interface Stage2ConformanceResult {
@@ -23,6 +23,8 @@ export interface Stage2ConformanceResult {
   upperWholeWithheld: number
   /** Withheld as the guard-boundary shape (owner ruling after stage2-scale-upper-window). */
   guardBoundaryWithheld: number
+  /** The percent-order narrowing (zero unless it is selected). */
+  percentOrderWithheld: number
   stubCompared: number
   caseCounts: Record<string, number>
   violations: string[]
@@ -38,7 +40,7 @@ const STAGE2_STUB_SUCCESSORS = ['formula:dialect-base', 'formula:anchor-single',
 const defaultStubCompare = (_key: string, gotMatched: boolean): boolean => gotMatched || STAGE2_STUB_SUCCESSORS.every(id => VERIFIED_CAPABILITIES.has(id))
 
 export async function stage2Conformance(manifest: CfManifest, rootDir: string, caseIds: readonly string[], stubCompare: (cellKey: string, gotMatched: boolean) => boolean = defaultStubCompare): Promise<Stage2ConformanceResult> {
-  const out: Stage2ConformanceResult = { total: 0, exact: 0, withheld: 0, numSegmentWithheld: 0, upperWholeWithheld: 0, guardBoundaryWithheld: 0, stubCompared: 0, caseCounts: {}, violations: [] }
+  const out: Stage2ConformanceResult = { total: 0, exact: 0, withheld: 0, numSegmentWithheld: 0, upperWholeWithheld: 0, guardBoundaryWithheld: 0, percentOrderWithheld: 0, stubCompared: 0, caseCounts: {}, violations: [] }
   for (const caseId of caseIds) {
     const c = manifest.cases.find(x => x.id === caseId)
     if (!c || !existsSync(join(rootDir, c.saved))) { out.violations.push(`${caseId}: missing case or saved workbook`); continue }
@@ -63,7 +65,7 @@ export async function stage2Conformance(manifest: CfManifest, rootDir: string, c
       const finding = STAGE2_WITHHELD_FINDINGS[key]
       const stub = finding !== undefined && /^stage2-scale-composition:L[2-5]$/.test(key) && stubCompare(key, actual !== 'FFFFFFFF')
       if (stub) out.stubCompared++
-      const withhold = (counter?: 'numSegmentWithheld' | 'upperWholeWithheld' | 'guardBoundaryWithheld'): void => {
+      const withhold = (counter?: 'numSegmentWithheld' | 'upperWholeWithheld' | 'guardBoundaryWithheld' | 'percentOrderWithheld'): void => {
         if (actual !== 'FFFFFFFF') out.violations.push(`${key}: expected withheld, painted ${actual}`)
         out.withheld++
         if (counter) out[counter]++
@@ -72,6 +74,7 @@ export async function stage2Conformance(manifest: CfManifest, rootDir: string, c
       else if (stage2NumSegmentShape(c.markers, cell.ref, cellObj?.value)) withhold('numSegmentWithheld')
       else if (stage2UpperSegmentWholeProductShape(c.markers, cell.ref, cellObj?.value, values)) withhold('upperWholeWithheld')
       else if (stage2GuardBoundaryShape(c.markers, cell.ref, cellObj?.value, values)) withhold('guardBoundaryWithheld')
+      else if (stage2PercentOrderShape(c.markers, cell.ref, values)) withhold('percentOrderWithheld')
       else if (actual !== cell.fillRgb) out.violations.push(`${key}: production ${actual} is not Excel's ${cell.fillRgb}`)
       else out.exact++
     }
