@@ -95,7 +95,7 @@ export function literalLowerCensus(collection: SegmentCollection): { rows: Liter
  */
 export const LITERAL_LOWER_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-literal-lower']
 /** Captures after this census's own follow-up, left out in every mode: the census is recorded as of a3f85309 (recipe §12.7). */
-export const LITERAL_LOWER_LATER_CASES: readonly string[] = ['stage2-scale-upper-segment']
+export const LITERAL_LOWER_LATER_CASES: readonly string[] = ['stage2-scale-upper-segment', 'stage2-scale-formula-bounds']
 
 export async function literalLowerCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof literalLowerCensus>> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)

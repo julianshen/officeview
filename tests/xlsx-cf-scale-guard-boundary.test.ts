@@ -211,7 +211,9 @@ const RAW_FLOOR_CASE = 'stage2-scale-raw-floor'
 
 describe('the reach: 14 cells in stage2-scale-upper-window and the 67 evidence cells of stage2-scale-raw-floor, none anywhere else', () => {
   it('through production\'s own segment evaluations, and the Stage 2 and Stage 5 justifications agree case by case without the evidence (as recorded at ce3f701d, before the literal-lower registration); registered, nothing is justified', async () => {
-    const { cells } = await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })
+    // Recorded as of ce3f701d: stage2-scale-formula-bounds (d2660d46, formula-bounded; its guard-boundary cells stay withheld) is later.
+    const LATER = ['stage2-scale-formula-bounds']
+    const cells = (await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })).cells.filter(x => !LATER.includes(x.caseId))
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.colours === 3 && s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)
     const inShape = cells.filter(x => (x.segment.colours === 2 || x.segment.segment === 0) && !literalWithheld(x.segment) && guardBoundaryProduct(x.segment.c0, x.segment.c1, x.segment.value, x.segment.lo, x.segment.hi, x.segment.fraction))
     const byCase: Record<string, string[]> = {}
@@ -221,7 +223,7 @@ describe('the reach: 14 cells in stage2-scale-upper-window and the 67 evidence c
     expect(evidence.length).toBe(67)
     expect(Object.fromEntries(Object.entries(byCase).map(([k, v]) => [k, [...v].sort()]))).toEqual({ [CASE]: [...MOVED].sort(), [RAW_FLOOR_CASE]: [...evidence].sort() })
     for (const x of inShape) expect(hex(interpolateScaleColor(x.segment.c0, x.segment.c1, x.segment.fraction)), `${x.caseId}:${x.ref}`).not.toBe(x.excel)
-    for (const cs of manifest.cases.filter(x => x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
+    for (const cs of manifest.cases.filter(x => x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && !LATER.includes(x.id) && (x.stage === 2 || x.stage === 5) && x.markers.some(m => m.ruleType === 'colorScale'))) {
       const { sheet } = await parsed(cs)
       const cellsOf = stage5SheetCells(sheet)
       const numbers = new Map([...cellsOf].filter(([, v]) => typeof v.value === 'number' && !v.error).map(([k, v]) => [k, v.value as number]))

@@ -583,7 +583,8 @@ export const CF_GUARD_BOUNDARY_CAP = 'scale:guard-boundary-raw-floor'
 /**
  * The reading production implements per id: `raw-floor` for scale:guard-boundary-raw-floor, matched by the capture of
  * stage2-scale-raw-floor (ce3f701d). With its evidence, production paints the guard-boundary shape at raw floor where the
- * default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved; a formula-bounded segment, and a
+ * default sRGB / truncate variants hold and neither bounding cfvo is formula-resolved (or a formula-bounds reading is
+ * registered with its evidence, `CF_FORMULA_BOUNDS_CAP`, between opaque colours); any other formula-bounded segment, and a
  * 3-colour lower segment bounded by two literal num cfvo (the num-segment withhold, first, unless a literal-lower reading
  * hands the cell here), stay withheld. Without the
  * evidence the shape stays withheld (`cf-unmeasured-guard-boundary`). The audit's CF_STAGE2_PRODUCTION_READINGS spreads this
@@ -609,8 +610,10 @@ export function cfGuardBoundaryReading(capability: string = CF_GUARD_BOUNDARY_CA
  */
 function guardedInterpolation(c0: number, c1: number, value: number, lo: number, hi: number, fraction: number, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, checkEvidence: (cap: string) => boolean, bounds: readonly CfScalePoint[]): CfOutcome<number> {
   if (rounding === 'truncate' && guardBoundaryProduct(c0, c1, value, lo, hi, fraction)) {
-    // A formula-resolved bound was never captured in this shape (Stage 2 holds none; no Stage 5 cell is in it): withheld.
-    const r = colorSpace === 'sRGB' && !bounds.some(formulaResolvedBound) ? cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) : undefined
+    // A formula-resolved bound was never captured in this shape (no capture holds one in it): withheld unless a formula-bounds
+    // reading is registered with its evidence, and then only between opaque endpoint colours (fail closed on alpha).
+    const formulaOk = !bounds.some(formulaResolvedBound) || (formulaBoundsLift(checkEvidence) !== undefined && opaque(c0) && opaque(c1))
+    const r = colorSpace === 'sRGB' && formulaOk ? cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) : undefined
     const argb = r !== undefined && checkEvidence(CF_GUARD_BOUNDARY_CAP) ? upperWindowReadingColor(r, c0, c1, fraction) : undefined
     return argb !== undefined ? { kind: 'ready', value: argb } : { kind: 'unresolved', reason: 'cf-unmeasured-guard-boundary' }
   }
@@ -734,7 +737,8 @@ export function literalLowerStepColour(argb0: number, argb1: number, fraction: n
  *   over all 302 captured upper-segment interior cells (scripts/cf-refs/upper-segment-candidates.ts; with i = 0 it is the
  *   registered lower-segment raw floor);
  * - `truncate`: production's guarded truncation (`interpolateScaleColor`), the control.
- * Pre-registered by stage2-scale-upper-segment. A segment bounded by a formula-resolved cfvo stays withheld under every reading,
+ * Pre-registered by stage2-scale-upper-segment. A segment bounded by a formula-resolved cfvo stays withheld under every reading
+ * unless a formula-bounds reading is registered with its evidence (`CF_FORMULA_BOUNDS_CAP`),
  * and `index-position` applies only when both segment colours are opaque (alpha FF; the search held alpha constant and every
  * capture is opaque): another alpha stays withheld.
  */
@@ -816,9 +820,68 @@ export function cfUpperNearTopReading(capability: string = CF_UPPER_NEAR_TOP_CAP
   return r !== undefined && (CF_UPPER_SEGMENT_READINGS as readonly string[]).includes(r) ? r : undefined
 }
 
-/** The colour of the registered upper-segment reading, if any (with its evidence, sRGB / truncate, no formula-resolved bound). */
+/**
+ * The formula-bounds follow-up (brief cf-formula-bounds, Phase 1 task 2): the readings of a colour-scale segment bounded by a
+ * formula-resolved cfvo (`num:formula`, `percent:formula`, `percentile:formula`) in a shape whose rule a capture settled but
+ * no capture held with a formula bound: the guard-boundary shape (`guardedInterpolation`, registered `raw-floor`), the upper
+ * segment's integer and window classes (`index-position`) and, under its own id, the upper near-top sub-shape. Readings:
+ * - `as-literal`: Excel uses the formula's double exactly as the same value typed as a literal (or computed as a statistic):
+ *   the shape paints by its registered reading with the formula bound substituted;
+ * - `fifteen-digit`: Excel first rounds the formula result to 15 significant digits (`cfFormulaBoundFifteenDigit`, the p of a
+ *   percent / percentile bound before its threshold is resolved), then the same; the service substitutes the rounded result
+ *   for every colour-scale formula bound (`fifteenDigitFormulaBounds`), so it moves thresholds, not steps.
+ * The census (scripts/cf-refs/formula-bounds-census.ts) found every captured formula result equal to its rounding, so no
+ * capture tells them apart. Pre-registered by stage2-scale-formula-bounds. Unregistered (the default), every such cell stays
+ * withheld as before. The lift is sRGB / truncate only and, in the guard-boundary shape, only between opaque endpoint colours
+ * (the upper segment keeps its own alpha gate); every other gate stays.
+ */
+export const CF_FORMULA_BOUNDS_READINGS = ['as-literal', 'fifteen-digit'] as const
+export type CfFormulaBoundsReading = (typeof CF_FORMULA_BOUNDS_READINGS)[number]
+/** The capability a formula-bounds reading is registered under (stage2-scale-formula-bounds). */
+export const CF_FORMULA_BOUNDS_CAP = 'scale:formula-bounds'
+/** The formula-bounded near-top sub-shape: its own question, painted only with the same reading as CF_FORMULA_BOUNDS_CAP. */
+export const CF_FORMULA_BOUNDS_NEAR_TOP_CAP = 'scale:formula-bounds-near-top'
+/**
+ * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
+ * (with its evidence), formula-bounded cells of those shapes stay withheld, as on main. The audit's
+ * CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_FORMULA_BOUNDS_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfFormulaBoundsReading>>> = Object.freeze({})
+let proposedFormulaBoundsReadings: Readonly<Partial<Record<string, CfFormulaBoundsReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfFormulaBoundsReadings(readings: Readonly<Partial<Record<string, CfFormulaBoundsReading>>> | null): void {
+  proposedFormulaBoundsReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The formula-bounds reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfFormulaBoundsReading(capability: string = CF_FORMULA_BOUNDS_CAP): CfFormulaBoundsReading | undefined {
+  const r = proposedFormulaBoundsReadings && Object.prototype.hasOwnProperty.call(proposedFormulaBoundsReadings, capability) ? proposedFormulaBoundsReadings[capability] : CF_FORMULA_BOUNDS_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_FORMULA_BOUNDS_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+/** `fifteen-digit`'s rounding of a formula result: the double nearest its 15-significant-digit decimal (non-finite stays so). */
+export const cfFormulaBoundFifteenDigit = (x: number): number => (Number.isFinite(x) ? Number(x.toPrecision(15)) : x)
+/** The formula-bounds reading registered with its evidence (undefined: none; formula-bounded cells of the settled shapes stay withheld). */
+function formulaBoundsLift(checkEvidence: (cap: string) => boolean): CfFormulaBoundsReading | undefined {
+  const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
+  return r !== undefined && checkEvidence(CF_FORMULA_BOUNDS_CAP) ? r : undefined
+}
+/** Whether the service substitutes `fifteen-digit`'s rounded result for a colour-scale formula bound (registered with its evidence). */
+export function fifteenDigitFormulaBounds(checkEvidence: (cap: string) => boolean): boolean {
+  return formulaBoundsLift(checkEvidence) === 'fifteen-digit'
+}
+const opaque = (argb: number): boolean => ((argb >>> 24) & 0xff) === 0xff
+
+/**
+ * The colour of the registered upper-segment reading, if any (with its evidence, sRGB / truncate). A formula-resolved bound
+ * paints only with a formula-bounds reading registered with its evidence (and, at the near-top sub-shape, the formula
+ * near-top id at the same reading with its evidence).
+ */
 function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, nearTop = false): number | undefined {
-  if (seg.segment !== 1 || colorSpace !== 'sRGB' || rounding !== 'truncate' || formulaResolvedBound(lo) || formulaResolvedBound(hi)) return undefined
+  if (seg.segment !== 1 || colorSpace !== 'sRGB' || rounding !== 'truncate') return undefined
+  if (formulaResolvedBound(lo) || formulaResolvedBound(hi)) {
+    const f = formulaBoundsLift(checkEvidence)
+    if (f === undefined) return undefined
+    if (nearTop && (cfFormulaBoundsReading(CF_FORMULA_BOUNDS_NEAR_TOP_CAP) !== f || !checkEvidence(CF_FORMULA_BOUNDS_NEAR_TOP_CAP))) return undefined
+  }
   const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
   if (r === undefined || !checkEvidence(CF_UPPER_SEGMENT_CAP)) return undefined
   // The near-top sub-shape: only with its own registration, the same reading, and its evidence.

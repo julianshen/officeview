@@ -54,6 +54,10 @@ in git history.
   - **Reach:** 349 captured cells paint exactly; no captured cell is mispainted, and no other cell moves.
   - **Still withheld:** a formula-bounded upper segment, a scale colour that is not opaque, and non-default colour spaces or roundings.
   - Evidence: `docs/validation/xlsx-cf.md` §14.z.22.
+- **Formula-bounded colour scales stay withheld where they did.** A pre-registered Excel 16.115 capture (`stage2-scale-formula-bounds`) tested whether a formula bound (a cell reference or an expression) is used exactly as the same number typed in, or rounded to 15 digits first.
+  - **What it showed:** Excel used the exact number in seven of eight groups, but a percent bound drew as if rounded; the likelier cause is how Excel computes a percent threshold, which is not yet measured.
+  - **What changes:** nothing. Formula-bounded cells at a rounding boundary stay withheld (`cf-unmeasured-guard-boundary`, `cf-unmeasured-upper-segment-whole-product`, `cf-unmeasured-upper-near-top`).
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.23.
 
 ### Added
 

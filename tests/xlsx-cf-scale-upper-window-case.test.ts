@@ -129,7 +129,7 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 describe('stage2-scale-upper-window: the case', () => {
   it('is appended last; owns its three ids, each registered (the question until its capture); guarded and raw-floor are the readings', async () => {
     // Appended last at its time; the raw-floor follow-up stage2-scale-raw-floor is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual([ID, 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-5)).toEqual([ID, 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds'])
     for (const id of [CAP, LIT, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
@@ -399,7 +399,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 /** The Stage 2 cases measured as of ed0fccb6 (the later stage2-scale-raw-floor left out). */
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-raw-floor' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment' && x.id !== 'stage2-scale-formula-bounds').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('as recorded (nothing registered): no violation over the measured Stage 2 cases, this capture included; E4 and D19 withheld', async () => {

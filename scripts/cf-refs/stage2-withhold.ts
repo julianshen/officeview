@@ -102,19 +102,37 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
  * `cf-unmeasured-upper-segment-whole-product`), recomputed independently of production from the marker and the saved
  * numbers (`upperWholeShapeAt`, scripts/cf-refs/upper-whole-justify.ts): a 3-colour cell strictly inside the UPPER segment
  * (after the midpoint-above-max re-sort), any bound kind, where some RGB channel's span d != 0 gives an integer f·d.
- * Stage 2 holds no formula bound: a formula bound justifies nothing here.
+ * A formula bound resolves through `stage2FormulaBound` (stage2-scale-formula-bounds); one it cannot restate justifies nothing.
  */
 export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
   // The near-top sub-shape (`upperNearTopShapeAt`, reason cf-unmeasured-upper-near-top) is counted with it.
-  return markers.some(m => upperWholeShapeAt(m, ref, value, values) || upperNearTopShapeAt(m, ref, value, values))
+  const bound = (cfvo: { type: string; val?: string; f?: string }): number | undefined => stage2FormulaBound(cfvo, values)
+  return markers.some(m => upperWholeShapeAt(m, ref, value, values, bound) || upperNearTopShapeAt(m, ref, value, values, bound))
+}
+
+/**
+ * The formula-bounds follow-up (stage2-scale-formula-bounds): the number a Stage 2 formula cfvo resolves to, recomputed from
+ * the sheet's own numbers, for the two forms that case writes: an absolute one-cell reference (`$AH$2`) to a number, or a
+ * product / quotient chain of decimal literals (`0.1*3`, `1/3*630`) evaluated left to right in IEEE doubles. Anything else
+ * resolves nothing (so it justifies nothing: fail closed).
+ */
+export function stage2FormulaBound(cfvo: { type: string; val?: string; f?: string }, values: ReadonlyMap<string, number>): number | undefined {
+  const f = (cfvo.f ?? cfvo.val ?? '').trim().replace(/^=/, '')
+  const ref = /^\$([A-Z]+)\$(\d+)$/.exec(f)
+  if (ref) return values.get(`${ref[1]}${ref[2]}`)
+  if (!/^\d+(\.\d+)?([*/]\d+(\.\d+)?)*$/.test(f)) return undefined
+  const parts = f.split(/([*/])/)
+  let x = Number(parts[0])
+  for (let i = 1; i < parts.length; i += 2) x = parts[i] === '*' ? x * Number(parts[i + 1]) : x / Number(parts[i + 1])
+  return Number.isFinite(x) ? x : undefined
 }
 
 /**
  * The guard-boundary shape (owner ruling after capture ed0fccb6, stage2-scale-upper-window; production's reason
  * `cf-unmeasured-guard-boundary`), recomputed independently of production (`guardBoundaryShapeAt`,
  * scripts/cf-refs/upper-whole-justify.ts): a cell strictly inside a 2-colour scale or a 3-colour lower segment whose step
- * product on some channel lies within 1e-11 strictly below a whole number. Stage 2 holds no formula bound.
+ * product on some channel lies within 1e-11 strictly below a whole number. A formula bound resolves through `stage2FormulaBound`.
  */
 export function stage2GuardBoundaryShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
-  return markers.some(m => guardBoundaryShapeAt(m, ref, value, values))
+  return markers.some(m => guardBoundaryShapeAt(m, ref, value, values, cfvo => stage2FormulaBound(cfvo, values)))
 }
