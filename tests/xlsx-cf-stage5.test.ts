@@ -29,7 +29,8 @@ const CORPUS = resolve(REPO_ROOT, 'corpus')
 const manifest = (): CfManifest => JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
 
 /** The formula rows this task covers: `formula:*` and the formula rows of the visual families. */
-const FORMULA_FAMILY_ROWS = new Set(['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'scale:dialect-standalone'])
+// The percent-order follow-up's icon ids (stage5-icon-percent-order) are Stage 5 family rows too.
+const FORMULA_FAMILY_ROWS = new Set(['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'scale:dialect-standalone', 'icon:percent-order', 'icon:percentile-order', 'icon:percent-order-twin'])
 const isFormulaRow = (id: string): boolean => id.startsWith('formula:') || FORMULA_FAMILY_ROWS.has(id)
 const publishedStage5 = (): ReadonlySet<string> | undefined => Reflect.get(verifiedExports, 'VERIFIED_STAGE5_CAPABILITIES') as ReadonlySet<string> | undefined
 
@@ -401,7 +402,7 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     const m = manifest()
     const rows = await stage5CaseRecords(m, REPO_ROOT)
     const all = m.cases.filter(c => c.stage === 5)
-    expect(all).toHaveLength(35) // 35 since stage5-cfvo-nonnumeric-v2 (the cfvo-nonnumeric confirmation case)
+    expect(all).toHaveLength(36) // 36 since stage5-icon-percent-order (the percent-order follow-up)
     expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(all.map(c => c.id)))
     const measured = all.filter(c => c.status === 'measured')
     expect(rows.filter(r => r.compared).length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))

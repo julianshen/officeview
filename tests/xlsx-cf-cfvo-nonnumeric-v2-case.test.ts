@@ -106,7 +106,8 @@ describe('stage5-cfvo-nonnumeric-v2: the case', () => {
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === UMBRELLA)!.caseId).toBe('stage5-cfvo-formulas')
     expect(CF_STAGE5_UNSUPPORTED[UMBRELLA]).toMatch(/Superseded per kind/)
     expect(CF_FORMULA_PRODUCTION_READINGS[UMBRELLA]).toBeUndefined()
-    expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
+    // Appended last at its time; the percent-order follow-up's icon case comes after it.
+    expect(CF_STAGE5_CASES.slice(-2).map(x => x.id)).toEqual([ID, 'stage5-icon-percent-order'])
     expect(CF_STAGE5_GROUPS['stage5-cfvo-formulas']).toContain(ID)
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
     expect(caseOf('stage5-cfvo-formulas').status).toBe('measured')

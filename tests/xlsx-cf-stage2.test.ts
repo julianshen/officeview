@@ -107,8 +107,9 @@ describe('every enabled scale capability has verified evidence', () => {
     // questions, scale:upper-segment and scale:upper-segment-near-top, matched index-position (2ee3735a) and are verified:
     // 39 verified.
     expect(report.summary.verifiedCapabilities).toBe(39)
-    // + the formula-bounds follow-up's three ids (pre-registered, awaiting the capture).
-    expect(report.summary.unverifiedCapabilities).toBe(25)
+    // + the formula-bounds follow-up's three ids (pre-registered; captured, nothing registered), + the percent-order
+    // follow-up's four (stage2-scale-percent-order, pre-registered, awaiting the capture).
+    expect(report.summary.unverifiedCapabilities).toBe(29)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 

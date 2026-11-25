@@ -1899,3 +1899,219 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **Not registered** (§14.2): no single reading matched the main configurations, and the near-top id is registrable only at the main id's reading. The formula-bound withholds stay. Details: `docs/validation/xlsx-cf.md` §14.z.23.
 - **The census with the capture:** `npx tsx scripts/cf-refs/formula-bounds-census.ts --all` covers 248 formula-bounded cells (81 of this capture); `as-literal` equals Excel at 243 (all but E2..E6), `fifteen-digit` at 210; 43 discriminate. Without `--all` it reproduces §14.1.
 - **Hypothesis only (post-capture, never registered):** the percent threshold computed multiplication first, min + (max − min)·p/100 = 100, reproduces E2..E10 as well as `fifteen-digit` does; with it, `as-literal` explains every cell of the capture.
+
+
+## 15. The percent-order follow-up (`stage2-scale-percent-order`, with `stage5-icon-percent-order`; recipe-pending)
+
+The post-capture hypothesis of stage2-scale-formula-bounds (d2660d46, §14.7): Excel computes a percent threshold multiplication first. Brief: `.superpowers/sdd/cf-percent-order/brief.md`; Phase 1 report: `.superpowers/sdd/cf-percent-order/phase1-report.md`. d2660d46 forms the hypothesis only; nothing is registered from it.
+
+### 15.1 Survey (Phase 1 task 1)
+
+`npx tsx scripts/cf-refs/percent-order-survey.ts` (pinned by `tests/xlsx-cf-percent-order-survey.test.ts`): every captured percent / percentile cfvo of a colour scale, data bar or icon set, each threshold over the rule's stored and visible numeric cells.
+- 287 in-domain bounds over 25 measured cases (colour scale 13 percent + 16 percentile, data bar 4 + 4, icon set 247 + 3); 8 out-of-domain bounds (p < 0 or > 100) excluded, since production refuses that shape outright.
+- **7 bounds differ between the orders:** E2:E10 of stage2-scale-formula-bounds (100.00000000000001 / 100), stage4-icon-scope B/D, F, G (percent 67: 70.30000000000001 / 70.3), stage4-icon-rtl B (36.400000000000006 / 36.4), stage5-cfvo-formulas G and T (percentile 20: 21.000000000000007 / 21). No data-bar bound differs.
+- **5 cells change outcome:** E2..E6 of stage2-scale-formula-bounds (withheld today). Excel matches multiply-first there, and also lerp-first with fifteen-digit, so **no captured cell contradicts lerp-first** (not blocked).
+
+### 15.2 Readings and the registration rule (Phase 1 task 2)
+
+Production (commit e44463a4), selectable through `injectCfPercentOrderReadings` with the id's evidence; `CF_PERCENT_ORDER_PRODUCTION_READINGS` is empty.
+- **`lerp-first`** (production): percent t = lo + (p/100)·(hi − lo) (`lerp`); PERCENTILE.INC rank 1 + (p/100)·(n − 1).
+- **`multiply-first`**: percent t = lo + ((hi − lo)·p)/100; rank 1 + (p·(n − 1))/100, then the same interpolation x_i + frac·(x_(i+1) − x_i). A non-finite intermediate withholds (`cf-invalid-bound`); PERCENTILE.EXC under it withholds.
+- **The pre-committed narrowing** (`withhold-differing`, `CF_PERCENT_ORDER_NARROWINGS`, empty): every rule evaluated against a threshold whose two orders give different doubles is withheld (`cf-unmeasured-percent-order`), justified by `percentOrderShapeAt` / `percentOrderDiffers` (recomputed from the sheet).
+- **Ids, each decided on its own groups:** `scale:percent-order`, `scale:percentile-order` (this case), `icon:percent-order`, `icon:percentile-order` (stage5-icon-percent-order). A colour-scale registration never moves an icon threshold, nor an icon registration a scale's. **Data bars take no order** (scope reduced: a one-ulp threshold moves a bar end by far less than the ±1 px the Stage 3/5 bar measurement resolves; the only discontinuities are equal or inverted thresholds, which production withholds), so bars are not measured and stay `lerp-first`.
+- **`scale:formula-bounds-v2`**: the formula-bounds readings under each order: `as-literal+lerp-first`, `as-literal+multiply-first`, `fifteen-digit+lerp-first`, `fifteen-digit+multiply-first`. Registered with its evidence it lifts the formula-bound exclusions of the guard-boundary shape and the upper integer / window classes **only when its order equals the colour-scale percent order production applies** (`scale:percent-order`'s registered reading, else lerp-first; never under the narrowing), never for a segment bounded by a formula percentile (unmeasured) and never at the near-top sub-shape (still `scale:formula-bounds-near-top` with `scale:formula-bounds`).
+
+**Registration rule** (declared before the capture):
+- **One reading of an id matches every designated cell of its configurations** (`discriminating`): remove its `CF_STAGE2_NONDISCRIMINATING` (`CF_STAGE5_NONDISCRIMINATING`) entry and set `CF_PERCENT_ORDER_PRODUCTION_READINGS[id]`. `multiply-first` switches that kind's order; every captured cell painted today that changes must be listed (the rehearsal finds none painted today; E2..E6 of stage2-scale-formula-bounds become painted at Excel's fill).
+- **`lerp-first` matches:** no production change; record the evidence.
+- **No reading matches** (`formula-hypothesis-none`): add the id to `CF_PERCENT_ORDER_NARROWINGS` (the narrowing above, already implemented); a finding, never fitted.
+- **`scale:formula-bounds-v2`** registers `X+O` only if `scale:percent-order` registers `O` from the same capture (or `O` is `lerp-first` and `scale:percent-order` matches `lerp-first`). The earlier capture d2660d46 contradicts `as-literal+lerp-first` (E2..E6) and both `fifteen-digit` readings (its as-literal-matched cells): registering any of them would break Stage 2 conformance on that capture, so a match of one of them is a contradiction between captures, recorded, never registered. Only `as-literal+multiply-first` is consistent with both.
+- `scale:percentile-order` is independent of `scale:percent-order`; under no match of one the narrowing applies to that one alone.
+
+### 15.3 The case (Phase 1 task 3)
+
+`stage2-scale-percent-order`, appended last in `CF_STAGE2_CASES` (earlier inputs byte-identical); input sha256 1328484857514c8f04cc7d16bfea87013fba82c9ee4571e1ab07d1a95dd2d544.
+- **Size:** 225 cells in A1:W14 (103 designated: 63 decisive, 3 kept, 13 clear, 24 controls; 106 twins on a P-line twin line; 2 literal cellIs positive controls FFF8696B / FF63BE7B; 14 unformatted controls), 22 colour rules. Opaque P-line colours only (P = FF14F028, Q = FFE61EFA).
+- **Formula results:** literal cells of column AH (no cell formula): AH2 33.333333333333336, AH3 46.666666666666664, AH4 28.000000000000004, AH5 / AH6 0.30000000000000004, AH7 210.00000000000003, AH8 419.99999999999994; each its double's shortest text.
+- **Decisive cells** are guard-boundary cells: the order moves the threshold by an ulp, which moves a channel product from an exact whole number (or just above) to just below it, and the registered raw floor draws one step apart. Both signs of lerp-first − multiply-first, for percent (A, D above; B, C below) and percentile (E above; F below); negative minima in every literal group.
+- **The formula-percent groups cut the four v2 readings differently** (G: as-literal+lerp-first alone; H: as-literal against fifteen-digit, plus three cells where as-literal+lerp-first alone differs; I: fifteen-digit+multiply-first alone), so every pair of v2 readings differs at >= 5 decisive cells; J, K, L repeat stage2-scale-formula-bounds' guard-boundary, 3-colour lower and upper formula shapes (the order does not matter there).
+
+| Group | Col | cfvo | Capability | Decisive / cells |
+|---|---|---|---|---|
+| po-lo-pq | A | percent 92 / max over -90..120, P → Q | scale:percent-order | 5 / 8 |
+| po-lo-qp | B | percent 98 / max over -90..120, Q → P | scale:percent-order | 5 / 8 |
+| po-hi-qp | C | min / percent 73 over -60..150, Q → P | scale:percent-order | 5 / 8 |
+| po-hi-pq | D | min / percent 81 over -7..203, P → Q | scale:percent-order | 5 / 8 |
+| pl-pq | E | percentile 10 / max, 8 values | scale:percentile-order | 5 / 8 |
+| pl-qp | F | percentile 30 / max, 10 values | scale:percentile-order | 5 / 10 |
+| fp-33 | G | percent =$AH$2 / max over -90..210, P → Q | scale:formula-bounds-v2 | 5 / 8 |
+| fp-47 | H | min / percent =$AH$3 over -60..240, Q → P | scale:formula-bounds-v2 | 8 / 11 |
+| fp-28 | I | percent =$AH$4 / max over -90..210, Q → P | scale:formula-bounds-v2 | 5 / 8 |
+| fn-hi | J | num 0 / num =$AH$5 | scale:formula-bounds-v2 | 5 / 8 |
+| f3-lower | K | num 0 / num =$AH$6 / num 0.6 | scale:formula-bounds-v2 | 5 / 9 |
+| f3-upper | L | num -210 / num =$AH$7 / formula =$AH$8 | scale:formula-bounds-v2 | 5 / 9 |
+
+### 15.4 Predictions
+
+Every designated cell (the model `s2PercentOrderReadingPrediction`; Today: production unregistered; "–": not a reading of the cell's capability).
+
+| Cell | Group | Value | Role | Today | lerp-first | multiply-first | as-literal+lerp-first | as-literal+multiply-first | fifteen-digit+lerp-first | fifteen-digit+multiply-first |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A2 | po-lo-pq | 103.36 | decisive | painted | FF15EF29 | FF16EE2A | – | – | – | – |
+| A3 | po-lo-pq | 104.08 | decisive | painted | FF1EE632 | FF1FE533 | – | – | – | – |
+| A4 | po-lo-pq | 104.8 | decisive | painted | FF27DD3B | FF28DC3C | – | – | – | – |
+| A5 | po-lo-pq | 105.52 | decisive | painted | FF30D444 | FF31D345 | – | – | – | – |
+| A6 | po-lo-pq | 106.4 | decisive | painted | FF3BC94F | FF3CC850 | – | – | – | – |
+| A7 | po-lo-pq | 105 | clear | painted | FF2ADA3E | FF2ADA3E | – | – | – | – |
+| A8 | po-lo-pq | -90 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| A9 | po-lo-pq | 120 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| B2 | po-lo-qp | 115.84 | decisive | painted | FFE420F8 | FFE51FF9 | – | – | – | – |
+| B3 | po-lo-qp | 116 | decisive | painted | FFDC28F0 | FFDD27F1 | – | – | – | – |
+| B4 | po-lo-qp | 116.3 | decisive | painted | FFCD37E1 | FFCE36E2 | – | – | – | – |
+| B5 | po-lo-qp | 116.6 | decisive | painted | FFBE46D2 | FFBF45D3 | – | – | – | – |
+| B6 | po-lo-qp | 117 | decisive | painted | FFAA5ABE | FFAB59BF | – | – | – | – |
+| B7 | po-lo-qp | 118.4 | clear | painted | FF64A078 | FF64A078 | – | – | – | – |
+| B8 | po-lo-qp | -90 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| B9 | po-lo-qp | 120 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| C2 | po-hi-qp | -48.32 | decisive | painted | FFD62EEA | FFD72DEB | – | – | – | – |
+| C3 | po-hi-qp | -30.07 | decisive | painted | FFBD47D1 | FFBE46D2 | – | – | – | – |
+| C4 | po-hi-qp | -14.74 | decisive | painted | FFA85CBC | FFA95BBD | – | – | – | – |
+| C5 | po-hi-qp | 4.24 | decisive | painted | FF8E76A2 | FF8F75A3 | – | – | – | – |
+| C6 | po-hi-qp | 15.19 | decisive | painted | FF7F8593 | FF808494 | – | – | – | – |
+| C7 | po-hi-qp | -57 | clear | painted | FFE222F6 | FFE222F6 | – | – | – | – |
+| C8 | po-hi-qp | -60 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| C9 | po-hi-qp | 150 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| D2 | po-hi-pq | -4.57 | decisive | painted | FF16EE2A | FF17ED2B | – | – | – | – |
+| D3 | po-hi-pq | 1.1 | decisive | painted | FF1DE731 | FF1EE632 | – | – | – | – |
+| D4 | po-hi-pq | 10.01 | decisive | painted | FF28DC3C | FF29DB3D | – | – | – | – |
+| D5 | po-hi-pq | 22.16 | decisive | painted | FF37CD4B | FF38CC4C | – | – | – | – |
+| D6 | po-hi-pq | 33.5 | decisive | painted | FF45BF59 | FF46BE5A | – | – | – | – |
+| D7 | po-hi-pq | -3 | clear | painted | FF18EC2C | FF18EC2C | – | – | – | – |
+| D8 | po-hi-pq | -7 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| D9 | po-hi-pq | 203 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| E2 | pl-pq | 3 | decisive | painted | FF31D345 | FF32D246 | – | – | – | – |
+| E3 | pl-pq | 26 | decisive | painted | FF45BF59 | FF46BE5A | – | – | – | – |
+| E4 | pl-pq | 49 | decisive | painted | FF59AB6D | FF5AAA6E | – | – | – | – |
+| E5 | pl-pq | 72 | decisive | painted | FF6D9781 | FF6E9682 | – | – | – | – |
+| E6 | pl-pq | 95 | decisive | painted | FF818395 | FF828296 | – | – | – | – |
+| E7 | pl-pq | 0 | clear | painted | FF2FD543 | FF2FD543 | – | – | – | – |
+| E8 | pl-pq | -105 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| E9 | pl-pq | 210 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| F2 | pl-qp | 35 | decisive | painted | FFD232E6 | FFD331E7 | – | – | – | – |
+| F3 | pl-qp | 42 | decisive | painted | FFC83CDC | FFC93BDD | – | – | – | – |
+| F4 | pl-qp | 56 | decisive | painted | FFB450C8 | FFB54FC9 | – | – | – | – |
+| F5 | pl-qp | 70 | decisive | painted | FFA064B4 | FFA163B5 | – | – | – | – |
+| F6 | pl-qp | 104.3 | decisive | painted | FF6F9583 | FF709484 | – | – | – | – |
+| F7 | pl-qp | 30 | clear | painted | FFDA2AEE | FFDA2AEE | – | – | – | – |
+| F8 | pl-qp | -60 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| F9 | pl-qp | -30 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| F10 | pl-qp | 0 | control | painted | FFE61EFA | FFE61EFA | – | – | – | – |
+| F11 | pl-qp | 168 | control | painted | FF14F028 | FF14F028 | – | – | – | – |
+| G2 | fp-33 | 30 | decisive | withheld | – | – | FF28DC3C | FF29DB3D | FF29DB3D | FF29DB3D |
+| G3 | fp-33 | 50 | decisive | withheld | – | – | FF3DC751 | FF3EC652 | FF3EC652 | FF3EC652 |
+| G4 | fp-33 | 70 | decisive | withheld | – | – | FF52B266 | FF53B167 | FF53B167 | FF53B167 |
+| G5 | fp-33 | 90 | decisive | withheld | – | – | FF679D7B | FF689C7C | FF689C7C | FF689C7C |
+| G6 | fp-33 | 110 | decisive | withheld | – | – | FF7C8890 | FF7D8791 | FF7D8791 | FF7D8791 |
+| G7 | fp-33 | 12 | clear | painted | – | – | FF16EE2A | FF16EE2A | FF16EE2A | FF16EE2A |
+| G8 | fp-33 | -90 | control | painted | – | – | FF14F028 | FF14F028 | FF14F028 | FF14F028 |
+| G9 | fp-33 | 210 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| H2 | fp-47 | -50 | decisive | painted | – | – | FFD72DEB | FFD72DEB | FFD82CEC | FFD82CEC |
+| H3 | fp-47 | -30 | decisive | painted | – | – | FFB94BCD | FFB94BCD | FFBA4ACE | FFBA4ACE |
+| H4 | fp-47 | -10 | decisive | painted | – | – | FF9B69AF | FF9B69AF | FF9C68B0 | FF9C68B0 |
+| H5 | fp-47 | 10 | decisive | painted | – | – | FF7D8791 | FF7D8791 | FF7E8692 | FF7E8692 |
+| H6 | fp-47 | 30 | decisive | painted | – | – | FF5FA573 | FF5FA573 | FF60A474 | FF60A474 |
+| H7 | fp-47 | -42 | decisive | painted | – | – | FFCB39DF | FFCC38E0 | FFCC38E0 | FFCC38E0 |
+| H8 | fp-47 | -24 | decisive | painted | – | – | FFB054C4 | FFB153C5 | FFB153C5 | FFB153C5 |
+| H9 | fp-47 | 12 | decisive | painted | – | – | FF7A8A8E | FF7B898F | FF7B898F | FF7B898F |
+| H10 | fp-47 | -57 | clear | painted | – | – | FFE222F6 | FFE222F6 | FFE222F6 | FFE222F6 |
+| H11 | fp-47 | -60 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| H12 | fp-47 | 240 | control | painted | – | – | FF14F028 | FF14F028 | FF14F028 | FF14F028 |
+| I2 | fp-28 | 1.2 | decisive | withheld | – | – | FFE024F4 | FFE024F4 | FFE024F4 | FFDF25F3 |
+| I3 | fp-28 | 15.6 | decisive | withheld | – | – | FFD232E6 | FFD232E6 | FFD232E6 | FFD133E5 |
+| I4 | fp-28 | 30 | decisive | withheld | – | – | FFC440D8 | FFC440D8 | FFC440D8 | FFC341D7 |
+| I5 | fp-28 | 51.6 | decisive | withheld | – | – | FFAF55C3 | FFAF55C3 | FFAF55C3 | FFAE56C2 |
+| I6 | fp-28 | 94.8 | decisive | withheld | – | – | FF857F99 | FF857F99 | FF857F99 | FF848098 |
+| I7 | fp-28 | -5 | clear | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| I8 | fp-28 | -90 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| I9 | fp-28 | 210 | control | painted | – | – | FF14F028 | FF14F028 | FF14F028 | FF14F028 |
+| J2 | fn-hi | 0.01 | decisive | withheld | – | – | FF1AEA2E | FF1AEA2E | FF1BE92F | FF1BE92F |
+| J3 | fn-hi | 0.03 | decisive | withheld | – | – | FF28DC3C | FF28DC3C | FF29DB3D | FF29DB3D |
+| J4 | fn-hi | 0.07 | decisive | withheld | – | – | FF44C058 | FF44C058 | FF45BF59 | FF45BF59 |
+| J5 | fn-hi | 0.09 | decisive | withheld | – | – | FF52B266 | FF52B266 | FF53B167 | FF53B167 |
+| J6 | fn-hi | 0.14 | decisive | withheld | – | – | FF758F89 | FF758F89 | FF768E8A | FF768E8A |
+| J7 | fn-hi | 0.1 | clear | painted | – | – | FF5AAA6E | FF5AAA6E | FF5AAA6E | FF5AAA6E |
+| J8 | fn-hi | 0.2 | clear | painted | – | – | FFA064B4 | FFA064B4 | FFA064B4 | FFA064B4 |
+| J9 | fn-hi | 0 | control | painted | – | – | FF14F028 | FF14F028 | FF14F028 | FF14F028 |
+| K2 | f3-lower | 0.02 | decisive | withheld | – | – | FFD92BED | FFD92BED | FFD82CEC | FFD82CEC |
+| K3 | f3-lower | 0.04 | decisive | withheld | – | – | FFCB39DF | FFCB39DF | FFCA3ADE | FFCA3ADE |
+| K4 | f3-lower | 0.06 | decisive | withheld | – | – | FFBD47D1 | FFBD47D1 | FFBC48D0 | FFBC48D0 |
+| K5 | f3-lower | 0.12 | decisive | withheld | – | – | FF9371A7 | FF9371A7 | FF9272A6 | FF9272A6 |
+| K6 | f3-lower | 0.15 | decisive | withheld | – | – | FF7E8692 | FF7E8692 | FF7D8791 | FF7D8791 |
+| K7 | f3-lower | 0.05 | clear | painted | – | – | FFC341D7 | FFC341D7 | FFC341D7 | FFC341D7 |
+| K8 | f3-lower | 0.1 | clear | painted | – | – | FFA064B4 | FFA064B4 | FFA064B4 | FFA064B4 |
+| K9 | f3-lower | 0 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| K10 | f3-lower | 0.6 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+| L2 | f3-upper | 217 | decisive | withheld | – | – | FF1AEA2E | FF1AEA2E | FF1BE92F | FF1BE92F |
+| L3 | f3-upper | 220 | decisive | withheld | – | – | FF1DE731 | FF1DE731 | FF1EE632 | FF1EE632 |
+| L4 | f3-upper | 230 | decisive | withheld | – | – | FF27DD3B | FF27DD3B | FF28DC3C | FF28DC3C |
+| L5 | f3-upper | 233 | decisive | withheld | – | – | FF2ADA3E | FF2ADA3E | FF2BD93F | FF2BD93F |
+| L6 | f3-upper | 244 | decisive | withheld | – | – | FF35CF49 | FF35CF49 | FF36CE4A | FF36CE4A |
+| L7 | f3-upper | 211 | kept | withheld | – | – | FF14F028 | FF14F028 | FF14F028 | FF14F028 |
+| L8 | f3-upper | 214 | kept | withheld | – | – | FF17ED2B | FF17ED2B | FF17ED2B | FF17ED2B |
+| L9 | f3-upper | 225 | kept | withheld | – | – | FF22E236 | FF22E236 | FF22E236 | FF22E236 |
+| L10 | f3-upper | -210 | control | painted | – | – | FFE61EFA | FFE61EFA | FFE61EFA | FFE61EFA |
+
+### 15.5 The icon case (`stage5-icon-percent-order`)
+
+Built as a Stage 5 case because Stage 5 holds the pre-registered crop configurations (twins, S5-WITNESS) that Stage 4 lacks; appended last in `CF_STAGE5_FIXTURES`; input sha256 442557e3a082eb06db9a1fcf354d7c26ffb25df42a4d130a93ccf7267c590c92. 3Arrows rules [percent 0, p1, p2] (B..E, rows 2..), constant-class literal twins (G..R) holding the same values, each designated cell with its same-content control: A1:AK27, 134 expected cells, 16 rules; text-scope estimate 5,958,496 bytes (71% of the cap, one batch).
+- A decisive cell holds the smaller of the two orders' thresholds (v >= t: one bucket apart). **Percent:** ipc-up p 55 / 81 over -90..120 (lerp-first above; probes 25.5, 80.1 twice each), ipc-down p 47 / 49 (lerp-first below; probes lerp-first's 8.699999999999989 and 12.899999999999991). **Percentile:** at n <= 40 and p in 0.01 steps exactly one rank differs at an integer (n = 26, p = 56: lerp-first 15.000000000000002, multiply-first 15), so ipl-up's probes are the 15th order statistic (10, five cells) and only one sign exists (a value between two thresholds of one interval cannot be in the scope it defines).
+- **ipc-tol** (negative control): values at and one ulp below 15 and 67.5, thresholds both orders agree on; a tolerant comparison refuses both readings.
+- Thresholds — ipc-up lerp-first 25.500000000000014 / 80.10000000000002, multiply-first 25.5 / 80.1; ipc-down 8.699999999999989 / 12.899999999999991 against 8.700000000000003 / 12.900000000000006; ipl-up 10.000000000000018 / 95 against 10 / 95; ipc-tol 15 / 67.5 under both.
+
+Buckets per designated cell (0 down, 1 side, 2 up arrow):
+
+| Cell | Group | Value | Role | lerp-first | multiply-first |
+|---|---|---|---|---|---|
+| B3 | ipc-up | 25.5 | decisive | 0 | 1 |
+| B4 | ipc-up | 25.5 | decisive | 0 | 1 |
+| B5 | ipc-up | 80.1 | decisive | 1 | 2 |
+| B6 | ipc-up | 80.1 | decisive | 1 | 2 |
+| B7 | ipc-up | -50 | control | 0 | 0 |
+| B8 | ipc-up | 50 | control | 1 | 1 |
+| B9 | ipc-up | 100 | control | 2 | 2 |
+| C3 | ipc-down | 8.699999999999989 | decisive | 1 | 0 |
+| C4 | ipc-down | 8.699999999999989 | decisive | 1 | 0 |
+| C5 | ipc-down | 12.899999999999991 | decisive | 2 | 1 |
+| C6 | ipc-down | 12.899999999999991 | decisive | 2 | 1 |
+| C7 | ipc-down | -50 | control | 0 | 0 |
+| C8 | ipc-down | 11 | control | 1 | 1 |
+| C9 | ipc-down | 119 | control | 2 | 2 |
+| D12 | ipl-up | 10 | decisive | 0 | 1 |
+| D13 | ipl-up | 10 | decisive | 0 | 1 |
+| D14 | ipl-up | 10 | decisive | 0 | 1 |
+| D15 | ipl-up | 10 | decisive | 0 | 1 |
+| D16 | ipl-up | 10 | decisive | 0 | 1 |
+| D2 | ipl-up | -50 | control | 0 | 0 |
+| D11 | ipl-up | 4 | control | 0 | 0 |
+| D17 | ipl-up | 20 | control | 1 | 1 |
+| D27 | ipl-up | 120 | control | 2 | 2 |
+| E3 | ipc-tol | 15 | control | 1 | 1 |
+| E4 | ipc-tol | 14.999999999999998 | control | 0 | 0 |
+| E5 | ipc-tol | 67.5 | control | 2 | 2 |
+| E6 | ipc-tol | 67.49999999999999 | control | 1 | 1 |
+
+### 15.6 Rehearsal (Phase 1 task 4)
+
+`tests/xlsx-cf-percent-order-case.test.ts` and `tests/xlsx-cf-percent-order-readings.test.ts`: the model equals production in 12 Stage 2 worlds (each reading, the v2 readings at each order, both narrowings); each planted reading selects exactly itself and the "neither" world refuses; the committed captures under every world (§15.2 for the contradicted v2 worlds); icon thresholds and buckets equal the model in every world.
+
+### 15.7 Run
+
+```sh
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-percent-order
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-percent-order
+bun scripts/cf-refs/build.ts --stage 5 --case stage5-icon-percent-order
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-icon-percent-order
+npx tsx scripts/cf-refs/audit.ts --stage 2 && npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+Regenerate the inputs only before a build: `npx tsx scripts/cf-refs/generate.ts --case <id>` (twice, byte-identical). After the build check that Excel's resave kept every AH double, the cfvo formula text and the long probe texts (8.699999999999989, 12.899999999999991, 14.999999999999998, 67.49999999999999). Captures are never retried; the registration rule is §15.2.

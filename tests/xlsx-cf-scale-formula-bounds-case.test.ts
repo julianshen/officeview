@@ -136,8 +136,8 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 
 describe('stage2-scale-formula-bounds: the case', () => {
   it('is appended last; owns its three ids; both questions unregistered and in the registry (captured d2660d46: no single reading matched, so nothing is registered), the twins recorded', async () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-upper-segment', ID])
+    // Appended last at its time; the percent-order follow-up is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-upper-segment', ID, 'stage2-scale-percent-order'])
     for (const id of [CAP, NEAR, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
