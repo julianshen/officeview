@@ -48942,8 +48942,8 @@
       ],
       "expected": {
         "inputSha256": "55070ace2736f2b2199919e03c35ba67e48a1a132668696a09ebe890b92ada87",
-        "savedSha256": "55070ace2736f2b2199919e03c35ba67e48a1a132668696a09ebe890b92ada87",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "e4751fcbb1c6eb256240bf660f282c354bbd7a9ec5f35c454972cfc3ce887a99",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "A2",
           "A3",
@@ -49179,1463 +49179,1463 @@
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A3",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A4",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A5",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A6",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A7",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A8",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "A9",
             "controlRef": "A14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B2",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B3",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B4",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B5",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B6",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B7",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B8",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B9",
             "controlRef": "B14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C2",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C3",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C4",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C5",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C6",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C7",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C8",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C9",
             "controlRef": "C14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D2",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D3",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D4",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D5",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D6",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D7",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D8",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D9",
             "controlRef": "D14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E2",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E3",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E4",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E5",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E6",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E7",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E8",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E9",
             "controlRef": "E14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F2",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F3",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F4",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F5",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F6",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F7",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F8",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F9",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F10",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F11",
             "controlRef": "F14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G2",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G3",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G4",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G5",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G6",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G7",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G8",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G9",
             "controlRef": "G14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H2",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H3",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H4",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H5",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H6",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H7",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H8",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H9",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H10",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H11",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H12",
             "controlRef": "H14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I2",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I3",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I4",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I5",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I6",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I7",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I8",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I9",
             "controlRef": "I14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J2",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J3",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J4",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J5",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J6",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J7",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J8",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J9",
             "controlRef": "J14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K2",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K3",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K4",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K5",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K6",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K7",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K8",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K9",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K10",
             "controlRef": "K14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L2",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L3",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L4",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L5",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L6",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L7",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L8",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L9",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L10",
             "controlRef": "L14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "O12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "P12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "R7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "S13",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "T13",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U11",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U12",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "U13",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V2",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V3",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V4",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V5",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V6",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V7",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V8",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V9",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "V10",
             "controlRef": "M14",
             "matched": true,
             "scaleApplied": true,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "W2",
@@ -51593,17 +51593,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-percent-order.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-percent-order.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-percent-order.json",
+          "pngSha256": "627af107e8e6bbc559c7c1348c35f8e66858be4c9530c90970ac3e25afbc7236"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Awaiting host Excel 16.115 execution and verified display-format interior color observations",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-25T20:46:22.926Z",
+        "excelVersion": "16.115",
+        "inputSha256": "55070ace2736f2b2199919e03c35ba67e48a1a132668696a09ebe890b92ada87",
+        "savedSha256": "e4751fcbb1c6eb256240bf660f282c354bbd7a9ec5f35c454972cfc3ce887a99",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage3-bar-settings-probe",
@@ -143880,8 +143887,8 @@
       ],
       "expected": {
         "inputSha256": "57b2c23a383ebf8339da07a0ffc067c093e28ab45990e9a51aebcebb4fd272c1",
-        "savedSha256": "57b2c23a383ebf8339da07a0ffc067c093e28ab45990e9a51aebcebb4fd272c1",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "609cda8fe75d9baaf12c58262073ef6e7fe6c199d307499198b9e3b07aa0bee7",
+        "provenance": "excel-observed",
         "positiveRefs": [],
         "negativeRefs": [
           "Q3",
@@ -143965,975 +143972,975 @@
             "ref": "B3",
             "controlRef": "Q3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B4",
             "controlRef": "Q4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B5",
             "controlRef": "Q5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B6",
             "controlRef": "Q6",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B7",
             "controlRef": "Q7",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B8",
             "controlRef": "Q8",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "B9",
             "controlRef": "Q9",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G2",
             "controlRef": "V2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G3",
             "controlRef": "V3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G17",
             "controlRef": "V17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G18",
             "controlRef": "V18",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G6",
             "controlRef": "V6",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G20",
             "controlRef": "V20",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H8",
             "controlRef": "W8",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G15",
             "controlRef": "V15",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "G16",
             "controlRef": "V16",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H4",
             "controlRef": "W4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H5",
             "controlRef": "W5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C3",
             "controlRef": "R3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C4",
             "controlRef": "R4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C5",
             "controlRef": "R5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C6",
             "controlRef": "R6",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C7",
             "controlRef": "R7",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C8",
             "controlRef": "R8",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "C9",
             "controlRef": "R9",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I2",
             "controlRef": "X2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I3",
             "controlRef": "X3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I17",
             "controlRef": "X17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I18",
             "controlRef": "X18",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H19",
             "controlRef": "W19",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I7",
             "controlRef": "X7",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I21",
             "controlRef": "X21",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H15",
             "controlRef": "W15",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "H16",
             "controlRef": "W16",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I4",
             "controlRef": "X4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "I5",
             "controlRef": "X5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D12",
             "controlRef": "S12",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D13",
             "controlRef": "S13",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D14",
             "controlRef": "S14",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D15",
             "controlRef": "S15",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D16",
             "controlRef": "S16",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D2",
             "controlRef": "S2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D11",
             "controlRef": "S11",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D17",
             "controlRef": "S17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "D27",
             "controlRef": "S27",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J2",
             "controlRef": "Y2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J3",
             "controlRef": "Y3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J4",
             "controlRef": "Y4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J5",
             "controlRef": "Y5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J6",
             "controlRef": "Y6",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J7",
             "controlRef": "Y7",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J8",
             "controlRef": "Y8",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J22",
             "controlRef": "Y22",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K10",
             "controlRef": "Z10",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J15",
             "controlRef": "Y15",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J16",
             "controlRef": "Y16",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J17",
             "controlRef": "Y17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J18",
             "controlRef": "Y18",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "J19",
             "controlRef": "Y19",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E3",
             "controlRef": "T3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E4",
             "controlRef": "T4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E5",
             "controlRef": "T5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "E6",
             "controlRef": "T6",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L2",
             "controlRef": "AA2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "K16",
             "controlRef": "Z16",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L17",
             "controlRef": "AA17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "L5",
             "controlRef": "AA5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F3",
             "controlRef": "U3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F4",
             "controlRef": "U4",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F5",
             "controlRef": "U5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "F8",
             "controlRef": "U8",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M2",
             "controlRef": "AB2",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M3",
             "controlRef": "AB3",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "M17",
             "controlRef": "AB17",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "N5",
             "controlRef": "AC5",
             "matched": false,
-            "fillSource": "unverified"
+            "fillSource": "excel-display-format"
           },
           {
             "ref": "Q3",
             "controlRef": "B3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q4",
             "controlRef": "B4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q5",
             "controlRef": "B5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q6",
             "controlRef": "B6",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q7",
             "controlRef": "B7",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q8",
             "controlRef": "B8",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Q9",
             "controlRef": "B9",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V2",
             "controlRef": "G2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V3",
             "controlRef": "G3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V17",
             "controlRef": "G17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V18",
             "controlRef": "G18",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V6",
             "controlRef": "G6",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V20",
             "controlRef": "G20",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W8",
             "controlRef": "H8",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V15",
             "controlRef": "G15",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "V16",
             "controlRef": "G16",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W4",
             "controlRef": "H4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W5",
             "controlRef": "H5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R3",
             "controlRef": "C3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R4",
             "controlRef": "C4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R5",
             "controlRef": "C5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R6",
             "controlRef": "C6",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R7",
             "controlRef": "C7",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R8",
             "controlRef": "C8",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "R9",
             "controlRef": "C9",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X2",
             "controlRef": "I2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X3",
             "controlRef": "I3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X17",
             "controlRef": "I17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X18",
             "controlRef": "I18",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W19",
             "controlRef": "H19",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X7",
             "controlRef": "I7",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X21",
             "controlRef": "I21",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W15",
             "controlRef": "H15",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "W16",
             "controlRef": "H16",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X4",
             "controlRef": "I4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "X5",
             "controlRef": "I5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S12",
             "controlRef": "D12",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S13",
             "controlRef": "D13",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S14",
             "controlRef": "D14",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S15",
             "controlRef": "D15",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S16",
             "controlRef": "D16",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S2",
             "controlRef": "D2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S11",
             "controlRef": "D11",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S17",
             "controlRef": "D17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "S27",
             "controlRef": "D27",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y2",
             "controlRef": "J2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y3",
             "controlRef": "J3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y4",
             "controlRef": "J4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y5",
             "controlRef": "J5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y6",
             "controlRef": "J6",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y7",
             "controlRef": "J7",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y8",
             "controlRef": "J8",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y22",
             "controlRef": "J22",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Z10",
             "controlRef": "K10",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y15",
             "controlRef": "J15",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y16",
             "controlRef": "J16",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y17",
             "controlRef": "J17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y18",
             "controlRef": "J18",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Y19",
             "controlRef": "J19",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "T3",
             "controlRef": "E3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "T4",
             "controlRef": "E4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "T5",
             "controlRef": "E5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "T6",
             "controlRef": "E6",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AA2",
             "controlRef": "L2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "Z16",
             "controlRef": "K16",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AA17",
             "controlRef": "L17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AA5",
             "controlRef": "L5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "U3",
             "controlRef": "F3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "U4",
             "controlRef": "F4",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "U5",
             "controlRef": "F5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "U8",
             "controlRef": "F8",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AB2",
             "controlRef": "M2",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AB3",
             "controlRef": "M3",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AB17",
             "controlRef": "M17",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           },
           {
             "ref": "AC5",
             "controlRef": "N5",
             "matched": false,
-            "fillSource": "unverified",
+            "fillSource": "excel-display-format",
             "note": "same-content unformatted control"
           }
         ]
@@ -145160,17 +145167,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-icon-percent-order.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-icon-percent-order.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-icon-percent-order.json",
+          "pngSha256": "b3c88bd8ba8ba90b9451e64305aed2d8bfdff0efe0999f08c58d7cbedcf6913a"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 5 case; every formula:* capability it settles stays unverified and production withholds the formula rule (Ruling S5-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-25T20:46:28.353Z",
+        "excelVersion": "16.115",
+        "inputSha256": "57b2c23a383ebf8339da07a0ffc067c093e28ab45990e9a51aebcebb4fd272c1",
+        "savedSha256": "609cda8fe75d9baaf12c58262073ef6e7fe6c199d307499198b9e3b07aa0bee7",
+        "openedRepairFree": true
+      }
     }
   ]
 }
