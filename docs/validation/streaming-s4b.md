@@ -40,7 +40,7 @@ Further 4b evidence by plan call:
 
 ## Gates
 
-Run one at a time at d30394a3 (code; the docs commit after it changes no code) on the same machine, with nothing else of this task running. The 1-minute load, from other processes, read 3.51 at 04:07 before the gates, 3.95 at 04:39 and 4.35 at 04:42 (around `tile-p95`).
+First measured one at a time at d30394a3; rows that name 91fb7237 were re-run there after the final-review fixes, and every other row (typecheck, lint, eager gate, compatibility, T8, the viewer browser project) was not re-run after d30394a3. The d30394a3 runs were on the same machine, with nothing else of this task running. The 1-minute load, from other processes, read 3.51 at 04:07 before the gates, 3.95 at 04:39 and 4.35 at 04:42 (around `tile-p95`).
 
 | Gate | Command | Result |
 |---|---|---|
@@ -146,7 +146,7 @@ The full text is in the S4 design, §11.2 "As built (4b)", and the dated parent 
 - **The corpus ink oracle is not evidence.** `server/test/sheet-ink-oracle.test.ts` "… on the corpus" visits 30 files and 46 sheets, but no corpus XLSX has a drawing over text (the one drawing part, `poi-66365.xlsx` `drawing1.xml`, is an empty `wsDr`), so it checks 0 cells and passes even with an identity text view. A drawing-bearing corpus XLSX is needed; adding one is the owner's call. The fixture oracle is real evidence.
 - **Wrapped and rotated row fits against a browser.** Since 91fb7237 the server fit runs the viewer's own `layoutHeight` on the canvas backend, and `server/test/sheet-text-final.test.ts` checks it equals the local engine's fit (rotated long 303 px, rotated short 134 px, wrapped 265 px; before the fix 20, 20 and 204). The local side there is the engine over the same canvas backend, not a browser.
 - **Mutation proofs are unrecorded.** The Task 14 mutations above were run by hand and reverted; no artifact or committed negative test records them.
-- **Other painted-style sources.** R1 (below) showed table-region styles; pivot-region styles go through the same `TextView.styleAt`. No review searched for further sources (e.g. row or column default styles) beyond these and CF.
+- **Other painted-style sources.** R1 (§Final review, above) showed table-region styles; pivot-region styles go through the same `TextView.styleAt`. No review searched for further sources (e.g. row or column default styles) beyond these and CF.
 
 ## Follow-ups and open items
 
