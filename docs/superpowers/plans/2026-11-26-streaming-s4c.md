@@ -8,7 +8,7 @@
 - **Server.** One more accessor, `sheetKeyView`, is the sheet every key answer reads: sort keys, filter evaluation, value lists and range-detect occupancy. It is 4b's text view at the identity view (base coverage only, S4 §6.2 step 5), plus blank zero-width columns and masked strings (P5).
   - The pool worker runs the **local resident engine** over it: `viewerControls` (`src/components/xlsx/viewerControlsClient.ts:127`), which stages each op in a private `DocumentSession`, exactly as local mode does. Parity therefore holds by construction. The tests check it against fixtures with the withheld cells physically deleted.
   - A session's view is a small canonical spec `{sort, sortFilter, filter}` (P2). The worker rebuilds the row order and mask from it by replay, as the local session rebuilds an evicted order from its recipe (`src/worker/viewerSession.ts:1264–1275`). Tiles, text ops, `viewStateHash`, `sheet_views` and the tracer all carry that one spec, never the bands.
-- **Client.** A new capability `sheet-sort@1` adds sort, filter, value lists and range detection to a `sheet-view@1` session. `StreamWorkbook` holds the order and mask from server deltas. A stream `ControlsClient` (`streamControls.ts`) backs the existing sort and filter menus.
+- **Client.** A new manifest key `sheetSort: 1` adds sort, filter, value lists and range detection to a `sheet-view@1` session (no HELLO change). `StreamWorkbook` holds the order and mask from server deltas. A stream `ControlsClient` (`streamControls.ts`) backs the existing sort and filter menus.
 
 **Tech Stack:** TypeScript. Server: Bun (`server/`, `bun test`, `bun:sqlite`, pool `Worker`s). Client: React (`src/components/xlsx`, `src/components/remote`), vitest, Playwright (a new `stream-4c` project).
 
@@ -22,12 +22,17 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 
 ## Open items for the owner
 
-1. **Find hits in rows hidden by the session's filter.** S4 §6.7 says such a hit is reported as `hidden: 'filter'`. Local find never matches a filter-hidden row (`src/xlsx/view/find.ts:563`), so a parity answer has no such hit. 4b ruled for local parity and built the flag unused.
+1. **How a 4c client learns that sort is served.** Both obvious routes touch an existing assertion.
+   - A new default HELLO feature would edit `tests/stream/remote-sheet.test.ts:457–458`, which pins the default to exactly `['sheet-view@1']`. That breaks the append-only rule.
+   - Advertising on the manifest needs no HELLO change. A 4b client ignores unknown manifest fields (`src/stream/manifest.ts:3`). But it widens `server/test/sheet-view-handshake.test.ts:56`, which pins a `sheetView` manifest's exact key set.
+   - **Recommendation:** advertise. A 4c server adds `sheetSort: 1` to every `sheetView` manifest, plus `typedFilters: true` under `'full'`. Permit the one widening of that server assertion to `[...TILES_KEYS, 'sheetView', 'sheetSort']` (outside `tests/stream`). Mixed versions stay correct both ways, and no HELLO, `tests/stream` or browser spec changes.
+   - The plan is written to this recommendation (P1). If the owner refuses, Task 3 STOPs: the fallback is an opt-in `streamSheets: 'sort'` that sends `['sheet-view@1', 'sheet-sort@1']`, which leaves the default client without sort.
+2. **Find hits in rows hidden by the session's filter.** S4 §6.7 says such a hit is reported as `hidden: 'filter'`. Local find never matches a filter-hidden row (`src/xlsx/view/find.ts:563`), so a parity answer has no such hit. 4b ruled for local parity and built the flag unused.
    - **Recommendation:** keep local parity. 4c's find runs over the session's mask and never sends `hidden: 'filter'`. The client keeps the 4b message for a hit that a later filter hides.
    - The plan is written to this recommendation (P9).
-2. **User-typed operands in `sheet_views`.** Text-condition patterns (and number and date operands on `'full'`) are the viewer's own input. S4 §6.5 leaves "clear or hashed" to the builder; a hashed view cannot be traced.
-   - **Recommendation:** store operands in the clear in `sheet_views` only, so the tracer can rebuild the view. Keep them out of `sheet_ops`, as §9 says. Both tables stay under the 90-day retention.
-   - The plan is written to this recommendation (P12).
+3. **Masked strings, a new withholding class.** A text cell whose format's text section has no `@` (`;;;"****"`) paints other text than its value. S4 §6.6 keeps text conditions and sorts by value, so a text rule over the raw string would bisect a string the viewer cannot see. That is the same oracle the owner closed for typed number conditions.
+   - **Recommendation:** under `visible-only`, the key view reads such a cell as its painted text, with no number format. It sorts, lists and matches as `****`. A format that contains the string (`"ID-"@`) is untouched, so ordinary prefixes keep local parity.
+   - The plan is written to this recommendation (P5). If the owner declines, drop P5's second bullet and the `MASKED` assertions, and record the limit in parent §19.
 
 ## Global Constraints
 
@@ -65,7 +70,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - The class is charged before the busy check (4b).
 - **Never change limits, timeouts or baselines.** This covers the per-IP gate (30 new sessions per minute, `server/src/rate.ts:104`), `LAYOUT_LIMITS`, the copy caps, the size-gate baseline and every test timeout already in the tree.
 - **Units mode, 4a and 4b sessions are unchanged.**
-  - A session without `sheet-sort@1` gets 4b's manifest and 4b's `sheet-layout` bytes, key for key.
+  - A `sheetView` session's manifest is 4b's plus `sheetSort` (and `typedFilters` under `'full'`); its `sheet-layout` keeps 4b's bytes until it sorts or filters. Every other session's manifest and layout are 4b's, key for key.
   - `server/test/xlsx-units-baseline.test.ts` and every Stage 3 and 4b suite pass unedited.
   - Every `tests/**` local and viewer suite passes unmodified.
 - **`tests/stream/**` edits are append-only:** `git diff --numstat fb624989 -- tests/stream` shows 0 deletions. `tests/browser/stream-sheet.spec.ts`, `stream-sheet-4b.spec.ts` and every other existing browser spec stay byte-identical.
@@ -94,34 +99,43 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 
 ## Plan calls (spec silences and conflicts, decided here; Task 14 writes the wire-visible ones into the specs)
 
-- **P1. A 4c capability, `sheet-sort@1`.** A 4b server refuses every 4c op as an unknown type, and a 4b client rejects unknown manifest values. So the 4c ops get their own feature, as 4b's did (4b P1, F1).
-  - A 4c server serves `sheet-sort`, `sheet-filter`, `filter-values`, `range-detect` and `sheet-order` iff the session is `sheetView` and its features hold `sheet-sort@1`. The manifest then carries `sheetSort: 1`, plus `typedFilters: true` under `'full'` only.
-  - The default 4c client sends `['sheet-view@1', 'sheet-sort@1']`. `streamSheets: 'tiles'` and `'units'` keep 4b's exact HELLOs.
-  - Without `sheetSort`, the five ops are refused `unsupported-op`, and `sheet-layout` keeps 4b's bytes (`sort: null`, `filterSummary: []`).
-  - **Why:** mixed deployments keep working in both directions, and every 4b assertion stays true unedited.
+- **P1. The 4c capability is a manifest key** (Open item 1). A 4b client ignores unknown manifest fields, and a 4b server never sends the key.
+  - A 4c server serves `sheet-sort`, `sheet-filter`, `filter-values`, `range-detect` and `sheet-order` to every `sheetView` session. Its manifest carries `sheetSort: 1`, plus `typedFilters: true` under `'full'` only.
+  - The HELLO is unchanged: there is no new feature, and `streamSheets` behaves as 4b built it.
+  - A session without `sheetView` (units mode, or `sheet-tiles@1` only) refuses the five ops `unsupported-op`, uncharged, as 4b leaves off-mode fit and resize uncharged (`server/src/ws.ts:1784`).
+  - `sheet-layout` keeps 4b's bytes (`sort: null`, `filterSummary: []`) until the session itself sorts or filters, which no 4b client does.
+  - **Why:** mixed deployments keep working in both directions, and no `tests/stream` assertion changes.
 - **P2. The canonical view is `{sort, sortFilter, filter}`, not `{sort, filter}`.** S4 §6.3 hashes "the canonical spec: sort keys, filter rules". But a local sort pins the rows hidden by the filter in force when it ran (`src/xlsx/view/sort.ts:689`), and a later filter keeps that order. So the order depends on history.
   - The local session records exactly this as `recipe.sortFilter` and rebuilds an evicted order from it (`viewerSession.ts:1264–1275`).
   - Plan call: the view state carries `sortFilter`, the filter committed when the current sort ran, and the derived view is a pure function of `(key view, sort, sortFilter, filter)`. `sortFilter` is `null` whenever `sort` is.
   - **Why:** otherwise two sids with equal `{sort, filter}` but different histories would share wrong tiles (T6).
 - **P3. Replay.** The worker derives a view by replaying three ops through the local engine from the identity view: filter(`sortFilter`), then sort(`sort`), then filter(`filter`). Each op is skipped when its spec is `null`.
-  - A replay is sound for any committed spec. The local guards are a function of the spec and the structure, except `drawing-impact`. Every accepted op leaves every cell-anchored drawing's display span unchanged, so every reachable view has the identity view's spans, and replay passes the same guards.
+  - **Assumption, checked in Task 5 (STOP if false):** a replay passes the guards the original ops passed. The local guards depend on the spec and the structure, except `drawing-impact`. If every accepted op leaves every cell-anchored drawing's display span unchanged (read `guardFilter` and `guardSort` in `src/xlsx/view/operationGuard.ts` to confirm), then every reachable view has the identity view's spans.
   - A replay that refuses anyway fails closed: the job errors, and its tiles or answer are refused `policy-refused`.
+  - How the spec moves: a committed sort sets `sortFilter := base.filter`; a committed filter keeps `sort` and `sortFilter`; clearing the sort sets both to `null`.
   - Derived views are cached per `(sheetIndex, clock, canonical hash)`, at most 8 per document (LRU), and rebuilt after a worker recycle.
-- **P4. Target authorization** (S4 §6.6), before any engine run. In order, each failure one refusal that moves nothing:
-  - `stale-view` for an old `viewGen`;
-  - `policy-refused` for a range outside the sheet grid (`r1 < 1,048,576`, `c1 < 16,384`), header or totals counts other than 0 or 1, a body of fewer than 1 row, more than 64 keys or columns, a key or rule column outside the range, a text operand over 256 units, or a malformed rule;
-  - `hidden-target` when a key column, a filter column, or the range's `c0` or `c1` is a collapsed column of the authored layout;
-  - `coverage-unknown` under `visible-only` on an unknown-coverage sheet (S4 §6.2 step 4);
-  - `filter-condition-refused` under `visible-only` for a `number`, `date` or `datePreset` rule, or a `compound` rule with such a child. A compound of two text children is allowed;
-  - `stale-filter-values` for a values rule whose list was not issued to this sid for this `(sheetId, range, col)` at the current `viewGen`, or whose positions are out of range or not ascending;
-  - `view-state-limit` (P11).
+- **P4. Target authorization** (S4 §6.6), before any engine run.
+  - **First the shape check** (`*Args`, Task 2), refused `policy-refused`, uncharged and with no audit row. It rejects:
+    - a range outside the sheet grid (`r1 < 1,048,576`, `c1 < 16,384`);
+    - header or totals counts other than 0 or 1, or a body of fewer than 1 row;
+    - more than 64 keys or columns, or a key or rule column outside the range;
+    - a text operand over 256 units, or a malformed rule.
+  - **Then the `'sheet'` rate and busy check** (`rate-limited`).
+  - **Then, in order,** each failure one refusal that moves nothing, with its `sheet_ops` row:
+    - `stale-view` for an old `viewGen`;
+    - `hidden-target` when a key column, a filter column, or the range's `c0` or `c1` is a collapsed column of the authored layout;
+    - `coverage-unknown` under `visible-only` on an unknown-coverage sheet (S4 §6.2 step 4);
+    - `filter-condition-refused` under `visible-only` for a `number`, `date` or `datePreset` rule, or a `compound` rule with such a child. A compound of two text children is allowed;
+    - `stale-filter-values` for a values rule whose list was not issued to this sid for this `(sheetId, range, col)` at the current `viewGen`, or whose positions are out of range;
+    - `view-state-limit` (P11).
 
   `N` = 64 because it is Excel's sort-level limit; the same number bounds filter columns.
-- **P5. The key view, `sheetKeyView(snap, projected, o)`** is `sheetTextView(snap, projected, NO_SESSION_SIZES, o)` (base coverage only, never the session's sizes or order) plus two more blankings under `visible-only`:
-  - every cell of a collapsed (zero-width) authored column;
-  - **masked strings.** A string cell whose display text does not contain its raw string is read as its display text, with no number format. A text section without `@` (`;;;"****"`) shows other text, so a text rule over the raw string would bisect it. `"ID-"@` contains the raw string and is untouched.
+- **P5. The key view, `sheetKeyView(snap, projected, o)`** is `sheetTextView(snap, projected, NO_SESSION_SIZES, o)`: base coverage only, never the session's sizes or order. Under `visible-only` it adds:
+  - **painted styles.** Each content cell's style becomes its painted, CF-effective style: `view.scope?.effectiveStyle(r, c, view.styleAt(r, c, own)) ?? view.styleAt(r, c, own)`. It gets a fresh `styleIndex` in the key view's own style table, so the engines' index-based lookups (`viewerControlsClient.ts:183`, `:187–211`) format labels, display lanes and the date classification with what the tile paints, not with the own style. This is 4b's R1 on the key path: a table DXF `0,"K"` over a General `1234` lists `1K`, never `1234`;
+  - every cell of a collapsed (zero-width) authored column, blank;
+  - **masked strings** (Open item 3). A string cell whose painted display text does not contain its raw string is read as that display text, with no number format.
 
-  Under `'full'` the key view is the identity. Value lists, sort keys, filter evaluation and range detection all read it, so a list entry and a filter over that entry agree (S4 §6.12 item 7).
+  Under `'full'` the key view is the identity (local parity, own styles). Value lists, sort keys, filter evaluation and range detection all read it, so a list entry and a filter over that entry agree (S4 §6.12 item 7).
 - **P6. Value lists.**
   - **Request:** `filter-values {sheetId, viewGen, range, col, search?: {text, wildcards}}` for a first page, or `{sheetId, viewGen, cursor}` for a later one.
   - **Answer:** `filter-values-result {list, items: [[id, text, flags], …], blanks: {present, selected}, total, truncated, cursor?, classification?}`. `flags` is a bit set: 1 = selected, 2 = every merged value is an error.
@@ -137,7 +151,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - `head` (seq 0) is `{sheetId, viewGen, counts: {visible, total}, sort: {range, keys} | null, filterSummary: [{col, kind}]}`.
     - Each `band` part carries `{r0, r1, from, data}`: base64 of little-endian `Uint32` `sourceAtOffset` entries from offset `from`.
     - Each `mask` part carries `{r0, r1, from, data}`: base64 words of the display-slot bitset.
-  - Every part is ≤ 64 KiB. Caps: ≤ 160 parts, ≤ 16 bands, band rows ≤ 1,048,576. A decoder rejects a gap, an overlap, a non-permutation, or anything over a cap.
+  - Every part is ≤ 64 KiB. Caps: ≤ 160 parts, ≤ 1 band (`sortRowOrder` returns one band over the sort range on both of its paths, `src/xlsx/view/sort.ts:724–749`), band rows ≤ 1,048,576. A decoder rejects a gap, an overlap, a non-permutation, or anything over a cap.
   - Size metrics are not sent: the client builds them with `createSheetMetrics({order, visibility})` from its layout, and a test pins equality with the server's geometry.
   - `sheet-order {sheetId}` (a request, `'unit'` rate) answers the same parts for the current view. The client sends it after a layout whose `sort` or `filterSummary` is not the identity view.
   - 4b's `sheet-view` resize answer is unchanged.
@@ -148,14 +162,14 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 - **P9. Text ops under the view.**
   - Find, copy, a11y and fit read the session's order and mask: `textInputs` takes the derived view in place of the identity order and authored visibility. Fit's geometry is `buildSheetGeometry(view.sheet, {sizes, order, visibility})`.
   - The text view's current-view coverage (4b P5) runs whenever sizes are non-empty or the view is not the identity view, over that geometry, so a cell a sort slides under a fixed drawing is blank to text answers.
-  - Find follows local find and never matches a filter-hidden row (Open item 1).
+  - Find follows local find and never matches a filter-hidden row (Open item 2).
 - **P10. Drawings under a sort** (S4 §8): as locally. Cell anchors map through `sourceToDisplay`. A sort whose band meets a cell-anchored drawing, or a filter that would move one, is refused by the local guard (`drawing-impact`, `src/xlsx/view/operationGuard.ts:151`, `:285`). Recorded with the `sortUnderShape` fixture.
 - **P11. View-state ceiling and admission** (S4 §6.3; 4b F17 deferred it here).
   - A sheet is "ordered" when its view has a sort or a filter. At most `MAX_ORDERED_SHEETS` = 2 per sid (S4 §6.3's suggestion). A third is `view-state-limit`, and resizes stay unlimited by tab (4b P12).
   - Admission: each distinct derived view `(docRef, contentPolicy, sheetIndex, clock, canonical hash)` is charged `orderBytes = 8 × bodyRows + 160 KiB` to the `DocumentLedger`. It uses a new pinned, reference-counted hold (`DocumentLedger.hold(key, bytes): boolean`, `release(key)`). Unpinned parsed documents may be evicted to make room, as any parse is.
   - A hold that cannot fit is `view-state-limit`. It is released when no sid holds that view. `DOCUMENT_CACHE_BYTES` is unchanged.
 - **P12. Audit.**
-  - `sheet_views.spec` becomes `{sort, sortFilter, filter, sizes}`. Values rules are stored as `{list: {range, col}, positions, mode, blanks}`, and typed operands in the clear (Open item 2). A record without `sortFilter`/`filter` (4b) reads as `null`.
+  - `sheet_views.spec` becomes `{sort, sortFilter, filter, sizes}`. Values rules are stored as `{list: {range, col}, positions, mode, blanks}`. Typed operands are stored in the clear (S4 §6.5 leaves it to the builder), because a hashed view cannot be traced; they never go into `sheet_ops`. A record without `sortFilter`/`filter` (4b) reads as `null`.
   - New table `sheet_ops (sid, sheet_id, kind, view_gen, range, rules, outcome, at)`:
     - `kind` ∈ `sort | filter | filter-values | range-detect`;
     - `rules` is JSON `[[col, ruleKind | 'asc' | 'desc'], …]` and never holds an operand;
@@ -181,6 +195,13 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - the text/mixed panel offers no numeric operator.
   - Pacing: one `'sheet'` op in flight per viewer, queued in order. The value-list search is sent 250 ms after the last keystroke, and a newer one supersedes it.
 
+## 4b follow-ups in 4c's area (`docs/validation/streaming-s4b.md`)
+
+- **`blankCell`/`holdsContent` duplicated in `text-view.ts`:** fixed in Task 1, which exports them once from `snapshot.ts`; `key-view.ts` imports them.
+- **Other painted-style sources** (row and column default styles; not searched by the 4b review): Task 1's `paintedFormats` fixture checks both in the text and key views.
+- **The corpus oracle visits nothing to withhold:** Task 13 counts the corpus sheets with a withheld key cell and reports a 0. A drawing-bearing corpus file stays the owner's call.
+- **Tile-side CF reads merge-tail values (F20), copy's pool admission estimate, and the `wireSelection` headroom:** not in 4c's area; left open.
+
 ## Review Focus
 
 1. **A sort or filter answer lost to a resume, a cancel or a `stale-view`.** Expected:
@@ -188,7 +209,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
    - no tile of the old `viewGen` is drawn, and no tile stays pending.
 
    Pinned in Tasks 8 and 9.
-2. **A masked or region-styled cell in a key column.** Examples: a table style's `;;;` over General numbers (4b R1), a CF rule that writes `;;;`, a zero-height row, a zero-width column, a `;;;"****"` text section. Expected: each sorts as blank, matches only a blanks filter, lists only as "(Blanks)", and a text rule never matches its raw string. Pinned in Tasks 1 and 13.
+2. **A masked or region-styled cell in a key column.** Examples: a table style's `;;;` or `0,"K"` over General numbers (4b R1), a CF rule that writes `;;;` or a scaled format, a zero-height row, a zero-width column, a `;;;"****"` text section. Expected: a withheld cell sorts as blank, matches only a blanks filter and lists only as "(Blanks)"; a painted cell lists under its painted text (`1K`), never its value; a text rule never matches a masked raw string. Pinned in Tasks 1 and 13.
 3. **Two value-list columns, and a list issued before a resize.**
    - Expected: a filter that keeps column B's committed values rule while editing column C applies both.
    - Ids of a list issued at an older `viewGen` are refused `stale-filter-values`, and the client re-fetches the list.
@@ -211,6 +232,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 - Create: `server/src/sheet/key-view.ts`
 - Modify:
   - `server/test/sheet-fixtures.ts` (append fixtures);
+  - `server/src/sheet/snapshot.ts:33`, `server/src/sheet/text-view.ts:55–60`: export `blankCell` and `holdsContent` from `snapshot.ts`, and import them in `text-view.ts` and `key-view.ts` (the 4b Task 1 duplicate, so there is no third copy);
   - `src/components/xlsx/viewerControlsClient.ts:96`, `:130`, `:399`: an optional `context?: () => FilterContext` option. Its `nowMs` replaces `Date.now()` at `:399`. Absent, the local default is unchanged.
 - Test: create `server/test/sheet-key-view.test.ts`
 
@@ -223,7 +245,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   export function keyDocument(base: XlsxDocument, views: ReadonlyMap<number, KeyView>): XlsxDocument
   ```
   - Under `'full'`, `sheet === projected`.
-  - Otherwise `sheet` is the text view's sheet at the identity view, with P5's two blankings.
+  - Otherwise `sheet` is the text view's sheet at the identity view, with P5's painted styles and its two blankings. The view's `scope` is released when the key view is built (the styles are resolved by then).
 - Fixtures appended (each a `SheetFixture` builder, as in 4b):
   - `sortGrid()`: 40×6, header row; mixed numbers, `#,##0.0`, dates and text; hidden row 9; `ht="0"` row 12; a zero-width column E; merge-free.
   - `sortWithheld()`: `sortGrid` plus an unfilled rect over B20 (`COVER-B20` = 1), `;;;` in B21 (5), a CF `cellIs > 90 → ;;;` rule over B (B22 = 95), a wholeTable `;;;` table style over C30:C34 (General numbers), and a text cell `MASKED` formatted `;;;"****"` in D23.
@@ -232,16 +254,18 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - `oneMillionSort()`: 1,048,576 rows in column A, numbers descending.
   - `hiddenPivotCache()`: a pivot cache over a hidden-row source with item `PIVOT-SECRET`, and a slicer cache with item `SLICER-SECRET`, plus a visible slicer drawing.
   - `filterAutoHidden()`: a saved autoFilter on A1:C20 that hides rows 4 and 7.
+  - `paintedFormats()`: General `1234` in B2:B4 under a wholeTable DXF `0,"K"` (paints `1K`); `5678` in C2 under a CF rule writing `0.0,"K"` (paints `5.7K`); a column default style `;;;` on D (`<col style>`) and a row default style `;;;` on row 6 (`<row s customFormat="1">`) over cells with no own style.
 
 - [ ] **Step 1: Write the failing tests** (`}, 30_000)` on each).
   - `"engines import under Bun"`: `viewerControls` over `createObjectWorkbookSource(keyDocument(...))` sorts `sortGrid` by column B ascending, filters column D `contains "a"`, reads one `values` page and resolves one `range-detect`, all under `bun test`. If one cannot, STOP and report.
   - `"withheld cells are blank keys"`: in the `sortWithheld` key view, B20, B21, B22, C30:C34, every cell of column E and row 12 hold no value; D23 holds `'****'` with no number format; `sortGrid`'s other cells are unchanged.
+  - `"painted styles"` (4b R1 on the key path): in the `paintedFormats` key view, `cellDisplayText` of B2 is `'1K'` and of C2 is `'5.7K'`. A `values` page for B through `viewerControls` lists exactly `['1K']` and never `'1234'`, and C lists `['5.7K']`. D's cells and row 6's cells are blank in both the text view and the key view (the 4b validation's "other painted-style sources"). If either default style is not painted by the tile, record it and keep the assertion on the tile's behaviour.
   - `"the key view ignores session sizes"`: the key view is the same object for any sizes the caller holds. It takes none, and a test spies that `sheetTextView` was called with `NO_SESSION_SIZES`.
   - `"unknown coverage"`: on `unresolvedAnchor`, `blankAll === true` and no cell holds a value.
   - `"full is the identity"`: under `'full'`, `sheet === projected` for every fixture above.
   - `"the injected clock"`: a `datePreset: 'today'` filter run through `viewerControls` with `context` from `clockEpochMs(clock)` keeps exactly the rows dated on `clock.day`. With `Date.now` stubbed to a different day, the result is the same.
 - [ ] **Step 2: Run** `cd server && bun test test/sheet-key-view.test.ts`. Expected: FAIL (no module).
-- [ ] **Step 3: Implement** `key-view.ts` and the `context` option. Masked-string detection uses `cellDisplayText(sheet, {value, style: view.styleAt(...)})` and `String.prototype.includes`.
+- [ ] **Step 3: Implement** `key-view.ts`, the dedupe and the `context` option. Masked-string detection formats under the painted, CF-effective style (P5) and uses `String.prototype.includes`.
 - [ ] **Step 4: Run green:** the same file; `cd server && bun test test/sheet-text-view.test.ts test/sheet-text-final.test.ts` (unchanged); `bunx vitest run xlsx-viewer-main-controls interactive-viewer-filter` (unmodified).
 - [ ] **Step 5: Commit.**
   ```bash
@@ -257,8 +281,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 
 **Interfaces:**
 - Produces, in `sheet-wire.ts`:
-  - `SHEET_SORT_FEATURE = 'sheet-sort@1'`;
-  - `SORT_FILTER_MAX_RULES = 64`, `FILTER_TEXT_UNITS = 256`, `VALUE_LIST_LIMITS = { entries: 10_000, page: 500, intervals: 4_096 }` and `ORDER_LIMITS = { parts: 160, bands: 16, rows: 1_048_576 }`.
+  - `SORT_FILTER_MAX_RULES = 64`, `FILTER_TEXT_UNITS = 256`, `VALUE_LIST_LIMITS = { entries: 10_000, page: 500, intervals: 4_096 }` and `ORDER_LIMITS = { parts: 160, bands: 1, rows: 1_048_576 }`.
   - The wire shapes:
     ```ts
     export interface WireRange { r0: number; r1: number; c0: number; c1: number; header: 0 | 1; totals: 0 | 1 }
@@ -309,35 +332,33 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 - [ ] **Step 4: Run green:** the same file, and `npx tsc --noEmit -p .`.
 - [ ] **Step 5: Commit** `src/stream/sheet-wire.ts tests/stream/sheet-wire.test.ts`: `feat(stream-s4c): sort, filter, value-list, range-detect and order codecs`.
 
-### Task 3: Handshake `sheet-sort@1`, op gating, refusal codes, and the pivot refusal
+### Task 3: The `sheetSort` manifest key, op gating, refusal codes, and the pivot refusal
 
 **Files:**
 - Modify:
   - `server/src/ws.ts`: `RefusalCode` at `:65`, `SHEET_VIEW_OPS` at `:95`, the manifest at `:546`, the dispatch at `:1778–1800`;
-  - `server/src/sheet/mode.ts`: `sortOpsOf`;
-  - `src/stream/manifest.ts`: `sheetSort?: 1`, `typedFilters?: true`.
+  - `src/stream/manifest.ts`: `sheetSort?: 1`, `typedFilters?: true`;
+  - `server/test/sheet-view-handshake.test.ts:56`: the one widening Open item 1 permits, `[...TILES_KEYS, 'sheetView', 'sheetSort'].sort()`. No other line of it changes.
 - Test: create `server/test/sheet-sort-handshake.test.ts`; modify `tests/stream/manifest.test.ts` (append)
 
 **Interfaces:**
 - Produces:
-  - `sortOpsOf(sheetView: boolean, features: readonly string[]): boolean`, which is true iff `sheetView` and the features hold `sheet-sort@1`;
-  - `sessionDoc` entries gain `sheetSort: boolean`, fixed per sid;
-  - the manifest gains `sheetSort: 1` only then, and `typedFilters: true` only then and under `'full'`;
-  - `SHEET_SORT_OPS = new Set(['sheet-sort', 'sheet-filter', 'filter-values', 'range-detect', 'sheet-order'])`, each refused `unsupported-op` without `sheetSort`. The four `'sheet'` ops are charged one `'sheet'` check first, as 4b charges off-mode text ops;
+  - the manifest of every `sheetView` session gains `sheetSort: 1`, and `typedFilters: true` under `'full'` (P1);
+  - `SHEET_SORT_OPS = new Set(['sheet-sort', 'sheet-filter', 'filter-values', 'range-detect', 'sheet-order'])`, each refused `unsupported-op` without `sheetView`, **uncharged** (4b leaves off-mode fit and resize uncharged, `ws.ts:1784`);
   - `RefusalCode` gains `'stale-filter-values' | 'filter-condition-refused' | 'pivot-refused' | 'server-prepared' | 'stream-no-cell-data' | 'view-refused' | 'cancelled'`;
   - `WORKER_KIND_REFUSALS: ReadonlyMap<string, RefusalCode>`, built from `VIEWER_COMMAND_KINDS` (P14). It is checked right after `ready` in the dispatch, before the mode checks.
   - Client: `Manifest.sheetSort?: 1` is valid only with `sheetView: 1`, and `typedFilters?: true` only with `sheetSort`; any other value rejects the manifest.
 
+- [ ] **Step 0: Check Open item 1.** If the owner has not permitted the widening at `sheet-view-handshake.test.ts:56`, STOP and report.
 - [ ] **Step 1: Write the failing server tests:**
-  - `"sheet-sort@1 adds sheetSort to a sheet-view manifest only"`:
-    - `['sheet-view@1', 'sheet-sort@1']` on XLSX under visible-only gives `sheetSort === 1` and no `typedFilters`;
+  - `"sheetSort on every sheet-view manifest"`:
+    - `['sheet-view@1']` on XLSX under visible-only gives `sheetSort === 1` and no `typedFilters`;
     - under `'full'` it gives `typedFilters === true`;
-    - `['sheet-view@1']` gives 4b's manifest key for key, with `'sheetSort' in m === false`;
-    - `['sheet-tiles@1', 'sheet-sort@1']` gives no `sheetSort` (not a `sheetView` session).
-  - `"the 4c ops need the feature"`: without `sheetSort`, each of the five ops is refused `unsupported-op`. Thirty-one off-mode `sheet-sort`s in a minute make the 31st `rate-limited`, and none closes 4008.
+    - `['sheet-tiles@1']` gives 4a's manifest key for key, and units mode gives Stage 3's;
+    - a DOCX gets no new keys.
+  - `"the 4c ops need sheetView"`: on a `sheet-tiles@1` session and in units mode, each of the five ops is refused `unsupported-op`. Forty of them in a minute are all `unsupported-op`, never `rate-limited`, and none closes 4008.
   - `"4b layout bytes unchanged"`: a `sheet-view@1` session's `sheet-layout` of `grid500x100` equals, byte for byte, the bytes pasted from the base `fb624989`.
   - `"pivot and control kinds are refused"`: on a tiles session and on a units session, each of the eight kinds is refused `pivot-refused`, `prepareColumns` is refused `server-prepared` and `read` is refused `stream-no-cell-data`. None needs a token, none closes, and each charges `'message'` once.
-  - `"resume keeps the feature"`: a `sheetSort` sid resumed without `sheet-sort@1` closes `CLOSE['auth-failed']`.
 - [ ] **Step 2: Write the failing client tests** (append to `manifest.test.ts`):
   - `sheetSort: 1` with `sheetView` passes;
   - `sheetSort: 1` without `sheetView` rejects;
@@ -345,8 +366,8 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - `sheetSort: 2` rejects.
 - [ ] **Step 3: Run** `cd server && bun test test/sheet-sort-handshake.test.ts` and `bunx vitest run tests/stream/manifest.test.ts`. Expected: FAIL.
 - [ ] **Step 4: Implement.** Record `bun run gates:core` before the client edit and after it.
-- [ ] **Step 5: Run green:** the same commands, then `cd server && bun test test/sheet-view-handshake.test.ts test/sheet-handshake.test.ts test/xlsx-units-baseline.test.ts` (unchanged).
-- [ ] **Step 6: Commit** `server/src/ws.ts server/src/sheet/mode.ts src/stream/manifest.ts server/test/sheet-sort-handshake.test.ts tests/stream/manifest.test.ts`: `feat(stream-s4c): sheet-sort@1 capability, 4c refusal codes, pivot and worker-kind refusals`.
+- [ ] **Step 5: Run green:** the same commands, then `cd server && bun test test/sheet-view-handshake.test.ts test/sheet-handshake.test.ts test/xlsx-units-baseline.test.ts` (only the permitted line changed).
+- [ ] **Step 6: Commit** `server/src/ws.ts src/stream/manifest.ts server/test/sheet-view-handshake.test.ts server/test/sheet-sort-handshake.test.ts tests/stream/manifest.test.ts`: `feat(stream-s4c): sheetSort manifest key, 4c refusal codes, pivot and worker-kind refusals`.
 
 ### Task 4: The canonical view, `viewStateHash`, session view state, admission and the audit tables
 
@@ -442,7 +463,8 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - every other row's visibility equals the oracle's;
     - under `'full'`, clearing the filter shows rows 4 and 7, as locally.
   - `"withheld cells sort and list as blank"`: sorting B ascending puts B20, B21 and B22 among the blanks at the end, as the oracle does. `values` for B lists no `1`, `5` or `95`, and `blanks.present === true`. `values` for D lists `****` and never `MASKED`. A text rule `contains "MASK"` on D matches nothing.
-  - `"replay equals incremental"`: commit filter F1 (`values`), sort S, then filter F2 (`text`). `derive({S, F1, F2})` deep-equals the incremental result. `derive({S, null, F2})` differs on `sortGrid` (hidden-row pins).
+  - `"replay equals incremental"`: commit filter F1 (`values`), sort S, then filter F2 (`text`), then filter F3 (`blanks`). After each commit, `derive` of the canonical view deep-equals the incremental result; also on `sortUnderShape` with S outside the drawing's band. `derive({S, null, F2})` differs on `sortGrid` (hidden-row pins). If any replay is refused where the incremental op was accepted, STOP and report (P3's assumption failed).
+  - `"the spec moves as P3 says"`: after F1 then S, the view is `{S, F1, F1}`; after F2, `{S, F1, F2}`; after clearing the sort, `{null, null, F2}`.
   - `"display-text merge"`: B holding `1200` and `1204`, both formatted `0.0,"K"`, lists one `1.2K` entry. Selecting it keeps both rows, and the oracle with values {1200, 1204} gives the same rows (S4 §6.12 item 7).
   - `"two values columns"`: rules on B and D together equal the oracle's rows.
   - `"local guards refuse"`: a sort over `sortUnderShape`'s band gives `{reason: 'drawing-impact'}` with no `drawingId`, `sortMerges` gives `{reason: 'merge', range}`, and neither returns a view.
@@ -476,7 +498,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - `"tiles follow the view"`: tile (0,0) of `sortGrid` sorted B desc equals `renderSheetViewport` of the snapshot sheet over `buildSheetGeometry(sheet, {order, visibility})`. Two sids with equal views share one `pool.tile` call, and a different filter gives a second call.
   - `"copy, find and a11y follow the view"`: after filter D `contains "a"`:
     - a select-all copy equals local `serializeSelection` over the deleted fixture with the oracle's order and mask;
-    - find for a term only in a filtered-out row gives no hit (Open item 1);
+    - find for a term only in a filtered-out row gives no hit (Open item 2);
     - a11y of a window lists no filtered-out row.
   - `"fit follows the view"`: a column fit after the filter equals local `autoFitSize` with the oracle's geometry.
   - `"a sort that slides a cell under a fixed drawing blanks its text"`: on a fixture with an `absoluteAnchor` rect over display rows 3–4 and `UNDER` in source row 30, find for `UNDER` hits before the sort and not after one that brings row 30 to display row 3.
@@ -519,7 +541,8 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - the items equal the oracle's merged labels over the deleted fixture, in order;
     - `blanks.present` is true;
     - no item text is `1`, `5`, `95` or any C30:C34 value;
-    - D lists `****` and no `MASKED`.
+    - D lists `****` and no `MASKED`;
+    - on `paintedFormats`, B lists exactly `1K`, and no item text anywhere is `1234` or `5678`.
   - `"rotated box and unknown coverage"` (S4 §9 4c):
     - on `rotatedBox`, every cell meeting `x 40..60, y 30..50` is absent from its column's list, and the list has `blanks.present`;
     - on `unresolvedAnchor`, every column's list is empty with `blanks.present`.
@@ -612,6 +635,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - `refreshOrder(sheetId)`, which fetches the layout and then `order` when the layout's `sort`/`filterSummary` is not the identity view.
   - `sort(owner, spec, signal, progress)` and `filter(owner, spec, keySets, signal, progress)` implement P8's progress and return `RemoteCommit`. `keySets` is ignored on a stream; values rules carry P15's wire form through `streamControls` (Task 10).
   - A resize (`applyView`) bumps `revision` and keeps the order and mask.
+  - Without `sortOps` (a 4a or 4b server), `sort`, `filter`, `values` and `detect` still reject `stream-no-cell-data`, as they do today (`streamWorkbook.ts:331–332`).
 
 - [ ] **Step 1: Write the failing tests:**
   - (`tests/stream/remote-sheet-sort.test.ts`, fake socket):
@@ -625,6 +649,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - `"applyOrder moves the view"`: `view('0').order.displayToSource(0) === 39` after a reversed band, and `identity('0').viewGen === 1`;
     - `"client geometry equals the server's under the view"`: `createSheetMetrics` over the layout with the applied order and mask gives `rows.start(i)` equal to `buildSheetGeometry(sheet, {order, visibility})` for i in [0, 3, 9, 12, 39, 1048575];
     - `"a resize keeps the order"`;
+    - `"no sortOps, no sort"`: without `sheetSort`, `sort` rejects `StreamNoCellData` with `method === 'sort'`;
     - `"a lost sort answer refetches"` (Review Focus 1): after `session-rotated`, `layout` then `order` are called and adopted.
 - [ ] **Step 2: Run** `bunx vitest run tests/stream/remote-sheet-sort.test.ts tests/xlsx-stream-sort.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -670,38 +695,32 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - `bun run gates:core` (report the delta).
 - [ ] **Step 5: Commit** `src/components/xlsx/streamControls.ts src/components/xlsx/InteractiveSheetDoc.tsx src/components/xlsx/FilterDropdown.tsx tests/xlsx-stream-controls.test.tsx tests/stream/remote-sheet-view.test.tsx`: `feat(stream-s4c): sort and filter menus on streamed sheets; typed conditions greyed when protected`.
 
-### Task 11: Default features, the harness, and the `stream-4c` browser project
+### Task 11: The harness and the `stream-4c` browser project
 
 **Files:**
 - Modify:
-  - `src/stream/remote/open.ts:20–32`: the default HELLO;
   - `server/test/app.ts` (`?doc=sort-grid|filter-auto-hidden`);
   - `playwright.viewer.config.ts:62–123`: `STREAM_4C_SPECS`, the `stream-4c` project, `stream`'s `testIgnore`, a third webServer on `OV_STREAM_4C_PORT`;
   - `package.json:58`: `test:browser:stream` adds `--project stream-4c`.
 - Create: `tests/browser/stream-sheet-4c.spec.ts`
-- Test: modify `tests/stream/remote-sheet.test.ts` (append)
 
 **Interfaces:**
-- Produces:
-  - unset `streamSheets` sends `features: ['sheet-view@1', 'sheet-sort@1']`;
-  - `'tiles'` and `'units'` send exactly what 4b sent.
+- Produces: the default client (unchanged HELLO `['sheet-view@1']`) gets sort and filter from a 4c server through `sheetSort` (P1).
 
-- [ ] **Step 1: Write the failing tests:**
-  - (append to `remote-sheet.test.ts`) `"openRemoteDocument sends sheet-sort@1 by default"`: `features` deep-equals `['sheet-view@1', 'sheet-sort@1']`. The 4b cases for `'tiles'` and `'units'` still pass unedited.
-  - (`stream-sheet-4c.spec.ts`, against `?doc=sort-grid` and `filter-auto-hidden`):
-    - `"sort descending moves the tiles"`: after the menu sort, `__ovSheetStats.pendingTiles` reaches 0 and the first row header reads the source row of the largest B;
-    - `"filter by values hides rows and keeps author-hidden rows hidden"`;
-    - `"number filters are greyed under protection"`;
-    - `"a reload restores the sorted view"`: a page reload with the same session resumes, and `sheet-order` restores the order.
-- [ ] **Step 2: Run** `bunx vitest run tests/stream/remote-sheet.test.ts` and `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream`. Expected: the new cases FAIL.
+- [ ] **Step 1: Write the failing specs** (`stream-sheet-4c.spec.ts`, against `?doc=sort-grid` and `filter-auto-hidden`):
+  - `"sort descending moves the tiles"`: after the menu sort, `__ovSheetStats.pendingTiles` reaches 0 and the first row header reads the source row of the largest B;
+  - `"filter by values hides rows and keeps author-hidden rows hidden"`;
+  - `"number filters are greyed under protection"`;
+  - `"a resume restores the sorted view"`: the page's socket is dropped (`page.context().setOffline(true)`, then `false`), the session resumes, and `sheet-order` restores the order. If the harness cannot drop the socket this way, delete the case and record that Task 9's fake-socket test covers it. A page reload is a new open, which resets view state (S4 §6.3), so it is not this test.
+- [ ] **Step 2: Run** `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream`. Expected: the new cases FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green:**
-  - the same commands; the `stream` and `stream-4b` projects pass with their spec files byte-identical (`git diff --stat fb624989 -- tests/browser` lists only the new file);
+  - the same command; the `stream` and `stream-4b` projects pass with their spec files byte-identical (`git diff --stat fb624989 -- tests/browser` lists only the new file);
   - unmodified: `bunx vitest run tests/stream tests/office-file-stream.test.tsx tests/officeview-streaming.test.tsx`;
   - `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer`, unmodified.
 
-  If an existing test or spec needs an edit to pass under the new default, STOP and report, without editing it.
-- [ ] **Step 5: Commit** `src/stream/remote/open.ts server/test/app.ts playwright.viewer.config.ts package.json tests/browser/stream-sheet-4c.spec.ts tests/stream/remote-sheet.test.ts`: `feat(stream-s4c): sheet-sort by default; stream-4c browser project with its own harness`.
+  If an existing test or spec needs an edit to pass, STOP and report, without editing it.
+- [ ] **Step 5: Commit** `server/test/app.ts playwright.viewer.config.ts package.json tests/browser/stream-sheet-4c.spec.ts`: `test(stream-s4c): stream-4c browser project with its own harness`.
 
 ### Task 12: Compatibility legs for 4c
 
@@ -710,7 +729,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 
 **Interfaces:**
 - Produces: `bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d --base4b fb624989`, whose new legs are:
-  - **(h)** the 4b client (`fb624989`'s default, `['sheet-view@1']`) against the current server: 4b's `validateManifest` accepts the manifest, `'sheetSort' in raw === false`, 4b's `decodeSheetLayout` decodes `sheet-layout`, and a `sheet-sort` sent raw is refused `unsupported-op`;
+  - **(h)** the 4b client (`fb624989`'s default, `['sheet-view@1']`) against the current server: 4b's `validateManifest` accepts the manifest (its `sheetSort: 1` is an unknown field there and ignored), 4b's `decodeSheetLayout` decodes a `sheet-layout` byte-identical to the 4b server's, and a find and a resize work;
   - **(i)** the current default client against the 4b server: `sheetView === 1`, no `sheetSort`, `doc.sheets.sortOps === undefined`, and a find still works;
   - **(j)** the current client against the current server: a sort round-trips and one tile at the new `viewGen` decodes.
 
@@ -726,15 +745,15 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 **Interfaces:**
 - Consumes: the whole 4c server path through the harness `Client`.
 
-- [ ] **Step 1: Extend the wire audit** (`}, 30_000)`). Capture every server→client byte of a `sheet-sort@1` session that:
+- [ ] **Step 1: Extend the wire audit** (`}, 30_000)`). Capture every server→client byte of a `sheetSort` session that:
   - lists every used column's values (every page);
   - range-detects from A1;
   - sorts by each used column;
   - filters each column by its first two list entries and by `text contains "e"`;
   - fetches `sheet-order` and every tile of the used extent at (zoomStep 5, dpr 1).
 
-  Run it for `sentinels()`, every XLSX hidden fixture, `sortWithheld`, `rotatedBox`, `offViewportCovered` and `unresolvedAnchor`. Then check:
-  - `"no sentinel or withheld text in any 4c answer"`: no decoded message or payload contains `SENTINEL_F`, `SENTINEL_N`, `1234.5678`, `=LEN`, any `marker`, a hidden sheet's name, `COVER-B20`, `MASKED`, `OFFVIEW-Z5000` or a covered `ROT-` text. No value-list item text equals B21's `5` or B22's `95`.
+  Run it for `sentinels()`, every XLSX hidden fixture, `sortWithheld`, `paintedFormats`, `rotatedBox`, `offViewportCovered` and `unresolvedAnchor`. Then check:
+  - `"no sentinel or withheld text in any 4c answer"`: no decoded message or payload contains `SENTINEL_F`, `SENTINEL_N`, `1234.5678`, `=LEN`, any `marker`, a hidden sheet's name, `COVER-B20`, `MASKED`, `OFFVIEW-Z5000` or a covered `ROT-` text. No value-list item text equals B21's `5`, B22's `95`, or `paintedFormats`' `1234` or `5678`.
   - `"order answers carry positions only"`: every `sheet-order` part has only the keys `reqId`, `type`, `seq`, `last`, `head`, `band` and `mask`.
 - [ ] **Step 2: The pivot strip on the wire.** On `hiddenPivotCache` under visible-only:
   - no frame contains `PIVOT-SECRET` or `SLICER-SECRET`;
@@ -748,7 +767,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
   - sort asc and desc by each column;
   - filter `values` (the first list entry excluded), `text contains` the first entry's first character, and blanks only.
 
-  Each `sheet-order` must equal Task 5's oracle over the deleted fixture: the key view's withheld cells deleted, then C1. Assert at least one corpus file was visited.
+  Each `sheet-order` must equal Task 5's oracle over the deleted fixture: the key view's withheld cells deleted, then C1. Assert at least one corpus file was visited. Count the corpus sheets that have a withheld key cell; if it is 0, the visible-only half is not evidence of withholding (as 4b's corpus ink oracle was not), and Task 14 says so.
 - [ ] **Step 5: Run** `cd server && bun test test/sheet-sort-audit.test.ts test/sheet-sort-corpus.test.ts`. Expected: PASS, since Tasks 1–8 supply the behaviour. These are evidence, not RED-first. A failure is fixed in `key-view.ts`, `view-ops.ts` or `ws.ts` with a failing case first, never by changing the oracle.
 - [ ] **Step 6: Commit** `server/test/sheet-sort-audit.test.ts server/test/sheet-sort-corpus.test.ts`: `test(stream-s4c): 4c wire audit, pivot strip, hostile battery, corpus row-order parity`.
 
@@ -773,7 +792,7 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
 - [ ] **Step 2: Write the amendments.**
   - **S4 "As built (4c)":** P1–P16, with any ruling that changed them.
   - **Parent:**
-    - §6.2: `sheet-sort@1`;
+    - §6.2: the `sheetSort` manifest key;
     - §6.4: the key view and masked strings;
     - §9.3: the canonical view with `sortFilter`, and the `'c1'` tier;
     - §12: C1 as built (collapsed rows);
@@ -785,7 +804,8 @@ Parent: `docs/superpowers/specs/2026-11-07-server-streaming-design.md`, cited as
     - §6.3's canonical spec lacking `sortFilter`;
     - §6.6's reply as one `ViewCommitDelta` (chunked `sheet-order` instead; metrics derived client-side);
     - §6.6 progress (two steps client-side);
-    - §6.7 `hidden: 'filter'` (Open item 1);
+    - §6.7 `hidden: 'filter'` (Open item 2);
+    - the masked-string withholding (Open item 3) and the manifest capability (Open item 1);
     - §6.9/§6.11's pivot notice (none: the client cannot know);
     - the `classification` on the first values page.
 - [ ] **Step 3: Write `docs/validation/streaming-s4c.md`:**
