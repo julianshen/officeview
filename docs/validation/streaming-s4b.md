@@ -1,16 +1,13 @@
 # Server streaming — Stage 4b validation (selection, resize and fit, find, copy and a11y text on streamed sheets)
 
-Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4b; "As built (4b)" under §11.2). Plan: `docs/superpowers/plans/2026-11-23-streaming-s4b.md` (plan calls P1–P17; pre-flight findings F1–F22 and the ledger rulings in `.superpowers/sdd/2026-11-23-streaming-s4b/`). Branch `feature/streaming-s4b`, off main 1e2fbf4d (4a merged). Code head d30394a3. Measured 2026-11-24 on macOS, darwin-arm64, 14 cores, Bun 1.4.5.
+Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4b; "As built (4b)" under §11.2). Plan: `docs/superpowers/plans/2026-11-23-streaming-s4b.md` (plan calls P1–P17; pre-flight findings F1–F22 and the ledger rulings in `.superpowers/sdd/2026-11-23-streaming-s4b/`). Branch `feature/streaming-s4b`, off main 1e2fbf4d (4a merged). Code head 91fb7237 (gates first measured at d30394a3 on 2026-11-24; re-run on 91fb7237 on 2026-11-25 where stated) on macOS, darwin-arm64, 14 cores, Bun 1.4.5.
 
 ## Status
 
 Every 4b gate is green except these:
 - **The eager size gate** (index closure) is red, as it was at the base 1e2fbf4d from the xlsx-cf work. 4b ends at the base figure, 426,556 B, Δ 0 (§Size gate).
 - **One vitest case fails, also alone:** `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed". Node 26.13.1 exposes no `localStorage` without `--localstorage-file`. 4a recorded the same failure at 53668e81. 4b does not change the test or `src/slideshow`: `git diff --stat 1e2fbf4d -- tests/slideshow-screens.test.ts src/slideshow` is empty.
-- **One stream browser case fails in every full stream-project run:** `tests/browser/stream-text.spec.ts:223` "a11y=off: no screen-reader layer and no a11y request" (PPTX). `canvas[data-painted="1"]` stays at 0 for 15 s.
-  - It failed in 3 of 3 full runs: Task 12's, and both of this task's.
-  - It passes alone: the file 10/10, the case 5/5 with `--repeat-each=5`, and 21/21 with `stream-sheet.spec.ts` run before it.
-  - The project runs serially on one worker, so the failure depends on order or on state left by earlier files. It first appeared in Task 12, which made `sheet-view@1` the default HELLO for every document and added five specs to `stream-sheet.spec.ts`. **Cause not found.**
+- **The stream browser project sits at the per-IP session limit.** At d30394a3, `tests/browser/stream-text.spec.ts:223` "a11y=off …" failed in every full run. Cause (found at 10462914): its HELLO was refused HTTP 429 by the per-IP gate (`server/src/rate.ts`, 30 new sessions per sliding minute), because the five 4b specs added to `stream-sheet.spec.ts` pushed the busiest minute to 31 sessions; the base already sits at 30. Fix (10462914, no limit changed): the five specs moved to `tests/browser/stream-sheet-4b.spec.ts`, run as their own Playwright project `stream-4b` against a second `server/test/app.ts` (`OV_STREAM_4B_PORT`, default `OV_STREAM_PORT + 10`); `stream-sheet.spec.ts` is byte-identical to the base. See §Gates for the runs after the fix. The `stream` project still has no margin: at 91fb7237 one of two runs had a different case of it (`stream-viewer.spec.ts:53`) refused 429. Its spec files are unchanged from the base; whether the base also crosses 31 sessions in some runs was not measured.
 
 The compatibility matrix passes all eight legs, and `tests/stream` has 0 deleted lines since 1e2fbf4d. T8 tile p95, recorded and not gated, is 83.8 ms at dpr 1 and 56.0 ms at dpr 2 (GREEN against 120 ms).
 
@@ -18,7 +15,7 @@ The compatibility matrix passes all eight legs, and `tests/stream` has 0 deleted
 
 | Line | Proven by |
 |---|---|
-| **selection parity:** scripted mouse and keyboard sequences give the same `GridSelection` as local mode on the snapshot | `tests/xlsx-stream-selection.test.tsx` "selection parity: keyboard" and "selection parity: mouse": the same scripts drive a local viewer over the servable snapshot (`sheetTextView` → `textDocument`) and a stream viewer over the same snapshot's wire layout, and compare every committed selection and `aria-activedescendant` (by cell part), across the merge A5:C6, hidden row 7, hidden column F and the authored 1 × 1 frozen panes. Browser: `tests/browser/stream-sheet.spec.ts` "shift+click selects a range". There is no freeze command (P17) and no drag-select, locally or on streams |
+| **selection parity:** scripted mouse and keyboard sequences give the same `GridSelection` as local mode on the snapshot | `tests/xlsx-stream-selection.test.tsx` "selection parity: keyboard" and "selection parity: mouse": the same scripts drive a local viewer over the servable snapshot (`sheetTextView` → `textDocument`) and a stream viewer over the same snapshot's wire layout, and compare every committed selection and `aria-activedescendant` (by cell part), across the merge A5:C6, hidden row 7, hidden column F and the authored 1 × 1 frozen panes. Browser: `tests/browser/stream-sheet-4b.spec.ts` "shift+click selects a range". There is no freeze command (P17) and no drag-select, locally or on streams |
 | find-hit sets equal local mode on the snapshot | `server/test/sheet-find.test.ts` "hit set and order equal local find on the deleted fixture" (local `WorkbookFind`, written apart from the server inputs, over `textGrid` with D20 and the merge tails deleted; it first shows the undeleted find hits D20), "full finds as local", "CF-effective display text". Browser: "find moves to a match and shows no hit text" |
 | copy TSV equals local mode on the snapshot | `server/test/sheet-copy.test.ts` "copy TSV equals local on the deleted fixture" (a 3-range selection, byte for byte), "withheld cells are empty fields", "cfHiddenFormat copies as painted". Browser: "copy puts servable TSV on the clipboard" (`'1900\tE19\n\tE20\n2100\tE21'`, D20 covered) |
 | copy caps refuse at n+1 and allow at n, per copy and per session | `server/test/sheet-copy.test.ts` "caps refuse at n+1 and allow at n, per copy" (3 ok, 4 refused `{copy-too-large, limit: 3, requested: 4}`, 6 cells with 3 withheld count 3) and "… and per session, measured against the resumed cap"; `server/test/sheet-a11y.test.ts` "focused counts 1 per non-empty cell", "the quota is shared with copy" |
@@ -47,9 +44,9 @@ Run one at a time at d30394a3 (code; the docs commit after it changes no code) o
 
 | Gate | Command | Result |
 |---|---|---|
-| server | `cd server && bun test` | **1,541 pass, 0 fail**, 105 files, 646,223 `expect()` calls, 855 s |
-| client | `bun scripts/fetch-corpus.ts`, then `bunx vitest run` | 773 of 774 files; 15,872 pass, **1 fail**, 65 skipped, 1 todo (15,939), 892 s. The fail is `tests/slideshow-screens.test.ts` (pre-existing; alone: 9 pass, 1 fail, the same case) |
-| browser, stream | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream` | run 1: 51 passed, **1 failed**, 1 skipped (the existing no-codec media case), 3.7 min; run 2 (after the docs commit, no code change): the same, 51 / 1 / 1, 3.7 min. Both fails are `stream-text.spec.ts:223` "a11y=off …" (see Status). Alone: `npx playwright test --config playwright.viewer.config.ts --project=stream tests/browser/stream-text.spec.ts` 10 passed; `… stream-text.spec.ts:223 --repeat-each=5` 5 passed |
+| server | `cd server && bun test` | at d30394a3: 1,541 pass, 0 fail, 105 files; at 91fb7237: **1,545 pass, 0 fail**, 106 files |
+| client | `bun scripts/fetch-corpus.ts`, then `bunx vitest run` | at 91fb7237 and at d30394a3 alike: 773 of 774 files; 15,872 pass, **1 fail**, 65 skipped, 1 todo (15,939), 892 s. The fail is `tests/slideshow-screens.test.ts` (pre-existing; alone: 9 pass, 1 fail, the same case) |
+| browser, stream | `npm run test:browser:stream` (projects `stream` and `stream-4b`, since 10462914) | at d30394a3: 51 passed, 1 failed (`stream-text` "a11y=off", the per-IP 429, see Status), 1 skipped. At 10462914: 52 passed, 1 skipped, twice. At 91fb7237: run 1 51 passed, **1 failed**, 1 skipped — `stream-viewer.spec.ts:53` "error: an unknown document ends in the typed auth-failed error", whose HELLO the trace shows refused `429` (the same per-IP gate, in the unchanged `stream` project); run 2 52 passed, 1 skipped. The skip is the existing no-codec media case |
 | browser, viewer (unmodified) | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer` | **67 passed**, 2.4 min |
 | typecheck | `npx tsc --noEmit -p .` | clean (exit 0) |
 | typecheck, server | `npm run -s typecheck:server` | clean (exit 0) |
@@ -111,11 +108,10 @@ Legs (a)–(d) are 4a's, unchanged. (e)–(g) are 4b's (Task 13): (e) decodes a 
 Seen during 4b; listed, not fixed. Each passed when its file ran alone.
 - `server/test/mark-geometry.test.ts` "registration time: uncropped zoom 1.5 registers in <= 15 s" and "zoom then a 10 % crop": wall-clock bounds under parallel load (Tasks 3, 5).
 - `server/test/print-wire.test.ts` "print then print-cancel back to back …" and "two cancelled jobs back to back …": cancel races under load (Task 7).
-- `tests/browser/stream-text.spec.ts` "a11y=off: no screen-reader layer and no a11y request" (PPTX): a 15 s paint timeout in every full stream-project run since Task 12 (3 of 3), passing alone; order-dependent, cause not found (see Status). This is not a load flake.
+- `tests/browser/stream-text.spec.ts` "a11y=off …": the per-IP 429 (see Status), fixed at 10462914.
 - `tests/xlsx-viewer-main-controls-accounting.test.ts` "keeps membership and independent reader copies charged through close": a heap-delta assertion under parallel load (Task 10).
 - `tests/xlsx-viewer-worker-overflow.test.ts` "SPEC guard epoch-after-stage preserves old rows and raw ownership": failed twice alone right after a full run, then passed at the base and three times after (Task 11). **Root cause not found.**
 - `tests/slideshow-screens.test.ts`, one case, fails under Node 26.13.1 (no `localStorage` in that realm), as at 4a's base; not 4b's.
-- In this task's runs only `stream-text` "a11y=off" failed (above). Every other listed flake passed in the full runs.
 
 ## Rulings and findings as built
 
@@ -134,25 +130,35 @@ The full text is in the S4 design, §11.2 "As built (4b)", and the dated parent 
 - **Audit:** a unit a11y request with no servable text, a focused empty cell, and an n = 0 copy write no audit row.
 - **Off-mode text ops** are charged one `'text'` check before `unsupported-op`; `'sheet'` is charged before the one-in-flight check.
 
+## Final review (whole branch)
+
+- **codex, at 10462914: CHANGES REQUESTED**, two findings, both reproduced by the reviewer:
+  - **R1 (Critical):** a number hidden by a table style's `;;;` format (wholeTable DXF over General cells) was blanked from tiles but returned by visible-only a11y and measured by fit, because the text view resolved only the cell's own style. Fixed at d80f56d7: `TextView.styleAt` resolves the painted pre-CF style (table/pivot region, 'screen' mode) once, and blanking, find, copy and a11y all use it. Test: `server/test/sheet-text-final.test.ts` (real table-DXF XLSX through `DocumentHost`; a full-policy control).
+  - **R2 (Important):** server row fit lacked `layoutHeight` (rotated text 20 px against 300 px locally). Fixed at 91fb7237 (see §Not machine-checked).
+- **agy, scoped re-review of d80f56d7..91fb7237: APPROVED**, no new issues.
+- Local-viewer a11y without CF still formats the cell's own style (no confidentiality effect: the local viewer holds the document); table-styled cells can read differently from the stream.
+
 ## Not machine-checked
 
 - **Screen readers.** VoiceOver and NVDA were not run on the stream grid; the a11y tests check the DOM text and the request pattern only.
 - **Non-Chromium browsers.** The stream browser project runs Desktop Chrome only.
 - **Real clipboards beyond Chromium.** The browser copy spec reads Chromium's clipboard; other browsers and OS clipboards were not tried.
 - **The corpus ink oracle is not evidence.** `server/test/sheet-ink-oracle.test.ts` "… on the corpus" visits 30 files and 46 sheets, but no corpus XLSX has a drawing over text (the one drawing part, `poi-66365.xlsx` `drawing1.xml`, is an empty `wsDr`), so it checks 0 cells and passes even with an identity text view. A drawing-bearing corpus XLSX is needed; adding one is the owner's call. The fixture oracle is real evidence.
-- **Wrapped and rotated row fits.** Server fit has no browser layout height and uses the local wrapped-lines estimate; parity was checked against the same estimate, not a browser fit.
+- **Wrapped and rotated row fits against a browser.** Since 91fb7237 the server fit runs the viewer's own `layoutHeight` on the canvas backend, and `server/test/sheet-text-final.test.ts` checks it equals the local engine's fit (rotated long 303 px, rotated short 134 px, wrapped 265 px; before the fix 20, 20 and 204). The local side there is the engine over the same canvas backend, not a browser.
+- **Mutation proofs are unrecorded.** The Task 14 mutations above were run by hand and reverted; no artifact or committed negative test records them.
+- **Other painted-style sources.** R1 (below) showed table-region styles; pivot-region styles go through the same `TextView.styleAt`. No review searched for further sources (e.g. row or column default styles) beyond these and CF.
 
 ## Follow-ups and open items
 
 - **A drawing-bearing corpus XLSX** for the ink oracle (above).
 - **`streamSheets: 'tiles'` hosts** get no 4b text until they drop the option (F1); stated in `server/README.md` and the option's doc comments.
 - **Tile-side CF reads merge-tail values** (F20); only the owner can widen.
-- **Root causes not found:** `stream-text` "a11y=off" in full stream-project runs (3 of 3 since Task 12); `xlsx-viewer-worker-overflow` "SPEC guard epoch-after-stage".
-- **Task 4 review was thin** (ledger note): the session view state, `sheet-resize` and sized tiles deserve extra attention in the final review.
+- **Root cause not found:** `xlsx-viewer-worker-overflow` "SPEC guard epoch-after-stage".
+- **Task 4 review was thin** (ledger note); the final review (codex) covered the session view state, `sheet-resize` and sized tiles and found nothing there.
 - Deferred minors from the ledger:
   - `blankCell`/`holdsContent` duplicated from `server/src/sheet/snapshot.ts` in `text-view.ts` (Task 1);
   - `decodeSheetView`'s key check allows absent `reqId`/`type` when used standalone (Task 2);
-  - server fit has no `layoutHeight`: wrapped or rotated rows use the estimate (Task 5);
+  - closed: server fit has no `layoutHeight` (Task 5) — promoted to Important by the final review (R2) and fixed at 91fb7237;
   - copy's pool admission estimate (16 MiB + layout) is below `serializeSelection`'s 24 MiB working budget, so it can under-admit by up to 8 MiB (Task 7);
   - `copy: false` + `textA11y: true` (unit mode) has no test in `sheet-a11y.test.ts` (Task 8);
   - `wireSelection`'s 1 KiB envelope headroom assumes token + envelope < 1 KiB (Task 9);
