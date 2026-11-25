@@ -24,10 +24,15 @@
  * (`cfLiteralLowerReading`, the registration table only), production paints the LOWER segment of the num-segment shape, so it
  * is justified no longer there (`literalLowerPaints`): `lower-arithmetic` hands the cell to the guard-boundary shape (justified
  * by `guardBoundaryShapeAt` while its own reading is unregistered or its evidence absent); `step-plus-one` leaves justified
- * only the cells where some channel's truncation step is 0. The upper segment stays justified whatever is registered.
+ * only the cells where some channel's truncation step is 0. The upper segment stays justified whatever literal-lower reading is
+ * registered.
+ * The upper-segment follow-up (stage2-scale-upper-segment): once an upper-segment reading is registered with its evidence
+ * (`cfUpperSegmentReading`, the registration table only), production paints every upper-segment cell of the whole-product
+ * shape (both classes) and of the literal num-segment shape whose bounding cfvo are not formulas, so those are justified no
+ * longer (`upperWholeShapeAt`, `stage2NumSegmentShape`); formula-bounded upper segments stay justified.
  */
 import { isCellInSqref } from './verify'
-import { CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperWindowReading, type CfLiteralLowerReading } from '../../src/xlsx/cf/colorScale'
+import { CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperNearTopReading, cfUpperSegmentReading, cfUpperWindowReading, type CfLiteralLowerReading, type CfUpperSegmentReading } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -86,6 +91,16 @@ const formulaCfvo = (x: UpperWholeCfvo): boolean => x.type === 'formula' || x.f 
 export const literalLowerReadingRegistered = (): CfLiteralLowerReading | undefined => {
   const r = cfLiteralLowerReading(CF_LITERAL_LOWER_CAP)
   return r !== undefined && hasEvidence(CF_LITERAL_LOWER_CAP) ? r : undefined
+}
+
+/** Whether production's upper-segment reading `r` paints between `from` and `to` (ARGB hex): `index-position` only between two opaque colours. */
+export const upperSegmentReadingPaints = (r: CfUpperSegmentReading | undefined, from: string, to: string): boolean =>
+  r !== undefined && (r !== 'index-position' || (from.slice(0, 2).toUpperCase() === 'FF' && to.slice(0, 2).toUpperCase() === 'FF'))
+
+/** The upper-segment reading registered with its evidence (undefined: none; production then withholds the upper shapes). */
+export const upperSegmentReadingRegistered = (): CfUpperSegmentReading | undefined => {
+  const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
+  return r !== undefined && hasEvidence(CF_UPPER_SEGMENT_CAP) ? r : undefined
 }
 
 /**
@@ -151,7 +166,33 @@ export function upperWholeShapeAt(marker: UpperWholeMarker, ref: string, value: 
   const cls = independentProductClass(marker.scale.colors[1]!, marker.scale.colors[2]!, f)
   // The upper segment is bounded by cfvo 2 and 3 in either order (the midpoint-above-max re-sort swaps them).
   if (cls === 'window' && !(literalNumCfvo(marker.scale.cfvo[1]!) && literalNumCfvo(marker.scale.cfvo[2]!)) && windowReadingRegistered()) return false
+  // The upper-segment follow-up: a registered upper-segment reading (with its evidence) paints both classes unless a bound is a formula.
+  if (cls !== undefined && upperSegmentReadingPaints(upperSegmentReadingRegistered(), marker.scale.colors[1]!, marker.scale.colors[2]!) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)) return false
   return cls !== undefined
+}
+
+/**
+ * The near-top sub-shape (production's `upperSegmentNearTop`, reason `cf-unmeasured-upper-near-top`), restated: strictly inside
+ * the UPPER segment (after the re-sort), some RGB channel of the upper colours (cfvo colours 2 and 3) with d != 0 has
+ * d − f·d <= JUSTIFY_TRUNCATION_GUARD. Justified unless the upper-segment and near-top ids are registered with the same
+ * reading, both with their evidence, and neither upper bound is a formula.
+ */
+export function upperNearTopShapeAt(marker: UpperWholeMarker, ref: string, value: unknown, values: ReadonlyMap<string, number>, formulaBound?: (cfvo: UpperWholeCfvo) => number | undefined): boolean {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false
+  if (marker.ruleType !== 'colorScale' || marker.scale?.cfvo.length !== 3 || marker.scale.colors.length !== 3) return false
+  const t = independentThresholds(marker, ref, values, formulaBound)
+  if (!t) return false
+  const [t0, t1, t2] = t as [number, number, number]
+  const [mid, top] = t1 > t2 ? [t2, t1] : [t1, t2]
+  if (!(t0 < mid && mid < top) || !(value > mid && value < top)) return false
+  const f = independentFraction(value, mid, top)
+  if (f === undefined) return false
+  const from = marker.scale.colors[1]!, to = marker.scale.colors[2]!
+  const near = [2, 4, 6].some(i => { const d = Math.abs(Number.parseInt(to.slice(i, i + 2), 16) - Number.parseInt(from.slice(i, i + 2), 16)); return d !== 0 && d - f * d <= JUSTIFY_TRUNCATION_GUARD })
+  if (!near) return false
+  const r = upperSegmentReadingRegistered()
+  const painted = upperSegmentReadingPaints(r, from, to) && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && !formulaCfvo(marker.scale.cfvo[1]!) && !formulaCfvo(marker.scale.cfvo[2]!)
+  return !painted
 }
 
 /**

@@ -15,6 +15,10 @@
 import { describe, expect, it } from 'vitest'
 import { scaleColorAt, interpolateScaleColor } from '../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const RED = 0xfff8696b, YELLOW = 0xffffeb84, GREEN = 0xff63be7b
 const num = (value: number, argb: number, resolved?: 'formula'): CfScalePoint => ({ bound: { type: 'num', value, ...(resolved ? { resolved } : {}) }, argb })

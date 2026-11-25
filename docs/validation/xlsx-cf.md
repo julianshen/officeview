@@ -246,6 +246,8 @@ Every Stage 2 capability corresponds to a single variant in the oracle matrix an
 | `scale:interpolation-rounding-ladder` | `stage2-scale-interpolation` | Rounding ladder across half-up, half-even, and truncate on 0, 1, 3, 5, 255, 509, 510 | Ruling S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-B (interpolation rounding has no default; requires verified rounding ladder evidence) |
 | `scale:guard-boundary-raw-floor` | `stage2-scale-raw-floor` (§14.z.18; `stage2-scale-upper-window` is the finding it settles) | An interior 2-colour or 3-colour lower-segment cell whose step product f·\|d\| lies within 1e-11 strictly below a whole number: two pre-registered readings, `raw-floor` and `guarded`, over min / max, percent, percentile, literal, inverted, mixed and re-sorted bounds, both colour orders and spans 210, 150, 105, 30 | Ruling S2-B (truncate) | `verified` (matched `raw-floor`, ce3f701d) | The shape paints at raw floor, floor(f·\|d\|); withheld (`cf-unmeasured-guard-boundary`) without this evidence, under a formula-resolved bound, or outside sRGB / truncate; a literal num 3-colour lower segment is painted through this reading since `scale:num-segment-literal-lower` (§14.z.21) |
 | `scale:num-segment-literal-lower` | `stage2-scale-literal-lower` (§14.z.21; the census of recipe §12.1) | An interior cell of a 3-colour LOWER segment bounded by two literal `num` cfvo where f·2^20 is not an integer: two pre-registered readings, `lower-arithmetic` and `step-plus-one`, over P-line and distinct-per-channel palettes, both colour orders, spans 30, 105, 150, 210, 420, non-zero / negative / fractional bounds and the midpoint-above-max re-sort | Ruling S2-B (truncate) | `verified` (matched `lower-arithmetic`, a3f85309) | The lower segment paints as a non-literal lower segment (truncation; raw floor at a guard-boundary product under `scale:guard-boundary-raw-floor`); withheld (`cf-unmeasured-num-segment-fraction`) without this evidence or outside sRGB / truncate; the UPPER segment keeps the num-segment withhold |
+| `scale:upper-segment` | `stage2-scale-upper-segment` (§14.z.22; the census and search of recipe §13.1) | An interior cell of a 3-colour UPPER segment withheld before (the literal num-segment shape in segment 1, the integer and window classes of the whole-product shape): two pre-registered readings, `index-position` ((1 + f) − 1, then floor(l·\|d\|)) and `truncate`, over P-line and distinct-per-channel palettes (mixed directions included), both colour orders, spans 1.4 / 105 / 210 / 420, decimal bounds, the re-sort, literal and min / percent 50 / max bounds | Ruling S2-B (truncate) | `verified` (matched `index-position`, 2ee3735a) | The upper segment's withheld shapes paint at index-position under sRGB / truncate with opaque endpoints and no formula-resolved bound; withheld without this evidence, for a formula bound, a non-opaque endpoint or another colour space / rounding |
+| `scale:upper-segment-near-top` | `stage2-scale-upper-segment` (§14.z.22, its near-top configuration) | An upper-segment interior cell whose product lies within 1e-11 below the full span on some channel (pre-registered as its own question, registrable only with the main id's reading) | Ruling S2-B (truncate) | `verified` (matched `index-position`, 2ee3735a) | Painted at index-position only with both ids' evidence at the same reading; otherwise withheld (`cf-unmeasured-upper-near-top`) |
 | `scale:interpolation-color-space` | `stage2-scale-interpolation` | Colour space interpolation across sRGB, linear-light, and HSL at 50% | Ruling S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-B (color space has no default; requires verified color space evidence) |
 | `scale:interpolation-spec-palette` | `stage2-scale-interpolation` | Spec §3 3-colour palette `FFF8696B`/`FFFFEB84`/`FF63BE7B` over 1..9 | Rulings S2-A, S2-B | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-A and S2-B |
 | `scale:thresholds-min-max` | `stage2-scale-thresholds` | Basic 2-colour `min`/`max` threshold evaluation | Ruling S2-C | `verified` | While unmeasured or refused, rule is unresolved per Ruling S2-C |
@@ -3586,3 +3588,44 @@ Both stages recompute the justification independently of production (`scripts/cf
 | Stage 5 measured cases | 0 (no cell in the shape) |
 
 **Audits.** Stage 2 conformance over the 14 measured cases: 1490 cells; without the evidence 1077 exact, 413 withheld (324 num-segment); as committed 1191 exact, 299 withheld (210 num-segment), 0 violations. `step-plus-one` registered is caught at exactly the 106 census cells where the readings differ. Stage 5 records unchanged.
+
+### 14.z.22 The upper-segment follow-up: captured; `index-position` matched both questions and is registered; the upper-segment withholds lifted (2026-11-25)
+
+**Why.** Production withheld the interior cells of a 3-colour UPPER segment in three shapes: the literal num-segment shape in segment 1 (`cf-unmeasured-num-segment-fraction`) and the integer and window classes (`cf-unmeasured-upper-segment-whole-product`). Excel's rule there was unexplained (§14.z.15–§14.z.21). Brief: `.superpowers/sdd/cf-upper-segment/brief.md`. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §13. Interpretation: `.superpowers/sdd/cf-upper-segment/phase2-interpretation.md`.
+
+**Ordering, in git.**
+1. **The census and search:** 34220478, f3f201db. Over all 302 captured upper-segment interior cells, the earlier pools (54,408 candidates) still had no survivor; one new class survived: `index-position`, l = (1 + f) − 1, then floor(l·|d|) with a double product. With index 0 it is the registered lower-segment raw floor.
+2. **The readings and production behaviour:** e1e852a1 (`index-position`, `truncate`; selectable, unregistered).
+3. **The case:** b1287645; the near-top sub-shape withheld and probed as its own question (orchestrator ruling): 5f72fff3; `index-position` only between opaque endpoints (codex pre-capture P1): 53f6bf44.
+4. **Capture:** 2ee3735a (Excel 16.115). The build opened repair-free on the first attempt; all 207 numeric cells (the 17-digit near-top probes included) and all 34 rules' cfvo bounds and colours are bit-identical input vs saved; the capture verified at minimum contrast 130 and `--verify-only` re-verified it.
+
+**The case.** `stage2-scale-upper-segment`, 207 cells in A1:X14: 86 designated (48 decisive, 26 kept near-whole cells where both readings agree but a "one step smaller at every whole product" rule would not, 5 clear, 7 endpoint controls), 105 twins (a P-line twin line and, new, 3-colour num 0 / 1 / 2 endpoint twins), 2 literal positive controls. Nine main groups (P line both orders; spans 1.4, 105, 210, 420; decimal bounds; the re-sort; distinct 210/105/30 descending, 234/78/26 and 198/66/22 with mixed directions; literal and min / percent 50 / max bounds) and the near-top group (9 probes, spans 210 / 420 / 1, replicated per column).
+
+**The capture is sound.** Every pixel equals its DisplayFormat fill (207/207). The 14 unformatted controls are white, the positive controls show FFF8696B and FF63BE7B, and all 105 twins show their fills (the 3-colour endpoint twins included, first time captured).
+
+**The result.** `verifyCfCase`: verified; `scale:upper-segment` and `scale:upper-segment-near-top` both matched `index-position` (discriminating); nothing refused.
+- **Every designated cell drew `index-position`:** 86/86. The 48 decisive cells are off truncation; `truncate` matched none of them, and no cell drew neither.
+- **The six mixed cells** (G2..G5, H4, I3), where index-position moves some near-whole channels of a cell and keeps others (the product's rounding depends on |d|), drew exactly that: the first captured cells whose near-whole channels split.
+- **All 25 main-group kept cells and the kept near-top probe** (L2, 1 − 2^-53: (1 + f) − 1 = 1) drew truncation, as index-position predicts.
+- **The near-top probes** (1, 7 and 60 ulps below 427 and 630; 1 − 2^-52 and 1 − 1e-14 over 0..1): all 8 decisive ones one step below the maximum colour, as index-position predicts; guarded truncation would have painted the maximum colour, which production did before the near-top withhold (5f72fff3).
+
+**Registered.** `CF_UPPER_SEGMENT_PRODUCTION_READINGS['scale:upper-segment'] = 'index-position'` and `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS['scale:upper-segment-near-top'] = 'index-position'`; both `CF_STAGE2_NONDISCRIMINATING` entries are removed. No production arithmetic changed. The audit published them (`npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5`, twice, byte-identical, sha-256 `d472fd25…`): 353 ids (110 S1, 39 S2, 56 S3, 97 S4, 51 S5); the only additions are the two ids.
+
+**Production effect.** The upper segment's withheld shapes now paint at index-position under sRGB / truncate with both endpoint colours opaque and no formula-resolved bound. **Still withheld:** a formula-bounded upper segment (stage5-cfvo-nonnumeric-v2 E4, E5), a non-opaque endpoint, other colour spaces and roundings, and every shape without the ids' evidence.
+
+**Reach** (newly painted, all exactly Excel's fill; 0 mispainted):
+
+| Case | Newly painted |
+|---|---|
+| `stage2-scale-interpolation` | 3 |
+| `stage2-scale-thresholds` | 2 |
+| `stage2-scale-scope-disjoint` | 6 |
+| `stage2-scale-num-segment` | 61 |
+| `stage2-scale-upper-whole` | 116 |
+| `stage2-scale-upper-window` | 56 |
+| `stage2-scale-raw-floor` | 9 |
+| `stage2-scale-literal-lower` | 16 (its upper probes) |
+| `stage2-scale-upper-segment` | 78 |
+| `stage5-cfvo-nonnumeric-v2` | 2 (S4, S5) |
+
+**Audits.** Stage 2 conformance over the 15 measured cases: 1697 cells; with the two ids' evidence withheld 1320 exact and 377 withheld (274 num-segment, 73 upper whole product); as committed 1667 exact and 30 withheld (0 num-segment, 0 upper whole product), 0 violations. `truncate` registered is caught at exactly the 203 census cells it misses (155 earlier, 48 of this capture). Stage 5: 0 disagreeing; S4 and S5 newly painted at Excel's fill. The census with this capture (`npx tsx scripts/cf-refs/upper-segment-candidates.ts --all`): 381 cells, the same 7 survivors, one class.

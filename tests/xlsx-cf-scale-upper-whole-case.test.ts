@@ -49,6 +49,10 @@ import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidenc
 /** As recorded at 54fc3388: before the literal-lower registration (a3f85309), whose evidence is withheld here. */
 const asRecorded = <T>(fn: () => Promise<T>): Promise<T> => withExactCfEvidence([...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:num-segment-literal-lower'), fn)
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_UPPER_WHOLE_ID
@@ -108,7 +112,7 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 describe('stage2-scale-upper-whole: the case (exploratory)', () => {
   it('is appended last; owns its three ids, every one registered non-discriminating; truncate is the only reading', async () => {
     // Appended last at its time; the window follow-up stage2-scale-upper-window is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual([ID, 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-5)).toEqual([ID, 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
     for (const id of [CAP, CTRL, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)

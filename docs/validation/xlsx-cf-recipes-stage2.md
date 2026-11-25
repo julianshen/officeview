@@ -1522,3 +1522,194 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **The upper probes** (record only): 13 of 16 off production's truncation: 11 at the step-plus-one colour, G8 and H9 at raw floor; 3 at truncation (D11, D12, H10). Production's upper-segment withholds are unchanged.
 - **Registered:** `lower-arithmetic`, as §12.2 says: the `CF_STAGE2_NONDISCRIMINATING` entry is removed, `CF_LITERAL_LOWER_PRODUCTION_READINGS['scale:num-segment-literal-lower'] = 'lower-arithmetic'`, published through the audit (351 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.21.
 - **The census with the capture:** `npx tsx scripts/cf-refs/literal-lower-census.ts` covers 130 interior cells (114 in the shape) and misses 0. `--pre-capture` reproduces §12.1.
+
+## 13. The upper-segment follow-up (`stage2-scale-upper-segment`; captured 2ee3735a, `index-position` registered)
+
+Production withholds the interior cells of a 3-colour UPPER segment in three shapes: the literal num-segment shape in segment 1 (`numSegmentUnmeasured`, `cf-unmeasured-num-segment-fraction`) and the `integer` and `window` classes of the whole-product shape (`upperSegmentProductClass`, `cf-unmeasured-upper-segment-whole-product`). Excel's rule there was unexplained (§8–§12). Brief: `.superpowers/sdd/cf-upper-segment/brief.md`; Phase 1 report: `.superpowers/sdd/cf-upper-segment/phase1-report.md`.
+
+### 13.1 Census and search (Phase 1a)
+
+`npx tsx scripts/cf-refs/upper-segment-candidates.ts` (pinned by `tests/xlsx-cf-scale-upper-segment-candidates.test.ts`) runs over every captured cell (`collectSegmentCells`, `{ include: 'all' }`, the 16 upper probes of a3f85309 included): 1589 segment cells, 0 harness faults, 0 cells under a 3-colour scale dropped by a gate.
+
+- **302 upper-segment interior cells.** Against guarded truncation: 147 at truncation, 43 at raw floor (only below-integer channels moved), 112 one step smaller with some integer or above-integer channel moved.
+- **Per channel** (d ≠ 0): clear 223, all at truncation; integer 296 moved / 155 kept; below 127 / 23; above 27 / 50. No other offset occurs.
+- **One decision per f double:** 75 doubles (40 moved), 0 cells with mixed near-whole channels, 0 inconsistent doubles.
+- **The earlier pools still have 0 survivors with every capture:** the first search (5803, best 42 misses), the extended and window searches (48,603, best 34), `step-plus-one` (156 misses); truncation misses 155.
+- **The new `position` family** (210 candidates: Excel's position on the whole scale as a double, the segment index plus f, the local fraction recovered by the inverse operations, then the step) has **7 survivors, one class** over a 129,024-segment probe grid: l = (1 + f) − 1 (f rounded to the 2^-52 grid, ties to even), then floor(l·|d|) with a double product. The guard, float32 position or product, the exact (unrounded) product, a segment index of 2, percent positions, reciprocal or complement fractions and the other snaps to the 2^-52 grid all fail. With index 0 the same arithmetic is the registered lower-segment raw floor.
+
+### 13.2 Readings and the registration rule (Phase 1b task 2)
+
+Both readings are implemented in production (`src/xlsx/cf/colorScale.ts`, commit e1e852a1) and selectable through `injectCfUpperSegmentReadings` with the id's evidence; `CF_UPPER_SEGMENT_PRODUCTION_READINGS` is empty (spread into `CF_STAGE2_PRODUCTION_READINGS`). The id is `scale:upper-segment`.
+
+A reading applies only to an upper-segment interior cell that production withholds today (the three shapes above), under the default sRGB / truncate variants, with neither bounding cfvo formula-resolved, with the id's evidence. It decides before the window reading (`scale:upper-window-statistical`).
+- **`index-position`** (the survivor): per ARGB channel, the step from the segment's start colour is floor(((1 + f) − 1)·|d|) (`upperSegmentPositionColour`). It reproduces T4 and V3 (FFCCDD82, FF98CE7F), F12, F15, F16, F18 and F19 of 54fc3388, and every census cell.
+- **`truncate`** (the control): production's guarded truncation, floor(f·|d| + 1e-11).
+
+**The near-top sub-shape** (orchestrator ruling before the capture, pre-committed here with production): an upper-segment interior cell where some RGB channel has d − f·d ≤ 1e-11 (the value within about 1e-13 of the maximum). Guarded truncation paints the maximum colour there and `index-position` one step less; no capture holds such a cell (0 of 1589 in any segment). Production now **withholds** it (`upperSegmentNearTop`, reason `cf-unmeasured-upper-near-top`; justified by `upperNearTopShapeAt`) unless `scale:upper-segment-near-top` is registered with the **same** reading as `scale:upper-segment`, both with their evidence and no formula bound. It is its own question (configuration `near-top`), so the main reading can be registered with this sub-shape still withheld.
+
+**Never changed by a reading:** upper-segment cells production paints today (at those the two arithmetics coincide), the lower segment, 2-colour scales, formula-bounded segments, other colour spaces or roundings. Any non-finite intermediate withholds. The justifications (`upperWholeShapeAt`, `stage2NumSegmentShape`) narrow only with the registration plus its evidence, never for a formula bound.
+
+**Registration rule** (registrable, declared before the capture):
+- **`index-position` matches every designated cell:** remove the `CF_STAGE2_NONDISCRIMINATING` entry of `scale:upper-segment` and set `CF_UPPER_SEGMENT_PRODUCTION_READINGS['scale:upper-segment'] = 'index-position'`.
+- **`truncate` matches:** it contradicts 155 census cells; a finding for the owner, never registered on this case alone.
+- **No reading matches** (any decisive, kept, clear or control cell off the matched reading): a finding (`formula-hypothesis-none`), recorded and never fitted; the shapes stay withheld.
+- **The near-top id** is judged on its own configuration: register `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS['scale:upper-segment-near-top']` (and remove its entry) only if it matched the same reading as the main id at every near-top probe. If the main id matches and the near-top id does not (another reading, or none), the main reading is registered and the near-top sub-shape stays withheld.
+
+### 13.3 The case (Phase 1b task 3)
+
+`stage2-scale-upper-segment`, appended last in `CF_STAGE2_CASES` (earlier inputs byte-identical). It owns `scale:upper-segment` (the question), `scale:upper-segment-near-top` (the near-top question; both in `CF_STAGE2_NONDISCRIMINATING` until the capture) and `scale:upper-segment-twin` (the twins).
+
+- **Size:** 207 cells in A1:X14, 32 colour rules and 2 cellIs positive controls. The text-scope estimate over the whole range is 4,920,160 bytes, 58.7% of the 8,388,608-byte cap (one batch; 3,653,568 before the near-top columns; no twin dropped).
+- **Cells:** 86 designated (48 decisive, 26 kept, 5 clear, 7 endpoint controls; 9 of them near-top), 105 twins, 2 literal positive controls (FFF8696B, FF63BE7B) and 14 unformatted controls (row 14).
+- **Roles.** *Decisive:* the readings differ. *Kept:* some channel product is near-whole, both readings keep truncation; a "one step smaller at every whole product" rule would not, so each kept cell can fail `index-position`. *Clear:* no near-whole product. *Controls:* endpoints and the statistical blocks' minimum and maximum. Every non-control cell is in its group's evidence configuration, so any of them off the reading refuses the match.
+
+| Group | Col | cfvo | Upper segment | Kind | Decisive / cells |
+|---|---|---|---|---|---|
+| pl-qp-210 | A | num 7 / 217 / 427 | 217..427, Q → P (−+−) | P-line | 5 / 10 |
+| pl-pq-420 | B | num −210 / 210 / 630 | 210..630, P → Q (+−+) | P-line | 5 / 11 |
+| pl-pq-dec | C | num 0.7 / 2.1 / 3.5 | 2.1..3.5, P → Q | P-line, decimal | 5 / 11 |
+| pl-qp-resort | D | num 0 / 420 / 210 (re-sorted) | 210..420, Q → P | P-line | 4 / 9 |
+| pl-qp-stat | E | min / percent 50 / max over 0..420 | 210..420, Q → P | P-line, statistical | 5 / 10 |
+| ds-dd-desc | F | num −105 / 105 / 315 | FFF09B32 → FF1E3214 (210/105/30, −−−) | distinct | 4 / 5 |
+| ds-x-mixed | G | num 0 / 78 / 156 | FF0A5A0A → FFF40C24 (234/78/26, +−+) | distinct | 4 / 5 |
+| ds-z-mixed | H | num 0 / 66 / 132 | FF0A6E14 → FFD02C2A (198/66/22, +−+) | distinct | 4 / 5 |
+| ds-z-stat | I | min / percent 50 / max over 0..132 | 66..132, the same palette | distinct, statistical | 4 / 4 |
+| near-top (`scale:upper-segment-near-top`, replicated per column) | J | num 7 / 217 / 427 | 217..427, Q → P; 1, 7, 60 ulps below 427 | P-line | 3 / 3 |
+| | K | num −210 / 210 / 630 | 210..630, P → Q; 1, 7, 60 ulps below 630 | P-line | 3 / 3 |
+| | L | num −1 / 0 / 1 | 0..1, FFF09B32 → FF1E3214 (−−−); 1 − 2^-53 (kept: (1 + f) − 1 = 1), 1 − 2^-52, 1 − 1e-14 | distinct | 2 / 3 |
+
+- **New doubles:** 64 of the 74 decisive and kept cells have an f double not among the census's 75; the other 10 replicate captured doubles (1/3, 2/3, 1/6, 1/5, 1/10, 1/15, 1/2, 5/7, 3/11) in new spans, colour orders or palettes (I3 is 3/11's double on the distinct 198/66/22 palette, a mixed cell).
+- **Mixed cells (G2..G5, H4, I3):** `index-position` moves some near-whole channels of a cell and keeps others (its product rounding depends on |d|), which no per-double rule does; the census never saw one.
+- **Twins:** P-line fills on a twin line (num 0 / 1 between P-line steps 128 apart, value (k − from)/128); every other fill on a 3-colour endpoint twin (num 0 / 1 / 2 at values 0, 1, 2, each showing one rule colour exactly). The layout throws if a twin's product is not an IEEE integer or its model colour is not its fill.
+
+### 13.4 Predictions
+
+Every designated cell under each reading (live tokens name their twin). Classes per RGB channel with d ≠ 0: b below, a above, i integer, c clear; `near-top` a near-top cell; `lower` a lower-segment endpoint.
+
+| Cell | Group | Value | Role | f (hex) | Classes (R G B) | index-position | truncate |
+|---|---|---|---|---|---|---|---|
+| A2 | pl-qp-210 | 232 | decisive | 3fb2492492492492 | iii | FFD82CEC (R9) | FFD72DEB (R8) |
+| A3 | pl-qp-210 | 250 | decisive | 3fc41d41d41d41d4 | iii | FFC63EDA (Q10) | FFC53FD9 (Q9) |
+| A4 | pl-qp-210 | 276 | decisive | 3fd1fb1fb1fb1fb2 | iii | FFAC58C0 (P10) | FFAB59BF (P9) |
+| A5 | pl-qp-210 | 286 | decisive | 3fd5075075075075 | iii | FFA262B6 (P5) | FFA163B5 (P4) |
+| A6 | pl-qp-210 | 287 | decisive | 3fd5555555555555 | iii | FFA163B5 (P4) | FFA064B4 (P3) |
+| A7 | pl-qp-210 | 237 | kept | 3fb8618618618618 | iii | FFD232E6 (R4) | same |
+| A8 | pl-qp-210 | 266 | kept | 3fcdddddddddddde | iii | FFB54FC9 (Q2) | same |
+| A9 | pl-qp-210 | 283 | kept | 3fd41d41d41d41d4 | iii | FFA460B8 (P7) | same |
+| A10 | pl-qp-210 | 252 | kept | 3fc5555555555555 | iii | FFC341D7 (Q8) | same |
+| A11 | pl-qp-210 | 270.25 | clear | 3fd03a83a83a83a8 | ccc | FFB153C5 (P12) | same |
+| A12 | pl-qp-210 | 217 | control | 3ff0000000000000 | lower | FFE61EFA (S5) | same |
+| A13 | pl-qp-210 | 427 | control | 3ff0000000000000 | near-top | FF14F028 (M2) | same |
+| B2 | pl-pq-420 | 212 | decisive | 3f73813813813814 | iii | FF14F028 (M2) | FF15EF29 (M3) |
+| B3 | pl-pq-420 | 242 | decisive | 3fb3813813813814 | iii | FF23E137 (M8) | FF24E038 (M9) |
+| B4 | pl-pq-420 | 298 | decisive | 3fcad1ad1ad1ad1b | iii | FF3FC553 (N3) | FF40C454 (N4) |
+| B5 | pl-pq-420 | 374 | decisive | 3fd8fd8fd8fd8fd9 | iii | FF659F79 (N10) | FF669E7A (N11) |
+| B6 | pl-pq-420 | 294 | decisive | 3fc999999999999a | iii | FF3DC751 (M13) | FF3EC652 (N2) |
+| B7 | pl-pq-420 | 226 | kept | 3fa3813813813814 | iii | FF1CE830 (M5) | same |
+| B8 | pl-pq-420 | 302 | kept | 3fcc09c09c09c09c | iii | FF42C256 (N5) | same |
+| B9 | pl-pq-420 | 332 | kept | 3fd2972972972973 | aaa | FF51B365 (N8) | same |
+| B10 | pl-pq-420 | 236 | kept | 3fafb1fb1fb1fb20 | iii | FF21E335 (M6) | same |
+| B11 | pl-pq-420 | 252 | kept | 3fb999999999999a | iii | FF29DB3D (M10) | same |
+| B12 | pl-pq-420 | 271 | clear | 3fc2972972972973 | ccc | FF32D246 (M12) | same |
+| B13 | pl-pq-420 | 630 | control | 3ff0000000000000 | near-top | FFE61EFA (S5) | same |
+| C2 | pl-pq-dec | 2.2 | decisive | 3fb2492492492497 | aaa | FF22E236 (M7) | FF23E137 (M8) |
+| C3 | pl-pq-dec | 2.3 | decisive | 3fc249249249248c | bbb | FF31D345 (M11) | FF32D246 (M12) |
+| C4 | pl-pq-dec | 2.5 | decisive | 3fd2492492492491 | bbb | FF4FB563 (N6) | FF50B464 (N7) |
+| C5 | pl-pq-dec | 2.8 | decisive | 3fdffffffffffffd | bbb | FF7C8890 (N13) | FF7D8791 (O2) |
+| C6 | pl-pq-dec | 3.3 | decisive | 3feb6db6db6db6da | bbb | FFC73DDB (Q11) | FFC83CDC (Q12) |
+| C7 | pl-pq-dec | 2.6 | kept | 3fd6db6db6db6db7 | iii | FF5FA573 (N9) | same |
+| C8 | pl-pq-dec | 2.7 | kept | 3fdb6db6db6db6dd | aaa | FF6E9682 (N12) | same |
+| C9 | pl-pq-dec | 3.2 | kept | 3fe924924924924a | aaa | FFB94BCD (Q5) | same |
+| C10 | pl-pq-dec | 3 | kept | 3fe4924924924924 | iii | FF9B69AF (P2) | same |
+| C11 | pl-pq-dec | 3.1 | kept | 3fe6db6db6db6db7 | iii | FFAA5ABE (P8) | same |
+| C12 | pl-pq-dec | 2.15 | clear | 3fa2492492492480 | ccc | FF1BE92F (M4) | same |
+| D2 | pl-qp-resort | 216 | decisive | 3f9d41d41d41d41d | iii | FFE123F5 (R13) | FFE024F4 (R12) |
+| D3 | pl-qp-resort | 229 | decisive | 3fb7297297297297 | iii | FFD430E8 (R6) | FFD331E7 (R5) |
+| D4 | pl-qp-resort | 255 | decisive | 3fcb6db6db6db6db | iii | FFBA4ACE (Q6) | FFB94BCD (Q5) |
+| D5 | pl-qp-resort | 293 | decisive | 3fd94b94b94b94b9 | iii | FF9470A8 (O4) | FF9371A7 (O3) |
+| D6 | pl-qp-resort | 222 | kept | 3fad41d41d41d41d | iii | FFDA2AEE (R10) | same |
+| D7 | pl-qp-resort | 235 | kept | 3fbe79e79e79e79e | iii | FFCD37E1 (R2) | same |
+| D8 | pl-qp-resort | 258 | kept | 3fcd41d41d41d41d | iii | FFB64ECA (Q3) | same |
+| D9 | pl-qp-resort | 236 | kept | 3fbfb1fb1fb1fb20 | iii | FFCC38E0 (Q13) | same |
+| D10 | pl-qp-resort | 263.5 | clear | 3fd04e04e04e04e0 | ccc | FFB153C5 (P12) | same |
+| E2 | pl-qp-stat | 214 | decisive | 3f93813813813814 | iii | FFE321F7 (S3) | FFE222F6 (S2) |
+| E3 | pl-qp-stat | 228 | decisive | 3fb5f15f15f15f16 | iii | FFD52FE9 (R7) | FFD430E8 (R6) |
+| E4 | pl-qp-stat | 241 | decisive | 3fc2e52e52e52e53 | iii | FFC83CDC (Q12) | FFC73DDB (Q11) |
+| E5 | pl-qp-stat | 268 | decisive | 3fd1ad1ad1ad1ad2 | aaa | FFAD57C1 (P11) | FFAC58C0 (P10) |
+| E6 | pl-qp-stat | 278 | decisive | 3fd4b94b94b94b95 | iii | FFA361B7 (P6) | FFA262B6 (P5) |
+| E7 | pl-qp-stat | 219 | kept | 3fa5f15f15f15f16 | iii | FFDD27F1 (R11) | same |
+| E8 | pl-qp-stat | 234 | kept | 3fbd41d41d41d41d | iii | FFCE36E2 (R3) | same |
+| E9 | pl-qp-stat | 257 | kept | 3fcca5ca5ca5ca5d | iii | FFB74DCB (Q4) | same |
+| E10 | pl-qp-stat | 249 | kept | 3fc7c57c57c57c58 | iii | FFBF45D3 (Q7) | same |
+| E11 | pl-qp-stat | 262.5 | clear | 3fd0000000000000 | ccc | FFB252C6 (P13) | same |
+| E12 | pl-qp-stat | 0 | control | 0000000000000000 | lower | FF14F028 (M2) | same |
+| E13 | pl-qp-stat | 420 | control | 3ff0000000000000 | near-top | FF14F028 (M2) | same |
+| F2 | ds-dd-desc | 119 | decisive | 3fb1111111111111 | iii | FFE39531 (W3) | FFE29430 (W2) |
+| F3 | ds-dd-desc | 217 | decisive | 3fe1111111111111 | iii | FF816423 (V4) | FF806322 (V2) |
+| F4 | ds-dd-desc | 245 | decisive | 3fe5555555555555 | iii | FF65561F (U8) | FF64551E (U7) |
+| F5 | ds-dd-desc | 294 | decisive | 3feccccccccccccd | ici | FF343D18 (T11) | FF333D17 (T10) |
+| F6 | ds-dd-desc | 182 | kept | 3fd7777777777777 | ici | FFA37527 (V12) | same |
+| G2 | ds-x-mixed | 83 | decisive | 3fb0690690690690 | bic | FF18550B (T6) | FF19550B (T7) |
+| G3 | ds-x-mixed | 103 | decisive | 3fd4834834834835 | iac | FF554212 (U5) | FF554112 (U4) |
+| G4 | ds-x-mixed | 123 | decisive | 3fe2762762762762 | ibb | FF912E18 (V9) | FF912D19 (V8) |
+| G5 | ds-x-mixed | 128 | decisive | 3fe4834834834835 | iac | FFA0291A (V11) | FFA0281A (V10) |
+| G6 | ds-x-mixed | 117 | kept | 3fe0000000000000 | iii | FF7F3317 (U13) | same |
+| H2 | ds-z-mixed | 68 | decisive | 3f9f07c1f07c1f08 | iic | FF0F6D14 (T2) | FF106C14 (T3) |
+| H3 | ds-z-mixed | 86 | decisive | 3fd364d9364d9365 | iic | FF455B1A (U2) | FF465A1A (U3) |
+| H4 | ds-z-mixed | 102 | decisive | 3fe1745d1745d174 | bii | FF754A20 (U9) | FF764A20 (U10) |
+| H5 | ds-z-mixed | 104 | decisive | 3fe26c9b26c9b26d | aic | FF7B4920 (U11) | FF7C4820 (U12) |
+| H6 | ds-z-mixed | 92 | kept | 3fd9364d9364d936 | iic | FF58541C (U6) | same |
+| I2 | ds-z-stat | 70 | decisive | 3faf07c1f07c1f08 | iic | FF156B15 (T4) | FF166A15 (T5) |
+| I3 | ds-z-stat | 84 | decisive | 3fd1745d1745d174 | bii | FF3F5C1A (T12) | FF405C1A (T13) |
+| I4 | ds-z-stat | 106 | decisive | 3fe364d9364d9365 | iic | FF814721 (V3) | FF824621 (V5) |
+| I5 | ds-z-stat | 110 | decisive | 3fe5555555555555 | iic | FF8D4322 (V6) | FF8E4222 (V7) |
+| I6 | ds-z-stat | 0 | control | 0000000000000000 | lower | FFD02C2A (V13) | same |
+| I7 | ds-z-stat | 132 | control | 3ff0000000000000 | near-top | FFD02C2A (V13) | same |
+| J2 | nt-qp-210 | 426.99999999999994 | decisive | 3feffffffffffffe | near-top | FF15EF29 (M3) | FF14F028 (M2) |
+| J3 | nt-qp-210 | 426.9999999999996 | decisive | 3fefffffffffffef | near-top | FF15EF29 (M3) | FF14F028 (M2) |
+| J4 | nt-qp-210 | 426.9999999999966 | decisive | 3fefffffffffff6e | near-top | FF15EF29 (M3) | FF14F028 (M2) |
+| K2 | nt-pq-420 | 629.9999999999999 | decisive | 3feffffffffffffe | near-top | FFE51FF9 (S4) | FFE61EFA (S5) |
+| K3 | nt-pq-420 | 629.9999999999992 | decisive | 3fefffffffffffef | near-top | FFE51FF9 (S4) | FFE61EFA (S5) |
+| K4 | nt-pq-420 | 629.9999999999932 | decisive | 3fefffffffffff6e | near-top | FFE51FF9 (S4) | FFE61EFA (S5) |
+| L2 | nt-dd-1 | 0.9999999999999999 | kept | 3fefffffffffffff | near-top | FF1E3214 (T8) | same |
+| L3 | nt-dd-1 | 0.9999999999999998 | decisive | 3feffffffffffffe | near-top | FF1F3315 (T9) | FF1E3214 (T8) |
+| L4 | nt-dd-1 | 0.99999999999999 | decisive | 3fefffffffffffa6 | near-top | FF1F3315 (T9) | FF1E3214 (T8) |
+
+### 13.5 Rehearsal (Phase 1b task 4)
+
+`tests/xlsx-cf-scale-upper-segment-case.test.ts` (25 tests):
+
+- **The independent model is production.** Unregistered (with or without the evidence) production withholds the 78 upper-segment cells of the shapes (the 9 near-top probes included) and paints every other cell at the model's colour. With both ids at the same reading every upper-segment designated cell paints it; with the main id alone, or the near-top id at the other reading, the 9 near-top cells stay withheld; nothing else moves.
+- **Synthetic worlds:** each planted reading matches exactly itself, for both ids; a world at `index-position` with the near-top probes at truncation matches `index-position` (main) and `truncate` (near-top), so production keeps the near-top cells withheld; one near-top probe off both readings refuses only the near-top id; one decisive cell per group flipped to the other reading, or one kept cell drawn one step smaller, gives `formula-hypothesis-none`; a formatted control, a missing or wrong positive control, a blank twin and a moved endpoint control refuse.
+- **Audit gate** (real `verifyCfCase`, `auditStage2Manifest`): entry kept, unverified; entry removed and unregistered, `supported-structural`; matched reading registered for both ids, both verified and the only additions; the main id alone, verified with the near-top id `supported-structural`; the other reading registered, `supported-structural`. A "no match" plant is `formula-hypothesis-none`, and production keeps the withhold (207 cells, 78 justified withholds, 0 violations).
+- **Every committed Stage 2 capture** (`stage2Conformance`, 1490 cells):
+
+| Registration | Violations | Exact | Withheld (num-segment / upper whole) |
+|---|---|---|---|
+| none | 0 | 1191 | 299 (210 / 59) |
+| `index-position` | 0: all 298 Stage 2 census cells at Excel's fill, the 269 withheld today included | 1460 | 30 (0 / 0) |
+| `truncate` | **155**, exactly the census cells truncation misses (caught) | | |
+
+- **Stage 5:** 0 disagreeing under each registration; the only changed records are S4 and S5 of `stage5-cfvo-nonnumeric-v2` (the literal twin rule, f = 1/4 and 1/2), newly painted at Excel's fill; the formula-bounded E4 and E5 stay withheld.
+- **Each planted world:** the conformance pass and `compareCfCase` (interactive and paged) pass unregistered and under the world's own registration; the main id alone keeps the 9 near-top cells withheld and justified; the other reading is caught at the 48 decisive cells.
+- **Deviation (as §12.5):** the case is not in `STAGE2_MEASURED_CASES` before its capture; the same pass runs on a synthetic temp root.
+
+### 13.6 Run
+
+```sh
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-upper-segment.xlsx   # 2a7e195422995626104f8440fc0638056182cfeebedd237d58948081e4f5cdc8
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-upper-segment
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-upper-segment
+npx vitest run tests/xlsx-cf-scale-upper-segment-case.test.ts
+npx tsx scripts/cf-refs/audit.ts --stage 2
+```
+
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-upper-segment` (run twice, byte-identical; the manifest change is insertions only). The registration rule is §13.2.
+
+### 13.7 Run result (captured, 2ee3735a, Excel 16.115)
+
+- **The build:** repair-free on the first attempt; all 207 numeric cells and all 34 rules' cfvo bounds and colours bit-identical input vs saved (the near-top probes included).
+- **The capture is sound:** every pixel equals its DisplayFormat fill (207/207, minimum contrast 130); the 14 controls are white; the positive controls show FFF8696B and FF63BE7B; all 105 twins show their fills, the 3-colour endpoint twins included.
+- **The evidence:** Excel drew `index-position` at all 86 designated cells, in every group; the 48 decisive cells are off truncation, `truncate` matched none. The six mixed cells split their channels as predicted; the 26 kept cells drew truncation; the 8 decisive near-top probes drew one step below the maximum colour.
+- **Registered:** `index-position` for both ids, as §13.2 says: both `CF_STAGE2_NONDISCRIMINATING` entries removed, `CF_UPPER_SEGMENT_PRODUCTION_READINGS` and `CF_UPPER_NEAR_TOP_PRODUCTION_READINGS` set, published through the audit (353 verified capabilities). Details and reach: `docs/validation/xlsx-cf.md` §14.z.22.
+- **The census with the capture:** `npx tsx scripts/cf-refs/upper-segment-candidates.ts --all` covers 381 upper-segment interior cells; the same 7 survivors (one class) reproduce every one; truncation misses 203. Without `--all` it reproduces §13.1.

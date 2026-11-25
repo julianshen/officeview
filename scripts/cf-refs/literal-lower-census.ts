@@ -94,11 +94,13 @@ export function literalLowerCensus(collection: SegmentCollection): { rows: Liter
  * reproducing the numbers of recipe §12.1 as they were when the case was designed; the default includes it (recipe §12.7).
  */
 export const LITERAL_LOWER_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-literal-lower']
+/** Captures after this census's own follow-up, left out in every mode: the census is recorded as of a3f85309 (recipe §12.7). */
+export const LITERAL_LOWER_LATER_CASES: readonly string[] = ['stage2-scale-upper-segment']
 
 export async function literalLowerCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection } & ReturnType<typeof literalLowerCensus>> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)
   const all = await collectSegmentCells(m, rootDir, { include: 'all' })
-  const keep = (x: { caseId: string }): boolean => (opts.include ?? 'all') === 'all' || !LITERAL_LOWER_POST_CAPTURE_CASES.includes(x.caseId)
+  const keep = (x: { caseId: string }): boolean => !LITERAL_LOWER_LATER_CASES.includes(x.caseId) && ((opts.include ?? 'all') === 'all' || !LITERAL_LOWER_POST_CAPTURE_CASES.includes(x.caseId))
   const collection: SegmentCollection = { cells: all.cells.filter(keep), excluded: all.excluded.filter(keep), faults: all.faults }
   return { collection, ...literalLowerCensus(collection) }
 }

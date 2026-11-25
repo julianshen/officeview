@@ -10,7 +10,7 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, literalLowerPaints, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, literalLowerPaints, upperNearTopShapeAt, upperSegmentReadingPaints, upperSegmentReadingRegistered, upperWholeShapeAt } from './upper-whole-justify'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -70,7 +70,8 @@ type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { 
  * scale cell whose value lies strictly inside a segment bounded by two literal num cfvo (after the midpoint-above-max
  * re-sort), where f*2^20 is not an integer. Excel 16.115 drew T4 and V3 of stage2-scale-scope-disjoint one unit HIGHER per
  * RGB channel than production (the descending step one unit smaller in magnitude), by a rule not yet explained. The lower
- * segment narrows only once a literal-lower reading is registered with its evidence (`literalLowerPaints`).
+ * segment narrows only once a literal-lower reading is registered with its evidence (`literalLowerPaints`), the upper segment
+ * once an upper-segment reading is (`upperSegmentReadingRegistered`).
  */
 export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
@@ -89,8 +90,10 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
     const f = (value - lo) / (hi - lo)
     if (Number.isInteger(f * 1048576)) return false
     // The literal-lower follow-up: a registered literal-lower reading (with its evidence) paints the LOWER segment (colours 1 -> 2,
-    // positional), so it is justified no longer there; the upper segment always is.
-    return !(lower && literalLowerPaints(m.scale.colors[0]!, m.scale.colors[1]!, f))
+    // positional), so it is justified no longer there. The upper-segment follow-up: a registered upper-segment reading (with its
+    // evidence) paints the UPPER segment (literal bounds are never formula-resolved), so it is justified no longer there.
+    if (!lower) return !upperSegmentReadingPaints(upperSegmentReadingRegistered(), m.scale.colors[1]!, m.scale.colors[2]!)
+    return !literalLowerPaints(m.scale.colors[0]!, m.scale.colors[1]!, f)
   })
 }
 
@@ -102,7 +105,8 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
  * Stage 2 holds no formula bound: a formula bound justifies nothing here.
  */
 export function stage2UpperSegmentWholeProductShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
-  return markers.some(m => upperWholeShapeAt(m, ref, value, values))
+  // The near-top sub-shape (`upperNearTopShapeAt`, reason cf-unmeasured-upper-near-top) is counted with it.
+  return markers.some(m => upperWholeShapeAt(m, ref, value, values) || upperNearTopShapeAt(m, ref, value, values))
 }
 
 /**

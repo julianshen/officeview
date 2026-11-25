@@ -55,6 +55,10 @@ import { CF_GUARD_BOUNDARY_CAP, CF_GUARD_BOUNDARY_READINGS, injectCfGuardBoundar
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_RAW_FLOOR_ID
@@ -131,7 +135,7 @@ const EVIDENCE = ['2c-num', '2c-minmax', '2c-percent', '2c-percentile', '2c-inve
 describe('stage2-scale-raw-floor: the case', () => {
   it('is appended last; owns its three ids; the question is registered as raw-floor (its entry removed), the literal id and twin line stay recorded', async () => {
     // Appended last at its time; the literal-lower follow-up stage2-scale-literal-lower is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-upper-window', ID, 'stage2-scale-literal-lower'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-4)).toEqual(['stage2-scale-upper-window', ID, 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
     for (const id of [CAP, LIT, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
     for (const id of [LIT, TWIN]) expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
@@ -496,7 +500,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 // As recorded at ce3f701d: the cases measured then (stage2-scale-literal-lower, a3f85309, is rehearsed by its own case test).
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-literal-lower').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-literal-lower' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   // This capture's 67 evidence cells (the guard-boundary shape outside the literal num-segment withhold).

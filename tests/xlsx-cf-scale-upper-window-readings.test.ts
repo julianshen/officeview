@@ -24,6 +24,10 @@ import {
 import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 afterEach(() => injectCfUpperWindowReadings(null))
 

@@ -61,6 +61,10 @@ import { prepareCfTextScope } from '../src/xlsx/cf/text'
 import { interpolateScaleColor } from '../src/xlsx/cf/colorScale'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { XlsxSheet } from '../src/xlsx/types'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_SCOPE_DISJOINT_ID
@@ -224,7 +228,7 @@ describe('the capture (e448d831): union, and production against Excel', () => {
 describe('stage2-scale-scope-disjoint: the case', () => {
   it('is appended after the earlier cases and owns scale:scope-disjoint; the old case keeps its marker and capture as a cross-check', () => {
     // Appended last at its time; the num-segment follow-up (stage2-scale-num-segment) is appended after it.
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-6)).toEqual([ID, 'stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower'])
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-7)).toEqual([ID, 'stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment'])
     expect(CF_STAGE2_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === CAP).map(e => e.caseId)).toEqual([ID])
     expect(capabilityOwnerCase(CAP, manifest)!.id).toBe(ID)
@@ -478,8 +482,9 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
   it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // The num-segment follow-up registered nothing (its capture matched no reading); the raw-floor follow-up registered its
-    // question (ce3f701d), and the literal-lower follow-up its question (a3f85309).
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor', 'scale:num-segment-literal-lower'])
+    // question (ce3f701d), the literal-lower follow-up its question (a3f85309), and the upper-segment follow-up its two
+    // questions (2ee3735a).
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor', 'scale:num-segment-literal-lower', 'scale:upper-segment', 'scale:upper-segment-near-top'])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

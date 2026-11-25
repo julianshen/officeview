@@ -725,16 +725,128 @@ export function literalLowerStepColour(argb0: number, argb1: number, fraction: n
 }
 
 /**
+ * The upper-segment follow-up (brief cf-upper-segment, Phase 1b): the readings of an interior cell of a 3-colour UPPER segment
+ * that production withholds today: the literal num-segment shape (`numSegmentUnmeasured` in segment 1) and the `integer` and
+ * `window` classes of `upperSegmentProductClass`. Readings:
+ * - `index-position`: Excel's position on the whole scale as a double, the segment index plus the fraction (t = 1 + f), the
+ *   local fraction recovered as l = t − 1 (f rounded to the 2^-52 grid, ties to even), then per ARGB channel the step
+ *   floor(l·|d|) from the segment's start colour (`upperSegmentPositionColour`). It is the only survivor class of the search
+ *   over all 302 captured upper-segment interior cells (scripts/cf-refs/upper-segment-candidates.ts; with i = 0 it is the
+ *   registered lower-segment raw floor);
+ * - `truncate`: production's guarded truncation (`interpolateScaleColor`), the control.
+ * Pre-registered by stage2-scale-upper-segment. A segment bounded by a formula-resolved cfvo stays withheld under every reading,
+ * and `index-position` applies only when both segment colours are opaque (alpha FF; the search held alpha constant and every
+ * capture is opaque): another alpha stays withheld.
+ */
+export const CF_UPPER_SEGMENT_READINGS = ['index-position', 'truncate'] as const
+export type CfUpperSegmentReading = (typeof CF_UPPER_SEGMENT_READINGS)[number]
+/** The capability an upper-segment reading is registered under (stage2-scale-upper-segment). */
+export const CF_UPPER_SEGMENT_CAP = 'scale:upper-segment'
+/**
+ * The reading production implements per id: `index-position` for scale:upper-segment, matched by the capture of
+ * stage2-scale-upper-segment (Excel 16.115, 2ee3735a) at every designated cell of its nine main groups (40 decisive, 25
+ * kept, 5 clear, the mixed cells included). With its evidence, production paints the upper-segment cells withheld before
+ * (the literal num-segment shape in segment 1, the integer and window classes) at index-position, under sRGB / truncate,
+ * opaque endpoints and no formula-resolved bound; without it they stay withheld. The audit's CF_STAGE2_PRODUCTION_READINGS
+ * spreads this table.
+ */
+export const CF_UPPER_SEGMENT_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({ [CF_UPPER_SEGMENT_CAP]: 'index-position' })
+let proposedUpperSegmentReadings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfUpperSegmentReadings(readings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null): void {
+  proposedUpperSegmentReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The upper-segment reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfUpperSegmentReading(capability: string = CF_UPPER_SEGMENT_CAP): CfUpperSegmentReading | undefined {
+  const r = proposedUpperSegmentReadings && Object.prototype.hasOwnProperty.call(proposedUpperSegmentReadings, capability) ? proposedUpperSegmentReadings[capability] : CF_UPPER_SEGMENT_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_UPPER_SEGMENT_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/**
+ * `index-position`'s colour between `argb0` (at f = 0) and `argb1`: l = (1 + f) − 1 with f clamped to [0, 1] (two IEEE
+ * operations), then per ARGB channel the start colour moved toward the end colour by floor(l·|c1 − c0|). Undefined (the
+ * caller withholds) on any non-finite intermediate.
+ */
+export function upperSegmentPositionColour(argb0: number, argb1: number, fraction: number): number | undefined {
+  if (!Number.isFinite(fraction)) return undefined
+  const t = 1 + Math.max(0, Math.min(1, fraction))
+  const l = t - 1
+  if (!Number.isFinite(l)) return undefined
+  let out = 0
+  for (const shift of [24, 16, 8, 0]) {
+    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
+    const k = Math.floor(l * Math.abs(c1 - c0))
+    if (!Number.isFinite(k)) return undefined
+    out |= (c1 >= c0 ? c0 + k : c0 - k) << shift
+  }
+  return out >>> 0
+}
+
+/**
+ * The near-top sub-shape (orchestrator ruling before the capture of stage2-scale-upper-segment): an interior cell of a 3-colour
+ * UPPER segment where some RGB channel with d = |c1 − c0| != 0 has p = f·d within CF_TRUNCATION_GUARD below the full span
+ * (d − p <= 1e-11, the value within about 1e-13 of the maximum). Guarded truncation paints d there (the maximum's colour),
+ * `index-position` one step less; no capture holds such a cell. Withheld (`cf-unmeasured-upper-near-top`) unless the near-top
+ * id is registered with the SAME reading as `scale:upper-segment`, both with their evidence (pre-committed narrowing: the
+ * upper-segment reading can be registered with this sub-shape still withheld).
+ */
+export function upperSegmentNearTop(c0: number, c1: number, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  if (!(value > tLo && value < tHi)) return false
+  for (const shift of [16, 8, 0]) {
+    const d = Math.abs(((c1 >>> shift) & 0xff) - ((c0 >>> shift) & 0xff))
+    if (d !== 0 && d - fraction * d <= CF_TRUNCATION_GUARD) return true
+  }
+  return false
+}
+/** The capability the near-top sub-shape's reading is registered under (stage2-scale-upper-segment, its own configuration). */
+export const CF_UPPER_NEAR_TOP_CAP = 'scale:upper-segment-near-top'
+/**
+ * The near-top reading production implements: `index-position`, matched by the capture of stage2-scale-upper-segment (2ee3735a)
+ * at all 8 decisive near-top probes and the kept one, the same reading as scale:upper-segment.
+ */
+export const CF_UPPER_NEAR_TOP_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfUpperSegmentReading>>> = Object.freeze({ [CF_UPPER_NEAR_TOP_CAP]: 'index-position' })
+let proposedUpperNearTopReadings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null = null
+/** Test seam: rehearse a proposed near-top registration as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfUpperNearTopReadings(readings: Readonly<Partial<Record<string, CfUpperSegmentReading>>> | null): void {
+  proposedUpperNearTopReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The near-top reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfUpperNearTopReading(capability: string = CF_UPPER_NEAR_TOP_CAP): CfUpperSegmentReading | undefined {
+  const r = proposedUpperNearTopReadings && Object.prototype.hasOwnProperty.call(proposedUpperNearTopReadings, capability) ? proposedUpperNearTopReadings[capability] : CF_UPPER_NEAR_TOP_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_UPPER_SEGMENT_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+/** The colour of the registered upper-segment reading, if any (with its evidence, sRGB / truncate, no formula-resolved bound). */
+function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, nearTop = false): number | undefined {
+  if (seg.segment !== 1 || colorSpace !== 'sRGB' || rounding !== 'truncate' || formulaResolvedBound(lo) || formulaResolvedBound(hi)) return undefined
+  const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
+  if (r === undefined || !checkEvidence(CF_UPPER_SEGMENT_CAP)) return undefined
+  // The near-top sub-shape: only with its own registration, the same reading, and its evidence.
+  if (nearTop && (cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) !== r || !checkEvidence(CF_UPPER_NEAR_TOP_CAP))) return undefined
+  // Codex pre-capture review (fail closed): the search held alpha constant and every capture is opaque, so index-position
+  // applies only between two opaque endpoint colours; any other alpha keeps the cell withheld.
+  if (r === 'index-position' && (((seg.c0 >>> 24) & 0xff) !== 0xff || ((seg.c1 >>> 24) & 0xff) !== 0xff)) return undefined
+  return r === 'index-position' ? upperSegmentPositionColour(seg.c0, seg.c1, seg.fraction) : interpolateScaleColor(seg.c0, seg.c1, seg.fraction, colorSpace, rounding)
+}
+
+/**
  * A 3-colour segment's outcome: the literal-num shape is withheld where `numSegmentUnmeasured`, except a LOWER-segment cell
  * when a literal-lower reading is registered with its evidence under the default sRGB / truncate variants (`lower-arithmetic`
  * paints it as a non-literal lower segment, `guardedInterpolation`; `step-plus-one` paints `literalLowerStepColour`, else
  * withheld); an upper-segment cell in the `integer` class is withheld; one in the `window` class follows the window reading
  * when it is registered with its evidence, the segment is not bounded by two literal num cfvo and the default sRGB / truncate
  * variants hold, else is withheld; a lower-segment cell in the guard-boundary shape is withheld (`guardBoundaryProduct`)
- * unless its reading is registered; every other cell is production's interpolation.
+ * unless its reading is registered; every other cell is production's interpolation. An upper-segment reading registered with
+ * its evidence (sRGB / truncate, no formula-resolved bound) paints every upper-segment cell of those withheld shapes first
+ * (`upperSegmentReadingColour`).
  */
 function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
   const literal = literalNumBound(lo) && literalNumBound(hi)
+  // The near-top sub-shape (before every other upper-segment rule): withheld unless its own registration matches.
+  if (seg.segment === 1 && upperSegmentNearTop(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction)) {
+    const upper = upperSegmentReadingColour(lo, hi, seg, checkEvidence, colorSpace, rounding, true)
+    return upper !== undefined ? { kind: 'ready', value: upper } : { kind: 'unresolved', reason: 'cf-unmeasured-upper-near-top' }
+  }
   if (literal && numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) {
     const r = seg.segment === 0 && colorSpace === 'sRGB' && rounding === 'truncate' ? cfLiteralLowerReading(CF_LITERAL_LOWER_CAP) : undefined
     if (r !== undefined && checkEvidence(CF_LITERAL_LOWER_CAP)) {
@@ -742,9 +854,18 @@ function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegm
       const argb = literalLowerStepColour(seg.c0, seg.c1, seg.fraction)
       if (argb !== undefined) return { kind: 'ready', value: argb }
     }
+    // The upper-segment follow-up: a registered upper-segment reading (with its evidence) paints the upper segment of the shape.
+    const upper = upperSegmentReadingColour(lo, hi, seg, checkEvidence, colorSpace, rounding)
+    if (upper !== undefined) return { kind: 'ready', value: upper }
     return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
   }
   const cls = seg.segment === 1 ? upperSegmentProductClass(seg.c0, seg.c1, seg.value, seg.lo, seg.hi, seg.fraction) : undefined
+  // The upper-segment follow-up: a registered upper-segment reading (with its evidence) decides the integer and window classes,
+  // before the window reading.
+  if (cls !== undefined) {
+    const upper = upperSegmentReadingColour(lo, hi, seg, checkEvidence, colorSpace, rounding)
+    if (upper !== undefined) return { kind: 'ready', value: upper }
+  }
   if (cls === 'window' && !literal && colorSpace === 'sRGB' && rounding === 'truncate') {
     const r = cfUpperWindowReading(CF_UPPER_WINDOW_CAP)
     const argb = r !== undefined && checkEvidence(CF_UPPER_WINDOW_CAP) ? upperWindowReadingColor(r, seg.c0, seg.c1, seg.fraction) : undefined

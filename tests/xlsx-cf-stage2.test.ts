@@ -103,9 +103,11 @@ describe('every enabled scale capability has verified evidence', () => {
     // (the question registered until its capture, the literal twins and the twin line), plus stage2-scale-raw-floor's
     // literal-num lower segment and twin line. Its question, scale:guard-boundary-raw-floor, matched raw-floor (ce3f701d)
     // and is verified: 36 verified. Plus stage2-scale-literal-lower's twins; its question, scale:num-segment-literal-lower,
-    // matched lower-arithmetic (a3f85309) and is verified: 37 verified.
-    expect(report.summary.verifiedCapabilities).toBe(37)
-    expect(report.summary.unverifiedCapabilities).toBe(21)
+    // matched lower-arithmetic (a3f85309) and is verified: 37 verified. Plus stage2-scale-upper-segment's twins; its two
+    // questions, scale:upper-segment and scale:upper-segment-near-top, matched index-position (2ee3735a) and are verified:
+    // 39 verified.
+    expect(report.summary.verifiedCapabilities).toBe(39)
+    expect(report.summary.unverifiedCapabilities).toBe(22)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 
@@ -115,9 +117,11 @@ describe('every enabled scale capability has verified evidence', () => {
     const auditVerified = new Set(
       report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
     )
-    expect(auditVerified.size).toBe(37)
+    expect(auditVerified.size).toBe(39)
     expect(auditVerified.has('scale:guard-boundary-raw-floor')).toBe(true)
     expect(auditVerified.has('scale:num-segment-literal-lower')).toBe(true)
+    expect(auditVerified.has('scale:upper-segment')).toBe(true)
+    expect(auditVerified.has('scale:upper-segment-near-top')).toBe(true)
     for (const cap of auditVerified) {
       expect(VERIFIED_CAPABILITIES.has(cap), `VERIFIED_CAPABILITIES must contain ${cap}`).toBe(true)
     }

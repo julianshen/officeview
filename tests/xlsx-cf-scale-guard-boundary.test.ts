@@ -30,6 +30,10 @@ import { stage2GuardBoundaryShape, stage2NumSegmentShape, stage2UpperSegmentWhol
 import { caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
 import { independentGuardBoundary, JUSTIFY_TRUNCATION_GUARD } from '../scripts/cf-refs/upper-whole-justify'
 import type { XlsxSheet } from '../src/xlsx/types'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const HEAVY = 300_000

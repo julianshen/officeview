@@ -191,6 +191,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-upper-window',
     'stage2-scale-raw-floor',
     'stage2-scale-literal-lower',
+    'stage2-scale-upper-segment',
   ]
 
 
@@ -418,9 +419,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const expectedFormulaCells = measured5.flatMap(c => c.expected.cells.filter(exp => stage5FormulaCovered(c, exp.ref))).length
     const expectedOtherCells = measured5.flatMap(c => c.expected.cells.filter(exp => !stage5FormulaCovered(c, exp.ref))).length
     expect(measured5.length).toBeGreaterThan(10)
-    // + the 2 literal cells withheld as the upper-segment whole-product shape (stage5-cfvo-nonnumeric-v2 S4, S5).
-    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells + 2)
-    expect(stage5Compared).toBe(expectedOtherCells - 2)
+    // The 2 literal cells stage5-cfvo-nonnumeric-v2 S4, S5 were withheld as the upper-segment whole-product shape until the
+    // upper-segment registration (2ee3735a), which paints them at Excel's fill: every other cell is compared again.
+    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells)
+    expect(stage5Compared).toBe(expectedOtherCells)
     expect(stage5Compared).toBeGreaterThan(100)
     // Non-vacuous both ways: production paints formula cells Excel's way, and still withholds the unmeasured ones.
     expect(stage5FormulaCompared).toBeGreaterThan(100)
@@ -610,10 +612,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // + the 134 scale cells (93 designated, 41 twin line) of stage2-scale-upper-window (recipe-pending; its saved file is the input).
     // + the 186 scale cells (114 designated, 72 twin line) of stage2-scale-raw-floor (measured, ce3f701d, Excel 16.115).
     // + the 168 scale cells (82 designated, 86 twins) of stage2-scale-literal-lower (recipe-pending; its saved file is the input).
-    expect(checkedCount).toBe(1138)
+    // + the 191 scale cells (86 designated, 105 twins) of stage2-scale-upper-segment (recipe-pending; its saved file is the input).
+    expect(checkedCount).toBe(1329)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 14 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 15 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
     const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
     expect(r.violations).toEqual([])
@@ -621,8 +624,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831) + the 281 of stage2-scale-num-segment
     // + the 195 of stage2-scale-upper-whole (54fc3388).
     // + the 147 of stage2-scale-upper-window (ed0fccb6) + the 201 of stage2-scale-raw-floor (ce3f701d)
-    // + the 180 of stage2-scale-literal-lower (a3f85309).
-    expect(r.total).toBe(1490)
+    // + the 180 of stage2-scale-literal-lower (a3f85309) + the 207 of stage2-scale-upper-segment (2ee3735a).
+    expect(r.total).toBe(1697)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 11 twins withheld by the num-segment finding (T4 and V3 among them).
     // stage2-scale-num-segment: 96 literal cells withheld by the num-segment finding, 13 by the upper-segment whole-product
@@ -642,9 +645,12 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // the num-segment shape now paints exactly: 6 of stage2-scale-scope-disjoint, 48 of stage2-scale-num-segment, 6 of
     // stage2-scale-upper-whole, 4 of stage2-scale-raw-floor (F6..F9) and this capture's 50; its 16 upper probes stay
     // withheld by the num-segment finding; 164 exact (10 of them unformatted).
-    expect([r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([210, 59, 0])
-    expect(r.exact).toBe(364 + (77 + 6) - 6 + (172 + 48) + (73 + 6) + (77 + 14) + (188 + 4) + 164 + r.stubCompared)
-    expect(r.withheld).toBe(34 + (11 - 6) + 6 + (109 - 48) + (122 - 6) + (70 - 14) + (13 - 4) + 16 - r.stubCompared)
+    // stage2-scale-upper-segment (index-position matched for both questions and registered, §14.z.22): every upper-segment
+    // cell of the num-segment, whole-product and near-top shapes now paints exactly: 269 of the earlier captures (the 210
+    // num-segment and 59 whole-product withholds) and all 207 cells of this capture; nothing of the shapes stays withheld.
+    expect([r.numSegmentWithheld, r.upperWholeWithheld, r.guardBoundaryWithheld]).toEqual([0, 0, 0])
+    expect(r.exact).toBe(364 + (77 + 6) - 6 + (172 + 48) + (73 + 6) + (77 + 14) + (188 + 4) + 164 + 269 + 207 + r.stubCompared)
+    expect(r.withheld).toBe(34 + (11 - 6) + 6 + (109 - 48) + (122 - 6) + (70 - 14) + (13 - 4) + 16 - 269 - r.stubCompared)
     expect(r.exact + r.withheld).toBe(r.total)
   })
 

@@ -54,6 +54,10 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { CF_LITERAL_LOWER_CAP, CF_LITERAL_LOWER_READINGS, injectCfLiteralLowerReadings, safeFraction } from '../src/xlsx/cf/colorScale'
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_LITERAL_LOWER_ID
@@ -132,8 +136,8 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 
 describe('stage2-scale-literal-lower: the case', () => {
   it('is appended last; owns its two ids; the question is registered as lower-arithmetic (its entry removed), the twins stay recorded', async () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-raw-floor', ID])
+    // Appended last at its time; the upper-segment follow-up is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-raw-floor', ID, 'stage2-scale-upper-segment'])
     for (const id of [CAP, TWIN]) expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
     expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
     expect(CF_STAGE2_NONDISCRIMINATING[TWIN]).toMatch(/./)
@@ -480,7 +484,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   }, HEAVY)
 })
 
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-upper-segment').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('without the evidence (as before the registration): no violation over the measured Stage 2 cases, this capture included; the literal lower-segment cells of the shape withheld', async () => {

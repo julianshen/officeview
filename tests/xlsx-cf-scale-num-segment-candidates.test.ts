@@ -15,6 +15,10 @@ import { S2_NUM_SEGMENT_READINGS } from '../scripts/cf-refs/cases'
 import { injectCfScaleSegmentProbe, interpolateScaleColor, scaleColorAt, type CfScaleSegment } from '../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import type { CfManifest } from '../scripts/cf-refs/cases'
+import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
+recordedBeforeUpperSegmentRegistration()
 
 const REPO_ROOT = resolve(__dirname, '..')
 const HEAVY = 300_000
