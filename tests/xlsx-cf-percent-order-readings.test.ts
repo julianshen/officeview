@@ -6,7 +6,8 @@
  * formula-bounds lift under each order. Unregistered, production is unchanged (`lerp-first` everywhere); data bars never
  * take an order. This checks production, not Excel.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_FORMULA_BOUNDS_V2_CAP,
   CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS,
@@ -29,6 +30,7 @@ import {
   resolveScaleThresholds,
   scaleColorAt,
   type CfFormulaBoundsV2Reading,
+  type CfPercentOrderReading,
 } from '../src/xlsx/cf/colorScale'
 import { resolveBarThresholds } from '../src/xlsx/cf/dataBar'
 import { resolveIconThresholds } from '../src/xlsx/cf/iconSet'
@@ -38,7 +40,12 @@ import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evide
 import { formulaBoundsReadingRegistered, guardBoundaryShapeAt, justifyPercent, justifyPercentileRanked, justifyPercentOrder, percentOrderShapeAt } from '../scripts/cf-refs/upper-whole-justify'
 import { surveyPercent, surveyPercentile } from '../scripts/cf-refs/percent-order-survey'
 
-afterEach(() => { injectCfPercentOrderReadings(null); injectCfPercentOrderNarrowings(null); injectCfFormulaBoundsV2Readings(null) })
+// The pre-capture property tests run on the unregistered tables (as of the capture ecf00906); the registration is pinned below.
+/** A proposed registration on top of the unregistered tables (the other ids stay lerp-first). */
+const injectAsOf = (r: Readonly<Partial<Record<string, CfPercentOrderReading>>>): void => injectCfPercentOrderReadings({ ...Object.fromEntries(CF_PERCENT_ORDER_CAPS.map(id => [id, 'lerp-first' as const])), ...r })
+beforeAll(asBeforePercentOrder)
+afterEach(() => { asBeforePercentOrder(); injectCfPercentOrderNarrowings(null) })
+afterAll(asRegistered)
 
 const all = (cap: string): boolean => cap.length > 0
 const without = (id: string) => (cap: string): boolean => cap !== id
@@ -61,7 +68,8 @@ const num = (value: number, argb: number): CfScalePoint => ({ bound: { type: 'nu
 const thresholdsOf = (o: ReturnType<typeof resolveScaleThresholds>): readonly number[] | string => (o.kind === 'ready' ? o.value : o.kind === 'unresolved' ? o.reason : o.kind)
 const scaleOrders = () => cfScalePercentOrders(all)
 /** The justifications read the published evidence: run them with the given ids held too. */
-const holding = <T>(ids: readonly string[], fn: () => T): T => withExactCfEvidence([...VERIFIED_CAPABILITIES, ...ids], fn)
+/** The justifications read the published evidence: run them with the as-of evidence (the percent-order ids not held) plus `ids`. */
+const holding = <T>(ids: readonly string[], fn: () => T): T => withExactCfEvidence([...[...VERIFIED_CAPABILITIES].filter(id => !HELD.includes(id)), ...ids], fn)
 const HELD = [CF_FORMULA_BOUNDS_V2_CAP, ...CF_PERCENT_ORDER_CAPS]
 
 /** E2:E10 of stage2-scale-formula-bounds: p = 33.333333333333336 over 0..300; percentile 20 over stage5-cfvo-formulas G. */
@@ -97,16 +105,17 @@ describe('the two orders and the narrowing', () => {
     expect(orderedThreshold('withhold-differing', () => undefined)).toBeUndefined()
   })
 
-  it('unregistered: every id is lerp-first, the tables are empty, nothing is narrowed', () => {
-    expect(CF_PERCENT_ORDER_PRODUCTION_READINGS).toEqual({})
+  it('the tables hold the registered readings; on the unregistered tables every id is lerp-first; nothing is narrowed', () => {
+    // Registered from the captures (ecf00906, §14.z.24); the tests here run on the unregistered tables (the seam above).
+    expect(CF_PERCENT_ORDER_PRODUCTION_READINGS).toEqual({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENTILE_ORDER_CAP]: 'lerp-first', [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first', [CF_ICON_PERCENTILE_ORDER_CAP]: 'lerp-first' })
     expect(CF_PERCENT_ORDER_NARROWINGS).toEqual([])
-    expect(CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS).toEqual({})
+    expect(CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS).toEqual({ [CF_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' })
     for (const id of CF_PERCENT_ORDER_CAPS) expect(cfPercentOrder(id, all)).toBe('lerp-first')
     for (const id of CF_PERCENT_ORDER_CAPS) expect(justifyPercentOrder(id)).toBe('lerp-first')
   })
 
   it('a reading applies only with its evidence; the narrowing applies whatever the evidence', () => {
-    injectCfPercentOrderReadings({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(cfPercentOrder(CF_SCALE_PERCENT_ORDER_CAP, all)).toBe('multiply-first')
     expect(cfPercentOrder(CF_SCALE_PERCENT_ORDER_CAP, without(CF_SCALE_PERCENT_ORDER_CAP))).toBe('lerp-first')
     // Each id is its own: percentile and the icon ids stay lerp-first.
@@ -148,7 +157,7 @@ describe('colour scales', () => {
     }
     expect(at()).toBe('FF28DC3C')
     expect(at(scaleOrders())).toBe('FF28DC3C')
-    injectCfPercentOrderReadings({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(at(scaleOrders())).toBe('FF29DB3D')
   })
 })
@@ -162,10 +171,10 @@ describe('icon sets', () => {
   const scope = statsOf([10, 20, 30, 80, 90, 100])
   it('percent: lerp-first by default; multiply-first with its registration and evidence; the narrowing withholds', () => {
     expect(icons(def('percent'), scope)).toEqual([10, 39.7, 70.30000000000001])
-    injectCfPercentOrderReadings({ [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(icons(def('percent'), scope)).toEqual([10, 39.7, 70.3])
     expect(icons(def('percent'), scope, without(CF_ICON_PERCENT_ORDER_CAP))).toEqual([10, 39.7, 70.30000000000001])
-    injectCfPercentOrderReadings(null)
+    asBeforePercentOrder()
     injectCfPercentOrderNarrowings([CF_ICON_PERCENT_ORDER_CAP])
     expect(icons(def('percent'), scope)).toBe('cf-unmeasured-percent-order')
     expect(icons(def('percentile'), statsOf([10, 20, 30, 40, 50, 60, 70]))).not.toBe('cf-unmeasured-percent-order')
@@ -175,9 +184,9 @@ describe('icon sets', () => {
     const d: IconDef = { ...def('percentile'), thresholds: [th('percentile', 0), th('percentile', 20), th('percentile', 67)] }
     const base = icons(d, g)
     expect(base).toEqual([5, 21.000000000000007, percentileOrderStatistic(G, 67, 'inc')])
-    injectCfPercentOrderReadings({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENTILE_ORDER_CAP]: 'multiply-first', [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENTILE_ORDER_CAP]: 'multiply-first', [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(icons(d, g)).toEqual(base)
-    injectCfPercentOrderReadings({ [CF_ICON_PERCENTILE_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_ICON_PERCENTILE_ORDER_CAP]: 'multiply-first' })
     expect(icons(d, g)).toEqual([5, 21, percentileOrderStatistic(G, 67, 'inc', 'multiply-first')])
   })
 })
@@ -193,9 +202,9 @@ describe('data bars take no order', () => {
     const run = (): string => JSON.stringify([bar(33.333333333333336, 80), bar(20, 90), bar(67, 99)].map(b => resolveBarThresholds(b, s, { hasEvidence: all })))
     const before = run()
     expect(before).toContain('100.00000000000001')
-    injectCfPercentOrderReadings(Object.fromEntries(CF_PERCENT_ORDER_CAPS.map(id => [id, 'multiply-first'])))
+    injectAsOf(Object.fromEntries(CF_PERCENT_ORDER_CAPS.map(id => [id, 'multiply-first'])))
     expect(run()).toBe(before)
-    injectCfPercentOrderReadings(null)
+    asBeforePercentOrder()
     injectCfPercentOrderNarrowings([...CF_PERCENT_ORDER_CAPS])
     expect(run()).toBe(before)
   })
@@ -216,11 +225,11 @@ describe('scale:formula-bounds-v2', () => {
     register('as-literal+lerp-first')
     expect(at(seg, [0, 0.30000000000000004], 0.01)).toBe(literal)
     expect(holding(HELD, formulaBoundsReadingRegistered)).toBe('as-literal')
-    expect(formulaBoundsReadingRegistered()).toBeUndefined()
+    expect(holding([], formulaBoundsReadingRegistered)).toBeUndefined()
     register('as-literal+multiply-first')
     expect(at(seg, [0, 0.30000000000000004], 0.01)).toBe('cf-unmeasured-guard-boundary')
     expect(holding(HELD, formulaBoundsReadingRegistered)).toBeUndefined()
-    injectCfPercentOrderReadings({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(at(seg, [0, 0.30000000000000004], 0.01)).toBe(literal)
     expect(holding(HELD, formulaBoundsReadingRegistered)).toBe('as-literal')
     // Without the percent-order evidence the order is lerp-first, so a multiply-first v2 reading lifts nothing.
@@ -248,10 +257,10 @@ describe('scale:formula-bounds-v2', () => {
     expect(shape()).toBe(true)
     register('as-literal+lerp-first')
     expect(shape()).toBe(false)
-    expect(guardBoundaryShapeAt(marker, 'A2', 0.01, values, z)).toBe(true)
+    expect(holding([], () => guardBoundaryShapeAt(marker, 'A2', 0.01, values, z))).toBe(true)
     register('as-literal+multiply-first')
     expect(shape()).toBe(true)
-    injectCfPercentOrderReadings({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
+    injectAsOf({ [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' })
     expect(shape()).toBe(false)
   })
 })

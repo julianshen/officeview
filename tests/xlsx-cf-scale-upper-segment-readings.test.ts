@@ -13,7 +13,8 @@
  * lower segment and 2-colour scales are untouched under every reading. The justifications (`upperWholeShapeAt`,
  * `stage2NumSegmentShape`) narrow only with the registration plus its evidence. This checks production, not Excel.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_UPPER_NEAR_TOP_CAP,
   CF_UPPER_NEAR_TOP_PRODUCTION_READINGS,
@@ -36,6 +37,11 @@ import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { upperNearTopShapeAt, upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
 import { stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
 import { unregisterUpperSegment } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 afterEach(() => { injectCfUpperSegmentReadings(null); injectCfUpperNearTopReadings(null); injectCfUpperWindowReadings(null) })
 

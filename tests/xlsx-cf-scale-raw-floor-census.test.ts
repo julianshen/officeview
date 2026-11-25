@@ -7,10 +7,16 @@
  * as run before stage2-scale-raw-floor was captured is pinned first (recipe §11.1); with that capture (ce3f701d) included it
  * is pinned at the end (recipe §11.7): still exact.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { channelTable, censusTable, productClass, rawFloorCensusOf, type CensusRow } from '../scripts/cf-refs/raw-floor-census'
 import { s2RawFloorCells } from '../scripts/cf-refs/cases'
 import type { SegmentCollection } from '../scripts/cf-refs/num-segment-candidates'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let census: Awaited<ReturnType<typeof rawFloorCensusOf>>

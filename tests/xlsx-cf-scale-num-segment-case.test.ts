@@ -12,7 +12,8 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
@@ -40,6 +41,11 @@ import { numSegmentCandidate } from '../scripts/cf-refs/num-segment-formulas'
 import { VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()
@@ -273,7 +279,8 @@ describe('the capture (Excel 16.115): no reading matches; production withholds o
     const { auditStage2Manifest, CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // scale:scope-disjoint (union) and, since stage2-scale-raw-floor (ce3f701d), the guard-boundary question (raw-floor).
     // Since stage2-scale-upper-segment (2ee3735a), also its two questions (index-position).
-    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor', 'scale:num-segment-literal-lower': 'lower-arithmetic', 'scale:upper-segment': 'index-position', 'scale:upper-segment-near-top': 'index-position' })
+    // Since stage2-scale-percent-order (ecf00906), also its three questions.
+    expect(CF_STAGE2_PRODUCTION_READINGS).toEqual({ 'scale:scope-disjoint': 'union', 'scale:guard-boundary-raw-floor': 'raw-floor', 'scale:num-segment-literal-lower': 'lower-arithmetic', 'scale:upper-segment': 'index-position', 'scale:upper-segment-near-top': 'index-position', 'scale:percent-order': 'multiply-first', 'scale:percentile-order': 'lerp-first', 'scale:formula-bounds-v2': 'as-literal+multiply-first' })
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
     for (const id of [CAP, STAT, S2_NUM_SEGMENT_TWO_COLOUR, S2_NUM_SEGMENT_TWIN]) expect(r.perCapability.find(p => p.capabilityId === id)!.disposition, id).toBe('unverified-nondiscriminating')

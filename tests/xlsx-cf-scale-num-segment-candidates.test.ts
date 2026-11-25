@@ -7,7 +7,8 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { BASELINE_ID, CANDIDATES, collectSegmentCells, computeNumSegmentClasses, consensusDomain, consensusWithheldShare, evaluateCandidates, SWEEP_N, type SegmentCollection } from '../scripts/cf-refs/num-segment-candidates'
 import { CF_NUM_SEGMENT_CLASSES } from '../scripts/cf-refs/num-segment-classes'
 import { numSegmentCandidate, numSegmentCandidates } from '../scripts/cf-refs/num-segment-formulas'
@@ -16,6 +17,11 @@ import { injectCfScaleSegmentProbe, interpolateScaleColor, scaleColorAt, type Cf
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()

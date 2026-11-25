@@ -21,7 +21,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createCanvas } from 'canvas'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
@@ -55,6 +56,11 @@ import { CF_LITERAL_LOWER_CAP, CF_LITERAL_LOWER_READINGS, injectCfLiteralLowerRe
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()
@@ -484,7 +490,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   }, HEAVY)
 })
 
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-upper-segment' && x.id !== 'stage2-scale-formula-bounds').map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== 'stage2-scale-upper-segment' && x.id !== 'stage2-scale-formula-bounds' && x.id !== 'stage2-scale-percent-order').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('without the evidence (as before the registration): no violation over the measured Stage 2 cases, this capture included; the literal lower-segment cells of the shape withheld', async () => {
@@ -548,11 +554,13 @@ describe('the rehearsal: each registration against every committed capture, and 
 
   it('Stage 5: every measured case agrees with Excel, records unchanged, under each registration (no Stage 5 cell is a literal-num lower-segment cell)', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const base = await stage5CaseRecords(manifest, REPO_ROOT)
+    // As of its capture: the later stage5-icon-percent-order capture (ecf00906) is left out of the records.
+    const stage5CaseRecordsAsOf = async (...a: Parameters<typeof stage5CaseRecords>) => (await stage5CaseRecords(...a)).filter(r => r.caseId !== 'stage5-icon-percent-order')
+    const base = await stage5CaseRecordsAsOf(manifest, REPO_ROOT)
     expect(base.filter(r => r.compared && !r.agrees)).toEqual([])
     const key = (rows: typeof base) => rows.map(r => `${r.caseId}:${r.ref}:${r.agrees}:${JSON.stringify(r.production)}`).join('\n')
     for (const reading of S2_LITERAL_LOWER_READINGS) {
-      const rows = await withRegistration(reading, () => stage5CaseRecords(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || id === CAP }))
+      const rows = await withRegistration(reading, () => stage5CaseRecordsAsOf(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || id === CAP }))
       expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`), reading).toEqual([])
       expect(key(rows) === key(base), `${reading}: Stage 5 records unchanged`).toBe(true)
     }

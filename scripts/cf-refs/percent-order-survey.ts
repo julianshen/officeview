@@ -34,6 +34,9 @@ import { isCellInSqref } from './verify'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const hex = (n: number): string => (n >>> 0).toString(16).toUpperCase().padStart(8, '0')
 
+/** The captures the survey was run before (ecf00906): left out, so the survey stays as run (recipe §15.1). */
+export const PERCENT_ORDER_SURVEY_LATER_CASES: readonly string[] = ['stage2-scale-percent-order', 'stage5-icon-percent-order']
+
 export type PercentOrder = 'lerp-first' | 'multiply-first'
 export const PERCENT_ORDERS: readonly PercentOrder[] = ['lerp-first', 'multiply-first']
 
@@ -100,7 +103,7 @@ export async function percentOrderSurveyOf(manifestPath = resolve(REPO_ROOT, 'te
   const excluded: SurveyBound[] = []
   const cells: SurveyCell[] = []
   for (const c of m.cases) {
-    if (c.status !== 'measured') continue
+    if (c.status !== 'measured' || PERCENT_ORDER_SURVEY_LATER_CASES.includes(c.id)) continue
     const vis = c.markers.filter(k => k.ruleType === 'colorScale' || k.ruleType === 'dataBar' || k.ruleType === 'iconSet')
     if (!vis.some(k => cfvoOf(k).some(v => v.type === 'percent' || v.type === 'percentile'))) continue
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(root, c.saved)))), c.stage === 5 ? caseParseOptionsOf(c) : {})

@@ -7,10 +7,16 @@
  * fail-closed evaluation. Nothing here registers anything. The same search with the exploratory capture of
  * stage2-scale-upper-whole (54fc3388) included is pinned at the end (recipe §9.5): still no survivor.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { evaluateUpperWhole, NEAR_MISS_ID, roundBits, truncationMisses, upperWholeCandidates, upperWholeCells, type UpperWholeResult } from '../scripts/cf-refs/upper-whole-candidates'
 import type { SegmentCell } from '../scripts/cf-refs/num-segment-candidates'
 import type { CfScaleSegment } from '../src/xlsx/cf/colorScale'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let cells: SegmentCell[] | undefined

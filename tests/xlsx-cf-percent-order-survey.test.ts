@@ -7,14 +7,17 @@
  * withheld today), none of which contradicts `lerp-first` on its own (it matches Excel there with `fifteen-digit`). It
  * checks the harness, not Excel, and registers nothing.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { percentOrderSurveyOf, surveyPercent, surveyPercentile, type SurveyBound, type SurveyCell } from '../scripts/cf-refs/percent-order-survey'
 
 const HEAVY = 300_000
 let bounds: SurveyBound[] = []
 let excluded: SurveyBound[] = []
 let cells: SurveyCell[] = []
-beforeAll(async () => { ({ bounds, excluded, cells } = await percentOrderSurveyOf()) }, HEAVY)
+// As run before the captures (ecf00906): production's outcomes on the unregistered tables.
+beforeAll(async () => { asBeforePercentOrder(); ({ bounds, excluded, cells } = await percentOrderSurveyOf()) }, HEAVY)
+afterAll(asRegistered)
 const differs = (r: SurveyBound): boolean => r.scopes.all.differs || r.scopes.visible.differs
 
 describe('the percent-order survey', () => {

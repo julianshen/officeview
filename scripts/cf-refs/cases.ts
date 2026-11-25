@@ -6929,15 +6929,10 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Pre-registered by stage2-scale-formula-bounds (its own question: the formula-bounded near-top sub-shape), awaiting its capture; painted only with the same reading as scale:formula-bounds.',
   'scale:formula-bounds-twin':
     'The twins of stage2-scale-formula-bounds (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
-  // The percent-order follow-up (stage2-scale-percent-order): three questions pre-registered, awaiting the capture (an entry is
-  // removed only once the capture matches a reading and it is registered in CF_PERCENT_ORDER_PRODUCTION_READINGS or
-  // CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS; under no match the pre-committed narrowing applies instead).
-  'scale:percent-order':
-    'Pre-registered by stage2-scale-percent-order (lerp-first / multiply-first), awaiting its capture: colour-scale percent thresholds stay lerp-first until a matched reading is registered.',
-  'scale:percentile-order':
-    'Pre-registered by stage2-scale-percent-order (lerp-first / multiply-first of the PERCENTILE.INC rank), awaiting its capture: colour-scale percentile thresholds stay lerp-first until a matched reading is registered.',
-  'scale:formula-bounds-v2':
-    'Pre-registered by stage2-scale-percent-order (as-literal / fifteen-digit, each under lerp-first and multiply-first), awaiting its capture: formula-bounded segments of the settled shapes stay withheld until a matched reading is registered, and then only at the registered percent order.',
+  // The percent-order follow-up (stage2-scale-percent-order): its three questions matched in its capture (ecf00906:
+  // scale:percent-order multiply-first, scale:percentile-order lerp-first, scale:formula-bounds-v2 as-literal+multiply-first) and
+  // are registered (CF_PERCENT_ORDER_PRODUCTION_READINGS, CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS), so their entries are
+  // removed; the twin line stays a comparison.
   'scale:percent-order-twin':
     'The twin line of stage2-scale-percent-order (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
 }
@@ -11137,10 +11132,6 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
   'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
   'formula:cfvo-relative-a1-twin': 'Literal twin rules of stage5-cfvo-relative-a1 (num/num scales, icon sets and bars, one per predicted rendering): comparison references for the anchor readings, never a question themselves.',
-  'icon:percent-order':
-    'Pre-registered by stage5-icon-percent-order (lerp-first / multiply-first), awaiting its capture: icon percent thresholds stay lerp-first until a matched reading is registered in CF_PERCENT_ORDER_PRODUCTION_READINGS (no match: the pre-committed narrowing).',
-  'icon:percentile-order':
-    'Pre-registered by stage5-icon-percent-order (lerp-first / multiply-first of the PERCENTILE.INC rank), awaiting its capture: icon percentile thresholds stay lerp-first until a matched reading is registered.',
   'icon:percent-order-twin': 'Constant-class literal twin rules of stage5-icon-percent-order: comparison references for the order readings, never a question themselves.',
   'formula:cfvo-nonnumeric-v2-twin': 'Literal twin rules of stage5-cfvo-nonnumeric-v2 (num 0 in each bound position, and min/max): comparison references for the per-kind non-numeric readings, never a question themselves.',
   'formula:cfvo-scope-v2-twin': 'Literal twin rules of stage5-cfvo-scope-v2 (num/num scales and icon sets, one per predicted rendering): comparison references for the scope readings, never a question themselves.',

@@ -483,8 +483,8 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
     // The num-segment follow-up registered nothing (its capture matched no reading); the raw-floor follow-up registered its
     // question (ce3f701d), the literal-lower follow-up its question (a3f85309), and the upper-segment follow-up its two
-    // questions (2ee3735a).
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor', 'scale:num-segment-literal-lower', 'scale:upper-segment', 'scale:upper-segment-near-top'])
+    // questions (2ee3735a), and the percent-order follow-up its three (ecf00906).
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:guard-boundary-raw-floor', 'scale:num-segment-literal-lower', 'scale:upper-segment', 'scale:upper-segment-near-top', 'scale:percent-order', 'scale:percentile-order', 'scale:formula-bounds-v2'])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

@@ -17,7 +17,8 @@ import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createCanvas, loadImage } from 'canvas'
 import JSZip from 'jszip'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
@@ -64,6 +65,7 @@ import {
   CF_FORMULA_BOUNDS_V2_READINGS,
   CF_ICON_PERCENT_ORDER_CAP,
   CF_ICON_PERCENTILE_ORDER_CAP,
+  CF_PERCENT_ORDER_CAPS,
   CF_PERCENT_ORDER_READINGS,
   CF_SCALE_PERCENT_ORDER_CAP,
   CF_SCALE_PERCENTILE_ORDER_CAP,
@@ -86,7 +88,13 @@ function statsOf(values: readonly number[]): CfRangeStatistics {
 
 const REPO_ROOT = resolve(__dirname, '..')
 const HEAVY = 300_000
-afterEach(() => { injectCfPercentOrderReadings(null); injectCfPercentOrderNarrowings(null); injectCfFormulaBoundsV2Readings(null) })
+// The pre-capture rehearsal is kept as of the capture (ecf00906): every world is built on the unregistered tables
+// (asBeforePercentOrder); 'the captures' describe at the end judges the registered production.
+/** A proposed registration on top of the unregistered tables (the other ids stay lerp-first). */
+const injectAsOf = (r: Readonly<Partial<Record<string, CfPercentOrderReading>>>): void => injectCfPercentOrderReadings({ ...Object.fromEntries(CF_PERCENT_ORDER_CAPS.map(id => [id, 'lerp-first' as const])), ...r })
+beforeAll(asBeforePercentOrder)
+afterEach(() => { asBeforePercentOrder(); injectCfPercentOrderNarrowings(null) })
+afterAll(asRegistered)
 
 const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
 const caseOf = (id: string): CfOracleCase => {
@@ -105,11 +113,12 @@ const S2_CAPS = [S2_PERCENT_ORDER_CAP, S2_PERCENTILE_ORDER_CAP, S2_FORMULA_BOUND
 /** A registration world: readings by id (with their evidence held), and the narrowed ids. */
 type Registration = { readings?: Partial<Record<string, CfPercentOrderReading>>; v2?: CfFormulaBoundsV2Reading; narrowed?: readonly string[] }
 async function withRegistration<T>(r: Registration, fn: () => Promise<T>): Promise<T> {
-  injectCfPercentOrderReadings(r.readings ?? null)
-  injectCfFormulaBoundsV2Readings(r.v2 ? { [CF_FORMULA_BOUNDS_V2_CAP]: r.v2 } : null)
+  asBeforePercentOrder()
+  if (r.readings) injectAsOf(r.readings)
+  if (r.v2) injectCfFormulaBoundsV2Readings({ [CF_FORMULA_BOUNDS_V2_CAP]: r.v2 })
   injectCfPercentOrderNarrowings(r.narrowed ?? null)
   const caps = [...VERIFIED_CAPABILITIES, ...Object.keys(r.readings ?? {}), ...(r.v2 ? [CF_FORMULA_BOUNDS_V2_CAP] : [])]
-  try { return await withExactCfEvidence(caps, fn) } finally { injectCfPercentOrderReadings(null); injectCfFormulaBoundsV2Readings(null); injectCfPercentOrderNarrowings(null) }
+  try { return await withExactCfEvidence(caps, fn) } finally { asBeforePercentOrder(); injectCfPercentOrderNarrowings(null) }
 }
 /** The model world a registration selects (narrowing aside). */
 const worldOf = (r: Registration): S2PercentOrderWorld => ({
@@ -162,20 +171,20 @@ const judge = (c: CfOracleCase, fills: Map<string, string>) => evaluateFormulaCa
 }))
 
 describe('stage2-scale-percent-order: the case', () => {
-  it('is appended last; owns its four ids; every question unregistered and in the registry', async () => {
+  it('is appended last; owns its four ids; since its capture (ecf00906) the three questions are registered and published, the twin line stays recorded', async () => {
     expect(CF_STAGE2_CASES.at(-1)!.id).toBe(S2_PERCENT_ORDER_ID)
     for (const id of [...S2_CAPS, S2_PERCENT_ORDER_TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([S2_PERCENT_ORDER_ID])
-      expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
-      expect(VERIFIED_CAPABILITIES.has(id), id).toBe(false)
+      expect(CF_STAGE2_NONDISCRIMINATING[id] !== undefined, id).toBe(id === S2_PERCENT_ORDER_TWIN)
+      expect(VERIFIED_CAPABILITIES.has(id), id).toBe(id !== S2_PERCENT_ORDER_TWIN)
     }
     expect([S2_PERCENT_ORDER_CAP, S2_PERCENTILE_ORDER_CAP, S2_FORMULA_BOUNDS_V2_CAP]).toEqual([CF_SCALE_PERCENT_ORDER_CAP, CF_SCALE_PERCENTILE_ORDER_CAP, CF_FORMULA_BOUNDS_V2_CAP])
     expect([...S2_PERCENT_ORDER_READINGS]).toEqual([...CF_PERCENT_ORDER_READINGS])
     expect([...S2_FORMULA_BOUNDS_V2_READINGS]).toEqual([...CF_FORMULA_BOUNDS_V2_READINGS])
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    for (const id of S2_CAPS) expect(Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, id), id).toBe(false)
+    expect(S2_CAPS.map(id => CF_STAGE2_PRODUCTION_READINGS[id])).toEqual(['multiply-first', 'lerp-first', 'as-literal+multiply-first'])
     const c = caseOf(S2_PERCENT_ORDER_ID)
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(c.scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === S2_PERCENT_ORDER_ID)!.scaleReadings)
   })
 
@@ -284,7 +293,8 @@ describe('stage2-scale-percent-order: the evaluator', () => {
  * captures, never a registration (recipe §15.2). Cells that change from withheld to painted are listed by count.
  */
 describe('every world against every committed capture', () => {
-  const measured = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
+  // As of the capture: the measured cases before it (ecf00906).
+  const measured = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== S2_PERCENT_ORDER_ID).map(x => x.id)
   const E = ['E2', 'E3', 'E4', 'E5', 'E6'].map(r => `stage2-scale-formula-bounds:${r}`)
   const expectations: Record<string, { violations: (v: string[]) => void; newlyPainted: number }> = {
     'unregistered': { violations: v => expect(v).toEqual([]), newlyPainted: 0 },
@@ -318,7 +328,9 @@ describe('every world against every committed capture', () => {
 describe('every world against the committed Stage 5 captures', () => {
   it('Stage 5 records: every measured case agrees with Excel in every world; no record changes, except under the scale percentile narrowing (stage5-cfvo-formulas G / T withheld, justified)', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const base = await stage5CaseRecords(manifest, REPO_ROOT)
+    // As of the capture: its own Stage 5 capture (ecf00906) is left out.
+    const asOf = <T extends { caseId: string }>(rows: T[]): T[] => rows.filter(r => r.caseId !== S5_ICON_PO_ID)
+    const base = asOf(await stage5CaseRecords(manifest, REPO_ROOT))
     expect(base.filter(r => r.compared && !r.agrees)).toEqual([])
     const k = (r: (typeof base)[number]): string => `${r.caseId}:${r.ref}`
     const was = new Map(base.map(r => [k(r), r]))
@@ -331,7 +343,7 @@ describe('every world against the committed Stage 5 captures', () => {
     ]
     for (const [name, r] of worlds) {
       const held = new Set([...Object.keys(r.readings ?? {})])
-      const rows = await withRegistration(r, () => stage5CaseRecords(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || held.has(id) }))
+      const rows = asOf(await withRegistration(r, () => stage5CaseRecords(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || held.has(id) })))
       expect(rows.length, name).toBe(base.length)
       expect(rows.filter(x => x.compared && !x.agrees).map(x => `${k(x)} ${x.disagreement}`), name).toEqual([])
       const changed = rows.filter(x => JSON.stringify(x.production) !== JSON.stringify(was.get(k(x))!.production)).map(k)
@@ -387,15 +399,18 @@ function syntheticRoot(fills: Map<string, string>): { root: string; manifest: Cf
 describe('stage2-scale-percent-order on a synthetic measured capture (real verifyCfCase, auditStage2Manifest, stage2Conformance, compareCfCase)', () => {
   const disposition = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }, id: string) => r.perCapability.find(p => p.capabilityId === id)!.disposition
   const removed = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => !(S2_CAPS as readonly string[]).includes(id)))
+  /** The registry as it stood before the capture (the three questions held as pre-registered). */
+  const asOfRegistry = { ...CF_STAGE2_NONDISCRIMINATING, ...Object.fromEntries(S2_CAPS.map(id => [id, 'pre-registered, awaiting the capture'])) }
   const MULT: S2PercentOrderWorld = { percent: 'multiply-first', percentile: 'multiply-first', formula: 'as-literal' }
   const multRegistration: Registration = { readings: { [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENTILE_ORDER_CAP]: 'multiply-first' }, v2: 'as-literal+multiply-first' }
   const ID = S2_PERCENT_ORDER_ID
 
-  it('the real manifest: Stage 2 audits ok; the four ids unverified-nondiscriminating; the verified set unchanged', async () => {
+  it('the real manifest (after the capture): Stage 2 audits ok; the three questions verified, the twin line unverified; the verified set is the published one', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect([r.ok, r.stageComplete]).toEqual([true, true])
-    for (const id of [...S2_CAPS, S2_PERCENT_ORDER_TWIN]) expect(disposition(r, id), id).toBe('unverified-nondiscriminating')
+    for (const id of S2_CAPS) expect(disposition(r, id), id).toBe('verified')
+    expect(disposition(r, S2_PERCENT_ORDER_TWIN)).toBe('unverified-nondiscriminating')
     expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
   }, HEAVY)
 
@@ -408,10 +423,11 @@ describe('stage2-scale-percent-order on a synthetic measured capture (real verif
     expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
     if (res.kind !== 'verified') return
     expect(res.matchedHypotheses).toEqual({ [S2_PERCENT_ORDER_CAP]: 'multiply-first', [S2_PERCENTILE_ORDER_CAP]: 'multiply-first', [S2_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' })
-    for (const id of S2_CAPS) expect(disposition(auditStage2Manifest(m, { rootDir: root }), id), id).toBe('unverified-nondiscriminating')
+    for (const id of S2_CAPS) expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: asOfRegistry }), id), id).toBe('unverified-nondiscriminating')
     const registered = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: { ...CF_STAGE2_PRODUCTION_READINGS, [S2_PERCENT_ORDER_CAP]: 'multiply-first', [S2_PERCENTILE_ORDER_CAP]: 'multiply-first', [S2_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' } })
     for (const id of S2_CAPS) expect(disposition(registered, id), id).toBe('verified')
-    expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed }), S2_PERCENT_ORDER_CAP)).toBe('supported-structural')
+    const unregisteredReadings = Object.fromEntries(Object.entries(CF_STAGE2_PRODUCTION_READINGS).filter(([id]) => !(S2_CAPS as readonly string[]).includes(id)))
+    expect(disposition(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: removed, productionReadings: unregisteredReadings }), S2_PERCENT_ORDER_CAP)).toBe('supported-structural')
     // Unregistered: the decisive cells production paints today are lerp-first's.
     const paintedDecisive = designated.filter(x => x.role === 'decisive' && !s2PercentOrderWithheldToday(x) && s2PercentOrderPrediction(x, S2_PERCENT_ORDER_DEFAULT_WORLD) !== s2PercentOrderPrediction(x, MULT)).map(x => x.ref)
     expect(paintedDecisive).toEqual([...['A', 'B', 'C', 'D', 'E', 'F'].flatMap(col => [2, 3, 4, 5, 6].map(r => `${col}${r}`)), 'H7', 'H8', 'H9'])
@@ -461,16 +477,17 @@ describe('stage2-scale-percent-order on a synthetic measured capture (real verif
 
 describe('stage5-icon-percent-order: the case', () => {
   const blocks = s5IconPoBlocks()
-  it('is appended last; owns its three ids; both questions unregistered and in the registry', async () => {
+  it('is appended last; owns its three ids; both questions registered since the capture', async () => {
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(S5_ICON_PO_ID)
+    // Since the capture (ecf00906) both questions are registered and published; the twins stay recorded.
     for (const id of [S5_ICON_PERCENT_ORDER_CAP, S5_ICON_PERCENTILE_ORDER_CAP, S5_ICON_PO_TWIN]) {
-      expect(CF_STAGE5_NONDISCRIMINATING[id], id).toMatch(/./)
-      expect(VERIFIED_CAPABILITIES.has(id), id).toBe(false)
+      expect(CF_STAGE5_NONDISCRIMINATING[id] !== undefined, id).toBe(id === S5_ICON_PO_TWIN)
+      expect(VERIFIED_CAPABILITIES.has(id), id).toBe(id !== S5_ICON_PO_TWIN)
     }
     expect([S5_ICON_PERCENT_ORDER_CAP, S5_ICON_PERCENTILE_ORDER_CAP]).toEqual([CF_ICON_PERCENT_ORDER_CAP, CF_ICON_PERCENTILE_ORDER_CAP])
     expect([...S5_ICON_PO_READINGS]).toEqual([...CF_PERCENT_ORDER_READINGS])
     const { CF_STAGE5_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    for (const id of [S5_ICON_PERCENT_ORDER_CAP, S5_ICON_PERCENTILE_ORDER_CAP]) expect(Object.prototype.hasOwnProperty.call(CF_STAGE5_PRODUCTION_READINGS, id), id).toBe(false)
+    expect([S5_ICON_PERCENT_ORDER_CAP, S5_ICON_PERCENTILE_ORDER_CAP].map(id => CF_STAGE5_PRODUCTION_READINGS[id])).toEqual(['multiply-first', 'lerp-first'])
     const c = caseOf(S5_ICON_PO_ID)
     expect(c.range).toBe('A1:AC27')
     expect(c.expected.cells.length).toBe(150)
@@ -554,7 +571,8 @@ async function s5SyntheticRoot(w: IconWorld): Promise<{ root: string; manifest: 
   const zip = await JSZip.loadAsync(readFileSync(resolve(REPO_ROOT, c.saved)))
   const styles = await zip.file('xl/styles.xml')!.async('string')
   const centred = styles.replace(/<cellXfs([^>]*)>([\s\S]*?)<\/cellXfs>/, (_m, a: string, body: string) => `<cellXfs${a}>${body.replace(/<xf([^>]*?)\/>/g, '<xf$1><alignment vertical="center"/></xf>')}</cellXfs>`)
-  if (centred === styles) throw new Error('styles unchanged')
+  // Since the capture (ecf00906) the committed saved workbook is Excel's own resave, already centred.
+  if (centred === styles && !/<cellXfs[^>]*>[\s\S]*vertical="center"/.test(styles)) throw new Error('styles unchanged')
   zip.file('xl/styles.xml', centred)
   const saved = new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
   mkdirSync(dirname(join(root, c.saved)), { recursive: true })
@@ -625,10 +643,15 @@ describe('stage5-icon-percent-order on a synthetic measured capture (real icon c
    * directly, so the rehearsal removes the two entries around `fn` and restores them.
    */
   async function withoutRegistryEntries<T>(fn: () => Promise<T>): Promise<T> {
+    // Since the capture (ecf00906) the registry no longer holds the two questions: this is the registry as committed.
+    for (const id of ICON_IDS) expect(CF_STAGE5_NONDISCRIMINATING[id], id).toBeUndefined()
+    return fn()
+  }
+  /** The registry as it stood before the capture: the two questions held as pre-registered (restored after `fn`). */
+  async function withRegistryEntries<T>(fn: () => Promise<T>): Promise<T> {
     const reg = CF_STAGE5_NONDISCRIMINATING as Record<string, string>
-    const kept = ICON_IDS.map(id => [id, reg[id]!] as const)
-    for (const [id] of kept) delete reg[id]
-    try { return await fn() } finally { for (const [id, text] of kept) reg[id] = text }
+    for (const id of ICON_IDS) reg[id] = 'pre-registered, awaiting the capture'
+    try { return await fn() } finally { for (const id of ICON_IDS) delete reg[id] }
   }
   const decisiveRefs = (id: string): string[] => { const b = s5IconPoBlocks().find(x => x.id === id)!; return b.designated.filter(d => d.role === 'decisive').map(d => `${b.col}${2 + d.at}`) }
   const evaluationOf = (root: string): Record<string, { status: string; matched?: string; code?: string }> =>
@@ -645,7 +668,7 @@ describe('stage5-icon-percent-order on a synthetic measured capture (real icon c
       for (const id of ICON_IDS) expect([ev[id]?.status, ev[id]?.matched], `${id}: ${JSON.stringify(ev[id]).slice(0, 400)}`).toEqual(['discriminating', reading])
       const c = m.cases.find(x => x.id === S5_ICON_PO_ID)!
       // Registry kept (pre-capture): verified, both ids non-discriminating.
-      const kept = verifyCfCase(c, { rootDir: root })
+      const kept = await withRegistryEntries(async () => verifyCfCase(c, { rootDir: root }))
       expect(kept.kind).toBe('verified')
       if (kept.kind === 'verified') expect(kept.nonDiscriminatingCapabilities).toEqual([...ICON_IDS].sort())
       const registration: Registration = { readings: { [CF_ICON_PERCENT_ORDER_CAP]: reading, [CF_ICON_PERCENTILE_ORDER_CAP]: reading } }
@@ -717,4 +740,75 @@ describe('stage5-icon-percent-order on a synthetic measured capture (real icon c
       expect(`${mode}: ${b.outcome} ${b.outcome === 'pass' ? '' : b.reason}`).toBe(`${mode}: pass `)
     }
   }, 900_000)
+})
+
+// ---- Phase 2: the captures (Excel 16.115, ecf00906) and the registration they decided (§14.z.24) ----
+describe('the captures (ecf00906): each id decided on its own groups; the registered production', () => {
+  const run = async <T>(registration: Registration | 'registered', fn: () => Promise<T>): Promise<T> => {
+    if (registration !== 'registered') return withRegistration(registration, fn)
+    asRegistered()
+    try { return await fn() } finally { asBeforePercentOrder() }
+  }
+  const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, caseOf(S2_PERCENT_ORDER_ID).captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+  const excel = new Map(sidecar.observedCells.map(o => [o.ref, o.fillRgb]))
+
+  it('verifyCfCase: scale:percent-order multiply-first, scale:percentile-order lerp-first, scale:formula-bounds-v2 as-literal+multiply-first; icon:percent-order multiply-first, icon:percentile-order lerp-first', () => {
+    const s2 = verifyCfCase(caseOf(S2_PERCENT_ORDER_ID), { rootDir: REPO_ROOT })
+    expect(s2.kind).toBe('verified')
+    if (s2.kind === 'verified') {
+      expect(s2.matchedHypotheses).toEqual({ [S2_PERCENT_ORDER_CAP]: 'multiply-first', [S2_PERCENTILE_ORDER_CAP]: 'lerp-first', [S2_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' })
+      expect(s2.minPositiveContrastDelta).toBe(125)
+    }
+    const s5 = verifyCfCase(caseOf(S5_ICON_PO_ID), { rootDir: REPO_ROOT })
+    expect(s5.kind).toBe('verified')
+    if (s5.kind === 'verified') expect(s5.matchedHypotheses).toEqual({ [S5_ICON_PERCENT_ORDER_CAP]: 'multiply-first', [S5_ICON_PERCENTILE_ORDER_CAP]: 'lerp-first' })
+  })
+
+  it('Stage 2, every designated cell: Excel equals the matched reading of its capability (63 decisive, every kept, clear and control cell); twins and positive controls as fixed', () => {
+    const matched: Record<string, string> = { [S2_PERCENT_ORDER_CAP]: 'multiply-first', [S2_PERCENTILE_ORDER_CAP]: 'lerp-first', [S2_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' }
+    expect(designated.filter(x => s2PercentOrderReadingPrediction(x, matched[x.block.cap]!) !== excel.get(x.ref)).map(x => x.ref)).toEqual([])
+    // Each rival is contradicted somewhere in its capability's groups.
+    for (const cap of S2_CAPS) for (const r of s2PercentOrderReadingsOf(cap).filter(r => r !== matched[cap])) {
+      expect(designated.filter(x => x.block.cap === cap && s2PercentOrderReadingPrediction(x, r) !== excel.get(x.ref)).length, `${cap} ${r}`).toBeGreaterThanOrEqual(5)
+    }
+    for (const t of layout.twins) expect(excel.get(t.ref), t.ref).toBe(t.fill)
+    for (const p of layout.positiveControls) expect(excel.get(p.ref), p.ref).toBe(p.token)
+  })
+
+  it('the registered production: every measured Stage 2 case, both captures included, has 0 violations; this case is painted exactly (no withhold left)', async () => {
+    const all = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured').map(x => x.id)
+    const registered = await run('registered', () => stage2Conformance(manifest, REPO_ROOT, all))
+    expect(registered.violations).toEqual([])
+    const own = await run('registered', () => stage2Conformance(manifest, REPO_ROOT, [S2_PERCENT_ORDER_ID]))
+    expect([own.total, own.exact, own.withheld]).toEqual([225, 225, 0])
+    // Against the unregistered tables: 51 cells of this case and 47 of stage2-scale-formula-bounds move, each to Excel's fill.
+    const before = await run({}, () => stage2Conformance(manifest, REPO_ROOT, all.filter(x => x !== S2_PERCENT_ORDER_ID)))
+    const after = await run('registered', () => stage2Conformance(manifest, REPO_ROOT, all.filter(x => x !== S2_PERCENT_ORDER_ID)))
+    expect([before.violations, after.violations]).toEqual([[], []])
+    expect(before.withheld - after.withheld).toBe(47)
+  }, 900_000)
+
+  it('each rival registered is caught: percent lerp-first at the 23 decisive cells painted today, percentile multiply-first at the 10 percentile decisive cells', async () => {
+    const lerp = await run({ readings: { [CF_SCALE_PERCENTILE_ORDER_CAP]: 'lerp-first', [CF_SCALE_PERCENT_ORDER_CAP]: 'lerp-first' }, v2: 'as-literal+multiply-first' }, () => stage2Conformance(manifest, REPO_ROOT, [S2_PERCENT_ORDER_ID]))
+    expect(lerp.violations.map(v => v.split(':')[1]).sort()).toEqual([...['A', 'B', 'C', 'D'].flatMap(c => [2, 3, 4, 5, 6].map(r => `${c}${r}`)), 'H7', 'H8', 'H9'].sort())
+    const mult = await run({ readings: { [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENTILE_ORDER_CAP]: 'multiply-first' }, v2: 'as-literal+multiply-first' }, () => stage2Conformance(manifest, REPO_ROOT, [S2_PERCENT_ORDER_ID]))
+    expect(mult.violations.map(v => v.split(':')[1]).sort()).toEqual(['E', 'F'].flatMap(c => [2, 3, 4, 5, 6].map(r => `${c}${r}`)).sort())
+  }, 900_000)
+
+  it('Stage 5: the registered production agrees with Excel at every measured case; each icon rival is caught exactly at its decisive cells', async () => {
+    const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
+    const bad = (rows: Awaited<ReturnType<typeof stage5CaseRecords>>): string[] => rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref}`).sort()
+    expect(bad(await run('registered', () => stage5CaseRecords(manifest, REPO_ROOT)))).toEqual([])
+    const iconLerp = await run({ readings: { [CF_ICON_PERCENT_ORDER_CAP]: 'lerp-first', [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' }, v2: 'as-literal+multiply-first' }, () => stage5CaseRecords(manifest, REPO_ROOT))
+    expect(bad(iconLerp)).toEqual(['B3', 'B4', 'B5', 'B6', 'C3', 'C4', 'C5', 'C6'].map(r => `${S5_ICON_PO_ID}:${r}`).sort())
+    const pctlMult = await run({ readings: { [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first', [CF_ICON_PERCENTILE_ORDER_CAP]: 'multiply-first', [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first' }, v2: 'as-literal+multiply-first' }, () => stage5CaseRecords(manifest, REPO_ROOT))
+    expect(bad(pctlMult)).toEqual(['D12', 'D13', 'D14', 'D15', 'D16'].map(r => `${S5_ICON_PO_ID}:${r}`).sort())
+  }, 900_000)
+
+  it('data bars stay lerp-first under the registered tables (no order reaches resolveBarThresholds)', async () => {
+    const { resolveBarThresholds } = await import('../src/xlsx/cf/dataBar')
+    const bar = { kind: 'dataBar', dialect: 'base', formulas: [], bounds: [{ type: 'percent', value: 33.333333333333336 }, { type: 'max' }], fillArgb: 0xff0000ff, negativeFillArgb: 0xffff0000, axisArgb: 0xff000000, minLength: 0, maxLength: 100, gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: true, axisPosition: 'automatic', direction: 'leftToRight', showValue: true, sheetRightToLeft: false } as Extract<CfDefinition, { kind: 'dataBar' }>
+    const t = await run('registered', async () => resolveBarThresholds(bar, statsOf([0, 120, 300]), { hasEvidence: () => true }))
+    expect(t).toEqual({ kind: 'ready', value: [100.00000000000001, 300] })
+  })
 })

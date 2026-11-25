@@ -1901,7 +1901,7 @@ The input is committed (node zlib's deflate). To regenerate it, only before a bu
 - **Hypothesis only (post-capture, never registered):** the percent threshold computed multiplication first, min + (max − min)·p/100 = 100, reproduces E2..E10 as well as `fifteen-digit` does; with it, `as-literal` explains every cell of the capture.
 
 
-## 15. The percent-order follow-up (`stage2-scale-percent-order`, with `stage5-icon-percent-order`; recipe-pending)
+## 15. The percent-order follow-up (`stage2-scale-percent-order`, with `stage5-icon-percent-order`; captured ecf00906, every id matched and registered)
 
 The post-capture hypothesis of stage2-scale-formula-bounds (d2660d46, §14.7): Excel computes a percent threshold multiplication first. Brief: `.superpowers/sdd/cf-percent-order/brief.md`; Phase 1 report: `.superpowers/sdd/cf-percent-order/phase1-report.md`. d2660d46 forms the hypothesis only; nothing is registered from it.
 
@@ -2119,3 +2119,9 @@ npx tsx scripts/cf-refs/audit.ts --stage 2 && npx tsx scripts/cf-refs/audit.ts -
 ```
 
 Regenerate the inputs only before a build: `npx tsx scripts/cf-refs/generate.ts --case <id>` (twice, byte-identical). After the build check that Excel's resave kept every AH double, the cfvo formula text and the long probe texts (8.699999999999989, 12.899999999999991, 14.999999999999998, 67.49999999999999). Captures are never retried; the registration rule is §15.2.
+
+### 15.8 Run result (captured, ecf00906, Excel 16.115)
+
+- **The builds:** repair-free on the first attempt; every numeric cell and rule identical input vs saved; the default style resaved `vertical="center"` (centred glyph key). Stage 2 verified at minimum contrast 125; the icon crops classified; `--verify-only` re-verified both.
+- **The evidence:** `scale:percent-order` `multiply-first` (20 decisive cells), `scale:percentile-order` `lerp-first` (10), `scale:formula-bounds-v2` `as-literal+multiply-first` (33), `icon:percent-order` `multiply-first` (8), `icon:percentile-order` `lerp-first` (5); every kept, clear and control cell, twin, positive and tolerance control as predicted.
+- **Registered** by §15.2: all five ids at their matched reading (the v2 dependency holds); published, twice byte-identical. No narrowing. Details and reach: `docs/validation/xlsx-cf.md` §14.z.24.

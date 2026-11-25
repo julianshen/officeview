@@ -5,9 +5,15 @@
  * numbers of docs/validation/xlsx-cf-recipes-stage2.md §10.1. This checks the search, not Excel. The same search with the
  * capture of stage2-scale-upper-window (ed0fccb6) included is pinned at the end (recipe §10.6): still no survivor.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { evaluateUpperWindow, integerShape, scoredCells, upperWindowCandidates, upperWindowCells, windowCensus, windowShape, type UpperWindowResult } from '../scripts/cf-refs/upper-window-candidates'
 import type { SegmentCell } from '../scripts/cf-refs/num-segment-candidates'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let cells: SegmentCell[] = []

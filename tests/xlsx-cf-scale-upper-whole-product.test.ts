@@ -9,7 +9,8 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import * as colorScale from '../src/xlsx/cf/colorScale'
 import { interpolateScaleColor, scaleColorAt, upperSegmentWholeProduct } from '../src/xlsx/cf/colorScale'
 import { OfficePackage } from '../src/core/zip'
@@ -27,6 +28,11 @@ import { independentWholeProduct, JUSTIFY_TRUNCATION_GUARD } from '../scripts/cf
 import { injectCfScaleSegmentProbe } from '../src/xlsx/cf/colorScale'
 import type { XlsxSheet } from '../src/xlsx/types'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()
@@ -191,7 +197,7 @@ describe('the reviewer\'s overflow sheet (pre-capture fix round 2): default prod
 describe('the reach: every newly withheld cell of every measured case is the shape, and Stage 5\'s list is derived', () => {
   it('per case (through production\'s own segment evaluations): the cells in the shape are exactly the recorded reach', async () => {
     // Recorded as of the captures before stage2-scale-upper-segment (2ee3735a), whose case is pinned by its own test.
-    const LATER = ['stage2-scale-upper-segment', 'stage2-scale-formula-bounds']
+    const LATER = ['stage2-scale-upper-segment', 'stage2-scale-formula-bounds', 'stage2-scale-percent-order']
     const cells = (await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })).cells.filter(c => !LATER.includes(c.caseId))
     // The literal-num withhold takes precedence (num / num bounds, f·2^20 not an integer): those cells keep its reason.
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)

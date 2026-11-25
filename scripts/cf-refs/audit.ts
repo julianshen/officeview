@@ -21,6 +21,7 @@
  * algorithmic bounds. No timing assertion gates any outcome.
  */
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
+import { withExactCfEvidence } from '../../src/xlsx/cf/evidence'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -2843,7 +2844,13 @@ async function main(): Promise<void> {
     console.log(`${cyc.name}: cycles=${cyc.cycles} ready=${cyc.ready} pending=${cyc.pending} closedMidRead=${cyc.cancelled} maxNetBetween=${cyc.maxNetBetween} net=${cyc.netBytes}`)
     if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
     for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
-    const caseRecords5 = await stage5CaseRecords(manifest, REPO_ROOT)
+    // The percent-order follow-up: with `--write --publish-stage5`, the records are judged under the evidence about to be
+    // published (the rendered VERIFIED_CAPABILITIES), since a registered reading changes what production paints only once its
+    // id is published; without a write they are judged under the committed set, as before.
+    const pendingIds = pendingWrite && args.includes('--publish-stage5')
+      ? (/export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(pendingWrite.content)?.[1]?.match(/'[^']+'/g) ?? []).map(x => x.slice(1, -1))
+      : undefined
+    const caseRecords5 = pendingIds ? await withExactCfEvidence(pendingIds, () => stage5CaseRecords(manifest, REPO_ROOT)) : await stage5CaseRecords(manifest, REPO_ROOT)
     const compared5 = caseRecords5.filter(r => r.compared)
     const disagree = compared5.filter(r => !r.agrees)
     // eslint-disable-next-line no-console

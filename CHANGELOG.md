@@ -12,6 +12,11 @@ in git history.
 
 ### Changed
 
+- **Percent thresholds in colour scales and icon sets now follow Excel's arithmetic.** Excel computes a percent threshold as lo + ((hi − lo)·p)/100 (multiplication first); the viewer used lo + (p/100)·(hi − lo), which can differ by one unit in the last place and so draw a colour-scale step or an icon bucket one off.
+  - **Evidence:** pre-registered Excel 16.115 captures (`stage2-scale-percent-order`, `stage5-icon-percent-order`) matched multiplication first at every decisive cell for percent bounds, and the viewer's existing arithmetic for percentile bounds (unchanged).
+  - **Formula bounds:** with that arithmetic a formula-resolved colour-scale bound is used as its exact value, so formula-bounded cells withheld until now paint (`scale:formula-bounds-v2`).
+  - **Reach:** 31 captured cells repainted (each now Excel's colour or icon) and 77 newly painted, all at Excel's fill; no correctly painted cell changes. Data bars are unchanged.
+  - Evidence: `docs/validation/xlsx-cf.md` §14.z.24.
 - **Some 3-colour colour-scale cells are now withheld.** The affected cells lie strictly inside the upper segment of a 3-colour Excel colour scale, between the midpoint and the maximum, with any kind of bounds. They are withheld when the interpolation step is a whole number on some colour channel.
   - **Why:** a dedicated Excel 16.115 capture (`stage2-scale-num-segment`) showed Excel drawing such cells one unit off production's interpolation at some fractions (1/3, 2/3, 1/5, 1/7, 1/15) but not at others. No pre-registered explanation matched.
   - **What you see:** these cells keep their base formatting and are announced as unavailable (`cf-unmeasured-upper-segment-whole-product`).

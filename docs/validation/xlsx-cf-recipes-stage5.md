@@ -200,6 +200,7 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 
 - **Expected:** a repair-free open with every value kept (the long probe texts 8.699999999999989, 12.899999999999991, 14.999999999999998, 67.49999999999999, 9.999999999999998 included); `formulaEvaluation` `discriminating` for both ids; both tolerance controls (ipc-tol, ipl-tol) matched.
 - **Stop and record** (never retried, never refitted): a repair or a changed value (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon; `formula-hypothesis-none` (then the pre-committed narrowing for that id), `non-discriminating` or `formula-replication-shortfall`; a failed tolerance control.
+- **Run of 2026-11-26 (ecf00906, Excel 16.115):** repair-free, every value kept, default style centred. `icon:percent-order` `discriminating`, matched `multiply-first`; `icon:percentile-order` `discriminating`, matched `lerp-first`; both tolerance controls matched. Registered and published (§14.z.24).
 
 ## 3. Unresolved shapes (record only)
 

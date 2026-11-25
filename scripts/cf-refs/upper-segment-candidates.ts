@@ -354,7 +354,7 @@ export function survivorClasses(ids: readonly string[], candidates: readonly Upp
  */
 export const UPPER_SEGMENT_POST_CAPTURE_CASES: readonly string[] = ['stage2-scale-upper-segment']
 /** Captures after this search's own follow-up, left out in every mode: the census is recorded as of 2ee3735a (recipe §13.7). */
-export const UPPER_SEGMENT_LATER_CASES: readonly string[] = ['stage2-scale-formula-bounds']
+export const UPPER_SEGMENT_LATER_CASES: readonly string[] = ['stage2-scale-formula-bounds', 'stage2-scale-percent-order']
 
 export async function upperSegmentCensusOf(manifest?: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'pre-capture' | 'all' } = {}): Promise<{ collection: SegmentCollection; rows: CensusRow[] }> {
   const m = manifest ?? (JSON.parse(readFileSync(resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest)

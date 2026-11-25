@@ -109,11 +109,18 @@ export const CF_ICON_PERCENT_ORDER_CAP = 'icon:percent-order'
 export const CF_ICON_PERCENTILE_ORDER_CAP = 'icon:percentile-order'
 export const CF_PERCENT_ORDER_CAPS = [CF_SCALE_PERCENT_ORDER_CAP, CF_SCALE_PERCENTILE_ORDER_CAP, CF_ICON_PERCENT_ORDER_CAP, CF_ICON_PERCENTILE_ORDER_CAP] as const
 /**
- * The reading production implements per id: none. Until a capture matches a pre-registered reading and it is registered here
- * (with its evidence), every percent / percentile threshold is `lerp-first`, as on main. The audits' production-reading
- * tables spread this one.
+ * The reading production implements per id, registered from the captures of stage2-scale-percent-order and
+ * stage5-icon-percent-order (Excel 16.115, ecf00906; docs/validation/xlsx-cf.md §14.z.24), each matched on its own groups by
+ * the reading pre-registered before it (e44463a4): a percent threshold is `multiply-first` for colour scales and icon sets
+ * alike, a PERCENTILE.INC rank `lerp-first` (production's arithmetic, unchanged). A reading applies only with its evidence;
+ * without it every threshold is `lerp-first`. The audits' production-reading tables spread this one.
  */
-export const CF_PERCENT_ORDER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfPercentOrderReading>>> = Object.freeze({})
+export const CF_PERCENT_ORDER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfPercentOrderReading>>> = Object.freeze({
+  [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first',
+  [CF_SCALE_PERCENTILE_ORDER_CAP]: 'lerp-first',
+  [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first',
+  [CF_ICON_PERCENTILE_ORDER_CAP]: 'lerp-first',
+})
 /** The ids under the pre-committed narrowing (`withhold-differing`): none. */
 export const CF_PERCENT_ORDER_NARROWINGS: readonly string[] = Object.freeze([])
 let proposedPercentOrderReadings: Readonly<Partial<Record<string, CfPercentOrderReading>>> | null = null
@@ -961,8 +968,12 @@ export const cfFormulaBoundFifteenDigit = (x: number): number => (Number.isFinit
 export const CF_FORMULA_BOUNDS_V2_CAP = 'scale:formula-bounds-v2'
 export const CF_FORMULA_BOUNDS_V2_READINGS = ['as-literal+lerp-first', 'as-literal+multiply-first', 'fifteen-digit+lerp-first', 'fifteen-digit+multiply-first'] as const
 export type CfFormulaBoundsV2Reading = (typeof CF_FORMULA_BOUNDS_V2_READINGS)[number]
-/** The reading production implements per id: none. The audit's CF_STAGE2_PRODUCTION_READINGS spreads this table. */
-export const CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> = Object.freeze({})
+/**
+ * The reading production implements per id: `as-literal+multiply-first`, matched by the capture of stage2-scale-percent-order
+ * (ecf00906; §14.z.24) together with `multiply-first` for scale:percent-order, as the dependency rule requires. The audit's
+ * CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> = Object.freeze({ [CF_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' })
 let proposedFormulaBoundsV2Readings: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> | null = null
 /** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
 export function injectCfFormulaBoundsV2Readings(readings: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> | null): void {
