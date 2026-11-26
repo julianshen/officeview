@@ -82,7 +82,7 @@ export const SHEET_VIEW_JOB_BYTES = 16 * 1024 * 1024
 /** The view a sheet-view job leaves (P3: a sort sets `sortFilter := base.filter`, a filter keeps the sort). */
 export function sheetViewNext(job: SheetViewJob): CanonicalView {
   switch (job.op) {
-    case 'derive': case 'values': return job.view
+    case 'derive': case 'values': case 'extent': return job.view
     case 'sort': return canonicalView(job.sort ? { sort: job.sort, sortFilter: job.base.filter, filter: job.base.filter } : { sort: null, sortFilter: null, filter: job.base.filter })
     case 'filter': return canonicalView({ sort: job.base.sort, sortFilter: job.base.sortFilter, filter: job.filter })
     case 'detect': return { sort: null, sortFilter: null, filter: null }

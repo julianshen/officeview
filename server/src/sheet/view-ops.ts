@@ -32,6 +32,7 @@ import type { WorkbookSource } from '../../../src/worker/viewerSession'
 import type { SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import { clockEpochMs, type SheetClock } from './clock'
 import { canonicalView, isIdentityView, type CanonicalView, type ResolvedFilter, type ResolvedRule } from './view-spec'
+import type { WireSizes } from './view-state'
 
 export type SheetViewJob =
   | { op: 'derive'; sheetIndex: number; view: CanonicalView }
@@ -39,6 +40,8 @@ export type SheetViewJob =
   | { op: 'filter'; sheetIndex: number; base: CanonicalView; filter: ResolvedFilter | null }
   | { op: 'values'; sheetIndex: number; view: CanonicalView; range: WireRange; col: number; search?: { text: string; wildcards: boolean }; offset: number }
   | { op: 'detect'; sheetIndex: number; kind: 'sort' | 'filter'; selection: WireSelection; override?: { header: 0 | 1 } }
+  /** P9: the sheet's extent under `view` at `sizes`, answered by the host from its tile geometry (never by a port). */
+  | { op: 'extent'; sheetIndex: number; view: CanonicalView; sizes: WireSizes }
 /** P13: a local refusal as it travels: its reason, a source rect for `merge`, `fixed-array`, `dynamic-spill`,
  * `outside-column-data` and `pivot`, and `count`/`at` for `formula-value-unavailable`. Never a `drawingId` or message. */
 export interface WireOperationRefusal { reason: string; range?: SourceRect; count?: number; at?: [number, number] }
@@ -48,6 +51,7 @@ export type SheetViewReply =
   | { op: 'values'; page: Omit<ValuesPage, 'list' | 'cursor'>; next?: number; count: number }
   | { op: 'detect'; detection: WireDetection }
   | { op: 'detect'; refused: WireOperationRefusal }
+  | { op: 'extent'; colsCss: number; rowsCss: number }
 
 /** Entries per values answer (P6, `VALUE_LIST_LIMITS.page`). */
 export const VALUES_ANSWER_ENTRIES = 500
@@ -370,6 +374,7 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
           }
           case 'values': return values(job, signal)
           case 'detect': return detect(job, signal)
+          case 'extent': throw new SheetViewFailed('extent is answered by the host')
         }
       })
     },

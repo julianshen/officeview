@@ -450,7 +450,25 @@ export class DocumentHost {
    * `DERIVED_VIEWS` per document (LRU). Both are released on `drop`. `contentPolicy` must be the entry's own.
    */
   sheetView(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', job: SheetViewJob): Promise<SheetViewReply> {
+    if (job.op === 'extent') return this.viewExtent(docKey, clock, contentPolicy, job)
     return this.viewJob(docKey, clock, contentPolicy, job)
+  }
+
+  /**
+   * Stage 4c (P9): the sheet's whole domain in CSS px under a session view and its sizes, from the geometry its tiles
+   * are painted over (`sizedGeometry` of the derived view), so the tile grid the socket bounds requests by is the one
+   * `renderTile` paints: a `'full'` filter that shows authored-hidden rows grows it, a filter that hides rows shrinks it.
+   */
+  private async viewExtent(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', job: Extract<SheetViewJob, { op: 'extent' }>): Promise<SheetViewReply> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if ((doc.contentPolicyId === 'full@1') !== (contentPolicy === 'full')) throw new RenderRefusal('bad-job', 'sheet-view: content policy')
+    const snap = await this.sheetSnapshot(docKey, job.sheetIndex, clock)
+    if (snap.geometry.kind !== 'ready') throw new RenderRefusal('bad-job', 'extent: sheet geometry unavailable')
+    const derived = isIdentityView(canonicalView(job.view)) ? undefined : await this.derivedView(docKey, job.sheetIndex, clock, job.view)
+    const geometry = derived || job.sizes.length ? this.sizedGeometry(docKey, snap, job.sizes, derived) : snap.geometry
+    if (geometry.kind !== 'ready') throw new RenderRefusal('bad-job', 'extent: sheet geometry unavailable')
+    return { op: 'extent', colsCss: geometry.metrics.cols.totalCss(), rowsCss: geometry.metrics.rows.totalCss() }
   }
 
   /**
