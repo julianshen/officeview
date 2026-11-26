@@ -90,6 +90,10 @@ export function sheetViewNext(job: SheetViewJob): CanonicalView {
 }
 /** A sheet-view job's admission charge: `orderBytes(next view) + 16 MiB`. */
 export const sheetViewJobBytes = (job: SheetViewJob) => orderBytes(sheetViewNext(job)) + SHEET_VIEW_JOB_BYTES
+/** Stage 4c (Task 6 fix round 1): a tile or sheet-text job under a sort or filter view may re-derive that view's order in
+ * the worker (a derived-view cache miss, not knowable here), so it is charged `orderBytes(view)` on top of its estimate;
+ * 0 for no view or the identity view. */
+const viewOrderBytes = (view: CanonicalView | undefined) => view ? orderBytes(view) : 0
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
 export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
 
@@ -416,10 +420,11 @@ export class Pool {
   }
 
   /** Stage 4b: one `sheet-text` op (find, copy, a11y, fit) over a sheet's text view, with the same affinity, admission,
-   * deadline and recycle paths as `sheetLayout`. Every job field but the routing is forwarded. */
+   * deadline and recycle paths as `sheetLayout`. Every job field but the routing is forwarded. Stage 4c: a job under a
+   * view is charged `bytesEstimate + orderBytes(view)` (`viewOrderBytes`). */
   async sheetText(sessionId: string, job: PoolSheetTextJob, bytesEstimate = SHEET_TEXT_JOB_BYTES, signal?: AbortSignal): Promise<SheetTextReply> {
     const { docRef, contentPolicy, clock, ...text } = job
-    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const admitted = await this.admit(sessionId, bytesEstimate + viewOrderBytes(job.view), signal)
     const slot = this.pick(docRef)
     try {
       return await this.exclusive(slot, async () => {
@@ -456,9 +461,10 @@ export class Pool {
   }
 
   /** Stage 4a (S4 §6.5): one canonical sheet tile, with the same affinity, admission, deadline and recycle paths as
-   * `render` (`bytesEstimate`: `TILE_BYTES_ESTIMATE`). The result carries the job's palette (F24). */
+   * `render` (`bytesEstimate`: `TILE_BYTES_ESTIMATE`; Stage 4c: plus `orderBytes(view)` under a view). The result carries the
+   * job's palette (F24). */
   async tile(sessionId: string, job: PoolTileJob, bytesEstimate: number, signal?: AbortSignal): Promise<RenderedTile> {
-    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const admitted = await this.admit(sessionId, bytesEstimate + viewOrderBytes(job.view), signal)
     const { docRef, contentPolicy, hangMs, crash, ...rest } = job
     const tile: TileJob = { sheetIndex: rest.sheetIndex, viewGen: rest.viewGen, zoomStep: rest.zoomStep, dpr: rest.dpr, palette: rest.palette, col: rest.col, row: rest.row, mark: rest.mark, clock: rest.clock && { day: rest.clock.day, timeZone: rest.clock.timeZone }, ...(rest.sizes !== undefined ? { sizes: rest.sizes } : {}), ...(rest.view !== undefined ? { view: rest.view } : {}) }
     const slot = this.pick(docRef)

@@ -32,7 +32,7 @@ import { DocumentHost } from '../src/render'
 import type { SheetClock } from '../src/sheet/clock'
 import type { SheetTextJob, SheetTextReply } from '../src/sheet/text-ops'
 import { TILE_PALETTE_COLORS, type TileJob } from '../src/sheet/tile'
-import type { CanonicalView, ResolvedFilter } from '../src/sheet/view-spec'
+import { orderBytes, type CanonicalView, type ResolvedFilter } from '../src/sheet/view-spec'
 import { absoluteAnchorXml, addDrawing, patchSheetXml, patchXlsx, rectShapeXml, SORT_GRID, sortGrid, sortGridScore } from './sheet-fixtures'
 
 const CLOCK: SheetClock = { day: '2026-11-23', timeZone: 'UTC' }
@@ -261,5 +261,26 @@ describe('tiles and text ops under the view (plan P9)', () => {
     // The zero-height row's cells stay blank under the sort (they moved display slot, not size).
     const hidden = { ...under, query: wordOf(SORT_GRID.zeroHeightRow + 1), matchCase: false }
     expect(findOf(await s.text({ ...hidden, view })).hits).toEqual([])
+  }, 30_000)
+
+  test('a job under a view is admitted with its order bytes', async () => {
+    // The worker's derived-view cache is not visible at admission, so any job under a non-identity view may re-derive
+    // the order: it is charged its estimate plus `orderBytes(view)`; an identity job is charged its estimate alone.
+    const pool = new Pool({ workers: 1 }); pools.push(pool)
+    await pool.open('grid', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    const admission = (pool as unknown as { admission: { request(sid: string, bytes: number, now: number): unknown } }).admission
+    const charged: number[] = []
+    const request = admission.request.bind(admission)
+    admission.request = (sid, bytes, now) => { charged.push(bytes); return request(sid, bytes, now) }
+    const view = sorted(sortOn(1, 'desc'))
+    const estimate = 4 * T * T * 2
+    await pool.tile('s1', { docRef: 'grid', contentPolicy: 'visible-only', ...tileJob(view) }, estimate)
+    await pool.tile('s1', { docRef: 'grid', contentPolicy: 'visible-only', ...tileJob(undefined, { viewGen: 0 }) }, estimate)
+    const route = { docRef: 'grid', contentPolicy: 'visible-only' as const, clock: CLOCK }
+    const find = { op: 'find' as const, query: 'N2', matchCase: false, sheetIndex: 0, sizes: [], limit: 5 }
+    await pool.sheetText('s1', { ...route, ...find, view }, 1000)
+    await pool.sheetText('s1', { ...route, ...find }, 1000)
+    expect(orderBytes(view)).toBeGreaterThan(0)
+    expect(charged).toEqual([estimate + orderBytes(view), estimate, 1000 + orderBytes(view), 1000])
   }, 30_000)
 })
