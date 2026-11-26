@@ -6,7 +6,8 @@
  * `textInputs` is the one place the ops get the local viewer's inputs (`InteractiveSheetDoc.tsx` find ~1814–1857 and
  * copy ~2611–2659): the row order, the row and column visibility, the store and the scope-aware display text. Fit
  * (ruling F4) reads only the view's sheet and geometry, with the base style, as the local fit does (it passes no
- * scope). No op reads a clock: the session clock is in the job and the view.
+ * scope). No op reads a clock: the session clock is in the job and the view. Stage 4c (P9): a job's `view` is the
+ * session's sort and filter view; its text view carries the derived order and visibility, which `textInputs` reads.
  */
 import type { Box, WireSelection } from '../../../src/stream/sheet-wire'
 import { formatCellPresentation } from '../../../src/components/xlsx/formatPresentation'
@@ -27,14 +28,16 @@ import { cellDisplayText } from '../../../src/xlsx/render'
 import type { XlsxCell, XlsxDocument } from '../../../src/xlsx/types'
 import type { WorkbookSource } from '../../../src/worker/viewerSession'
 import { textDocument, type TextView } from './text-view'
+import type { CanonicalView } from './view-spec'
 import type { WireSizes } from './view-state'
 
+/** Stage 4c (P9): `view` is the session's sort and filter view of the sheet (absent: the identity view). */
 export type SheetTextJob =
-  | { op: 'find'; query: string; matchCase: boolean; sheetIndex: number; sizes: WireSizes; limit: number }
-  | { op: 'copy'; sheetIndex: number; selection: WireSelection; sizes: WireSizes; maxBytes: number }
-  | { op: 'a11y'; sheetIndex: number; rows: Array<[number, number]>; cols: [number, number]; sizes: WireSizes }
+  | { op: 'find'; query: string; matchCase: boolean; sheetIndex: number; sizes: WireSizes; limit: number; view?: CanonicalView }
+  | { op: 'copy'; sheetIndex: number; selection: WireSelection; sizes: WireSizes; maxBytes: number; view?: CanonicalView }
+  | { op: 'a11y'; sheetIndex: number; rows: Array<[number, number]>; cols: [number, number]; sizes: WireSizes; view?: CanonicalView }
   /** `regions` absent (never `[]`): `autoFitSize` then treats the pane as the one visible region, as the local fit does. */
-  | { op: 'fit'; sheetIndex: number; axis: 'row' | 'col'; index: number; pane: Box; regions?: Box[]; sizes: WireSizes }
+  | { op: 'fit'; sheetIndex: number; axis: 'row' | 'col'; index: number; pane: Box; regions?: Box[]; sizes: WireSizes; view?: CanonicalView }
 export type SheetTextReply =
   | { op: 'find'; hits: Array<[number, number]>; more: boolean } // [row, col] in local order; more: hits past `limit`
   | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; bytes: number }
@@ -49,9 +52,9 @@ export const FIT_MEASURE_BYTES = 16 * 1024 * 1024
  * sheet `view.sheetIndex` is `view.sheet`). */
 export interface TextInputs {
   sheetId: string
-  /** 4b has no sort: the identity order (display row = source row). */
+  /** The identity order (display row = source row), or the derived view's (Stage 4c). */
   order: RowOrder
-  /** Display-space row visibility: the authored hidden rows (4b has no filter). */
+  /** Display-space row visibility: the authored hidden rows, or the derived view's (Stage 4c: filter and C1). */
   visibility: RowVisibility
   /** Column visibility: the collapsed (zero-width) columns of the view's geometry are hidden. */
   columns: RowVisibility
@@ -70,12 +73,13 @@ function cellOf(view: TextView, row: number, col: number): XlsxCell | undefined 
   return view.geometry.cellsOf(row)?.find((c) => c.col === col)
 }
 
-export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
+/** Without `derived`, 4b's inputs: the identity order and the authored visibility. With it (Stage 4c, P9: the session's
+ * sort and filter view), its order and display-space visibility. */
+export function textInputs(view: TextView, source: WorkbookSource, derived?: { order: RowOrder; visibility: RowVisibility }): TextInputs {
   const entry = source.sheets[view.sheetIndex]
   if (!entry) throw new RangeError(`text view sheet ${view.sheetIndex} is not in the source`)
   const sheetId = entry.sheetId
-  const order = createIdentityOrder()
-  const authored = source.geometry(sheetId).baseHidden.intervals.map(({ r0, r1 }) => ({ r0: order.sourceToDisplay(r0), r1: order.sourceToDisplay(r1) }))
+  const order = derived?.order ?? createIdentityOrder()
   const hiddenCols: Array<{ r0: number; r1: number }> = []
   let colCount = 0
   if (view.geometry.kind === 'ready') {
@@ -86,7 +90,7 @@ export function textInputs(view: TextView, source: WorkbookSource): TextInputs {
   const styleOf = (cell: Pick<XlsxCell, 'row' | 'col'>) => view.styleAt(cell.row, cell.col, cellOf(view, cell.row, cell.col)?.style)
   return {
     sheetId, order,
-    visibility: visibilityFromHidden(createIntervalSet(authored)),
+    visibility: derived?.visibility ?? visibilityFromHidden(createIntervalSet(source.geometry(sheetId).baseHidden.intervals.map(({ r0, r1 }) => ({ r0, r1 })))),
     columns: visibilityFromHidden(createIntervalSet(hiddenCols), colCount),
     store: () => source.store(sheetId),
     findStore: () => withUnavailableFormulas(source.store(sheetId)),
@@ -151,15 +155,16 @@ function borrowed(scope: EffectiveFormatScope): EffectiveFormatScope {
 
 /**
  * One sheet's find (P6): local `WorkbookFind` over an object source of the text document (`workbook` with this sheet
- * replaced by its view), restricted to this sheet, with the local viewer's inputs (`textInputs`): the identity order,
- * the authored row visibility, `isColumnVisible` from the view's column sizes, the CF-effective `textOf`, and the
+ * replaced by its view), restricted to this sheet, with the local viewer's inputs (`textInputs`): the identity order
+ * and the authored row visibility (Stage 4c: the view's derived order and visibility, so a row the session's filter
+ * hides never matches, as local find; Open item 2), `isColumnVisible` from the view's column sizes, the CF-effective `textOf`, and the
  * view's CF scope from `prepareScope`. Pages (`FIND_PAGE_HITS` each) are pulled until the find completes or holds more
  * than `limit` hits, so `more` is exact (`limit` 0 asks only whether any hit exists). Hits are `[row, col]`, in local
  * order. A source failure fails the job (never a silently partial answer).
  */
 export async function findAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'find' }>, workbook: XlsxDocument): Promise<{ hits: Array<[number, number]>; more: boolean }> {
   const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), FIND_DOC_ID)
-  const inputs = textInputs(view, source)
+  const inputs = textInputs(view, source, view.derived)
   const { sheetId } = inputs
   const owner = initialWorkbookOwner(FIND_DOC_ID, source.sheets)
   const v = owner.sheetVector.find((e) => e.sheetId === sheetId)!
@@ -204,7 +209,8 @@ const COPY_DOC_ID = 'sheet-copy'
 /**
  * One sheet's copy (P8): local `serializeSelection` over an object source of the text document, with the local copy's
  * inputs (`textInputs`): the plain store (local copy does not mark unavailable formulas; such a cell refuses the copy
- * as locally), the identity order, the authored row visibility, the zero-width columns hidden, the CF-effective
+ * as locally), the identity order and the authored row visibility (Stage 4c: the view's derived ones), the zero-width
+ * columns hidden, the CF-effective
  * `textOf`, and the view's CF scope (lent: the engine disposes each batch's scope). A withheld cell is blank in the view,
  * so it is an empty field. `paragraphs` counts the non-empty fields (each selected cell is read and formatted once).
  *
@@ -214,7 +220,7 @@ const COPY_DOC_ID = 'sheet-copy'
  */
 export async function copyAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'copy' }>, workbook: XlsxDocument): Promise<Extract<SheetTextReply, { op: 'copy' }>> {
   const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), COPY_DOC_ID)
-  const inputs = textInputs(view, source)
+  const inputs = textInputs(view, source, view.derived)
   const store = inputs.store()
   const owner = initialWorkbookOwner(COPY_DOC_ID, source.sheets)
   const v = owner.sheetVector.find((e) => e.sheetId === inputs.sheetId)!
@@ -243,7 +249,7 @@ export const A11Y_FORMAT_BYTES = 16 * 1024 * 1024
 const A11Y_DOC_ID = 'sheet-a11y'
 
 /**
- * One window's a11y text (P10): each cell the local grid would present (the authored-visible rows and the non-zero-width
+ * One window's a11y text (P10): each cell the local grid would present (the visible rows, Stage 4c: of the view, and the non-zero-width
  * columns of the window, from `textInputs`), as local `presentCell` gives it (`InteractiveSheetDoc.tsx` ~274–282):
  * `formatCellPresentation(view.sheet, cell, budget, false, cf)` over the cell with its painted (region-resolved) style,
  * where `cf` is the view's CF scope's effective style over that style. Without a scope the painted style still applies:
@@ -256,7 +262,7 @@ export function a11yAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'a11
   const geometry = view.geometry
   if (geometry.kind !== 'ready') throw new Error('sheet-a11y: sheet geometry unavailable')
   const source = createObjectWorkbookSource(textDocument(workbook, new Map([[view.sheetIndex, view]])), A11Y_DOC_ID)
-  const inputs = textInputs(view, source)
+  const inputs = textInputs(view, source, view.derived)
   const budget = jobBudget(A11Y_FORMAT_BYTES)
   const scope = view.scope
   const [c0, c1] = job.cols
@@ -281,19 +287,19 @@ export function a11yAnswer(view: TextView, job: Extract<SheetTextJob, { op: 'a11
 
 /** Runs one `sheet-text` op over the text view of `job.sheetIndex` at `job.sizes` (`viewOf`: the host's cached views;
  * `workbook`: the servable workbook the text document is built over). */
-export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes) => Promise<TextView>; workbook: () => XlsxDocument; createCanvas: () => CanvasLike }): Promise<SheetTextReply> {
+export async function answerSheetText(job: SheetTextJob, deps: { viewOf: (sheetIndex: number, sizes: WireSizes, view?: CanonicalView) => Promise<TextView>; workbook: () => XlsxDocument; createCanvas: () => CanvasLike }): Promise<SheetTextReply> {
   switch (job.op) {
-    case 'fit': return { op: 'fit', size: fitAnswer(await deps.viewOf(job.sheetIndex, job.sizes), job, deps.createCanvas) }
+    case 'fit': return { op: 'fit', size: fitAnswer(await deps.viewOf(job.sheetIndex, job.sizes, job.view), job, deps.createCanvas) }
     case 'find': {
-      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      const view = await deps.viewOf(job.sheetIndex, job.sizes, job.view)
       return { op: 'find', ...await findAnswer(view, job, deps.workbook()) }
     }
     case 'copy': {
-      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      const view = await deps.viewOf(job.sheetIndex, job.sizes, job.view)
       return await copyAnswer(view, job, deps.workbook())
     }
     case 'a11y': {
-      const view = await deps.viewOf(job.sheetIndex, job.sizes)
+      const view = await deps.viewOf(job.sheetIndex, job.sizes, job.view)
       return { op: 'a11y', cells: a11yAnswer(view, job, deps.workbook()) }
     }
     default: {
