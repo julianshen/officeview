@@ -53,7 +53,7 @@ describe('sheet-view@1 handshake', () => {
     const both = await open(h, BOTH)
     expect(both.m.sheetMode).toBe('tiles')
     expect(both.m.sheetView).toBe(1)
-    expect(Object.keys(both.m).sort()).toEqual([...TILES_KEYS, 'sheetView'].sort())
+    expect(Object.keys(both.m).sort()).toEqual([...TILES_KEYS, 'sheetView', 'sheetSort'].sort())
     // 4a: sheet-tiles@1 alone is key for key the 4a manifest.
     const t = await open(h, TILES)
     expect(t.m.sheetMode).toBe('tiles')

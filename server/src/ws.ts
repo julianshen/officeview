@@ -14,6 +14,7 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { AssetTooLarge, encodeAssets } from '../../src/stream/asset-wire'
 import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
 import { encodeManifest, MEDIA_AUDIO_CAPS, type Manifest } from '../../src/stream/manifest'
+import { VIEWER_COMMAND_KINDS } from '../../src/worker/viewerProtocol'
 import { bindMedia, mediaIdentity, sessionMediaId } from './media/bind'
 import type { FfmpegInfo } from './media/ffmpeg'
 import { mediaJobsFor, type MediaItem } from './media/jobs'
@@ -63,6 +64,7 @@ export const CLOSE = {
 } as const
 export type CloseName = keyof typeof CLOSE
 export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted' | 'unsupported-op' | 'stale-view' | 'layout-too-large' | 'hidden-target' | 'coverage-unknown' | 'view-state-limit'
+  | 'stale-filter-values' | 'filter-condition-refused' | 'pivot-refused' | 'server-prepared' | 'stream-no-cell-data' | 'view-refused' | 'cancelled'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
 /**
@@ -95,6 +97,18 @@ const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 
 const SHEET_VIEW_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y', 'sheet-fit', 'sheet-resize'])
 /** Stage 4b: the SHEET_VIEW_OPS that ride the `'text'` rate class (the rest ride `'sheet'`). */
 const SHEET_TEXT_OPS: ReadonlySet<string> = new Set(['sheet-find', 'sheet-copy', 'sheet-a11y'])
+/** Stage 4c (P1): the ops served only to a `sheetView` session; every other session refuses them `unsupported-op`, uncharged. */
+const SHEET_SORT_OPS: ReadonlySet<string> = new Set(['sheet-sort', 'sheet-filter', 'filter-values', 'range-detect', 'sheet-order'])
+/**
+ * Stage 4c (P14): the local worker's command kinds a stream never serves, refused in every mode before the mode checks:
+ * every pivot and control kind (by prefix, so a later one is refused too) `pivot-refused`, `prepareColumns`
+ * `server-prepared` and `read` `stream-no-cell-data`.
+ */
+export const WORKER_KIND_REFUSALS: ReadonlyMap<string, RefusalCode> = new Map(VIEWER_COMMAND_KINDS.flatMap((k): Array<[string, RefusalCode]> =>
+  k.startsWith('pivot') || k.startsWith('control') ? [[k, 'pivot-refused']]
+    : k === 'prepareColumns' ? [[k, 'server-prepared']]
+      : k === 'read' ? [[k, 'stream-no-cell-data']]
+        : []))
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -544,6 +558,8 @@ export function createStreamServer(o: StreamServerOptions) {
         tiles: { px: TILE_PX, zoomSteps: [...TILE_ZOOM_STEPS], dprs: [...TILE_DPRS], palettes: [...TILE_PALETTES], maxBatch: TILE_BATCH_MAX },
         // Stage 4b (P1): only when the client asked for `sheet-view@1` (a 4a-opted session gets 4a's manifest, key for key).
         ...(sd.sheetView ? { sheetView: 1 as const } : {}),
+        // Stage 4c (P1): every sheetView session is served sort and filter; typed number and date conditions only under 'full'.
+        ...(sd.sheetView ? { sheetSort: 1 as const, ...(p.contentPolicy === 'full' ? { typedFilters: true as const } : {}) } : {}),
       } : {}),
     }
     ws.data.phase = 'manifest'
@@ -1776,6 +1792,9 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'relax' || 'policy' in m || 'projection' in m || 'contentPolicy' in m) return close(ws, 'policy-refused')
     if (ws.data.phase === 'opening') return refuse(ws, m.reqId, 'policy-refused')
     if (m.type === 'ready') return onReady(ws, m)
+    // Stage 4c (P14): the worker-only kinds are refused in every mode, with no token.
+    const workerRefusal = WORKER_KIND_REFUSALS.get(m.type as string)
+    if (workerRefusal) return refuse(ws, m.reqId, workerRefusal)
     // Stage 4a (R6): an XLSX tiles session serves no unit or Stage 3 text op (each would render units); print works.
     const mode = ws.data.sid ? sessionDoc.get(ws.data.sid)?.sheetMode : undefined
     if (mode === 'tiles' && TILES_REFUSED.has(m.type as string)) return refuse(ws, m.reqId, 'unsupported-op')
@@ -1785,6 +1804,8 @@ export function createStreamServer(o: StreamServerOptions) {
       if (SHEET_TEXT_OPS.has(m.type as string) && ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, m.reqId, 'rate-limited')
       return refuse(ws, m.reqId, 'unsupported-op')
     }
+    // Stage 4c (P1): the sort and filter ops need `sheetView`, like off-mode fit and resize, uncharged.
+    if (SHEET_SORT_OPS.has(m.type as string) && !sessionDoc.get(ws.data.sid ?? '')?.sheetView) return refuse(ws, m.reqId, 'unsupported-op')
     // The tile ops (never served in units mode): `sheet-layout` (Task 6), `tiles` and `sheet-cancel` (Task 9).
     if (m.type === 'tiles' || m.type === 'sheet-layout' || m.type === 'sheet-cancel') {
       if (mode !== 'tiles') return refuse(ws, m.reqId, 'unsupported-op')

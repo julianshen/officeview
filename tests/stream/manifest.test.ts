@@ -189,3 +189,42 @@ describe('MANIFEST sheetView (Stage 4b)', () => {
     expect(validateManifest({ ...exampleManifest(), sheetView: 1 })).toEqual({ ok: false, field: 'sheetView' })
   })
 })
+
+describe('MANIFEST sheetSort and typedFilters (Stage 4c)', () => {
+  const TILES = () => ({ px: 512, zoomSteps: [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4], dprs: [1, 2], palettes: ['light', 'dark'], maxBatch: 64 })
+  const viewManifest = () => ({ ...exampleManifest(), kind: 'xlsx' as const, sheetMode: 'tiles' as const, sheets: [{ sheetId: '0', name: 'First' }], tiles: TILES(), sheetView: 1 as const })
+  it('sheetSort: 1 with sheetView passes', () => {
+    const v = validateManifest({ ...viewManifest(), sheetSort: 1 })
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.sheetSort).toBe(1)
+    expect('typedFilters' in v.manifest).toBe(false)
+  })
+  it('typedFilters: true with sheetSort passes', () => {
+    const v = validateManifest({ ...viewManifest(), sheetSort: 1, typedFilters: true })
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.manifest.typedFilters).toBe(true)
+  })
+  it('an absent sheetSort is undefined, and the key is absent', () => {
+    const v = validateManifest(viewManifest())
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect('sheetSort' in v.manifest).toBe(false)
+    expect('typedFilters' in v.manifest).toBe(false)
+  })
+  it('sheetSort: 1 without sheetView rejects the manifest', () => {
+    const { sheetView: _, ...tiles } = viewManifest()
+    expect(validateManifest({ ...tiles, sheetSort: 1 })).toEqual({ ok: false, field: 'sheetSort' })
+    expect(validateManifest({ ...exampleManifest(), sheetSort: 1 })).toEqual({ ok: false, field: 'sheetSort' })
+  })
+  it('typedFilters: true without sheetSort rejects the manifest', () => {
+    expect(validateManifest({ ...viewManifest(), typedFilters: true })).toEqual({ ok: false, field: 'typedFilters' })
+  })
+  it.each([[2], [0], [true], ['1'], [null]])('sheetSort %p rejects the manifest', (sheetSort) => {
+    expect(validateManifest({ ...viewManifest(), sheetSort })).toEqual({ ok: false, field: 'sheetSort' })
+  })
+  it.each([[false], [1], ['true'], [null]])('typedFilters %p rejects the manifest', (typedFilters) => {
+    expect(validateManifest({ ...viewManifest(), sheetSort: 1, typedFilters })).toEqual({ ok: false, field: 'typedFilters' })
+  })
+})
