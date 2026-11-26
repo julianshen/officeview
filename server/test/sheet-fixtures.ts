@@ -1055,3 +1055,19 @@ export async function paintedFormats(): Promise<Uint8Array> {
     await addTable(zip, 0, 1, `<table xmlns="${SPREADSHEET_NS}" id="1" name="Kilo" displayName="Kilo" ref="B1:B4" headerRowCount="1" totalsRowCount="0"><tableColumns count="1"><tableColumn id="1" name="AMT"/></tableColumns><tableStyleInfo name="OVKilo" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>`)
   }, { cols: '<col min="4" max="4" width="9" style="3" customWidth="1"/>' })
 }
+
+// ---- Stage 4c Task 5: the display-text merge fixture ----------------------------------------------------------
+
+/** `displayMerge`: B2 and B3 (1-based) hold 1200 and 1204 under `0.0,"K"`, which paints both `1.2K`. */
+export const DISPLAY_MERGE = Object.freeze({ refs: Object.freeze(['B2', 'B3']), values: Object.freeze([1200, 1204]), label: '1.2K' })
+/** `sortGrid` with B2 = 1200 and B3 = 1204 under `0.0,"K"` (style 5). */
+export async function displayMerge(): Promise<Uint8Array> {
+  return sortGridBook({
+    numFmts: { 168: '0.0,&quot;K&quot;' },
+    xfs: ['<xf numFmtId="168" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'],
+    cell: (ref) => {
+      const i = DISPLAY_MERGE.refs.indexOf(ref)
+      return i < 0 ? undefined : { ref, v: DISPLAY_MERGE.values[i]!, style: 5 }
+    },
+  })
+}

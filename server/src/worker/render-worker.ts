@@ -10,6 +10,7 @@ import type { TextJob } from '../text/served'
 import type { SheetClock } from '../sheet/clock'
 import type { TileJob } from '../sheet/tile'
 import type { SheetTextJob } from '../sheet/text-ops'
+import type { SheetViewJob } from '../sheet/view-ops'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -50,6 +51,8 @@ export type WorkerRequest =
   | { type: 'tile'; id: number; docKey: string; job: TileJob; hangMs?: number; crash?: boolean }
   /** Stage 4b (P2, P9): one text op (find, copy, a11y, fit) over a sheet's text view under the session clock. */
   | { type: 'sheet-text'; id: number; docKey: string; clock: SheetClock; job: SheetTextJob }
+  /** Stage 4c (P3, P6): one sort, filter, derive, value-list or range-detect job over a sheet's key view. */
+  | { type: 'sheet-view'; id: number; docKey: string; clock: SheetClock; contentPolicy: 'visible-only' | 'full'; job: SheetViewJob }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -110,6 +113,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     // Before the final `else`: an unlisted type would fall through to `render`.
     else if (m.type === 'layout') result = await host.sheetLayout(m.docKey, m.sheetIndex, m.clock)
     else if (m.type === 'sheet-text') result = await host.sheetText(m.docKey, m.clock, m.job)
+    // A derived view's order is cached here: its buffers are copied, never transferred.
+    else if (m.type === 'sheet-view') result = await host.sheetView(m.docKey, m.clock, m.contentPolicy, m.job)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }

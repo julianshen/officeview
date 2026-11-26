@@ -26,6 +26,8 @@ import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import type { SheetClock } from './sheet/clock'
 import type { RenderedTile, TileJob } from './sheet/tile'
 import type { SheetTextJob, SheetTextReply } from './sheet/text-ops'
+import type { SheetViewJob, SheetViewReply } from './sheet/view-ops'
+import { canonicalView, orderBytes, type CanonicalView } from './sheet/view-spec'
 import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
@@ -73,6 +75,21 @@ export type PoolSheetTextJob = { docRef: string; contentPolicy: 'visible-only' |
  * fit's measurement scratch (`FIT_MEASURE_BYTES`, 16 MiB, in `sheet/text-ops.ts`, not imported here: the pool thread
  * never loads the text engines). */
 export const SHEET_TEXT_JOB_BYTES = LAYOUT_JOB_BYTES + 16 * 1024 * 1024
+/** Stage 4c: a `sheet-view` job on the docRef's worker: one sort, filter, derive, value-list or range-detect op. */
+export type PoolSheetViewJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; clock: SheetClock } & SheetViewJob
+/** The fixed part of a sheet-view job's admission charge (the key view, the port and the engine's working set). */
+export const SHEET_VIEW_JOB_BYTES = 16 * 1024 * 1024
+/** The view a sheet-view job leaves (P3: a sort sets `sortFilter := base.filter`, a filter keeps the sort). */
+export function sheetViewNext(job: SheetViewJob): CanonicalView {
+  switch (job.op) {
+    case 'derive': case 'values': return job.view
+    case 'sort': return canonicalView(job.sort ? { sort: job.sort, sortFilter: job.base.filter, filter: job.base.filter } : { sort: null, sortFilter: null, filter: job.base.filter })
+    case 'filter': return canonicalView({ sort: job.base.sort, sortFilter: job.base.sortFilter, filter: job.filter })
+    case 'detect': return { sort: null, sortFilter: null, filter: null }
+  }
+}
+/** A sheet-view job's admission charge: `orderBytes(next view) + 16 MiB`. */
+export const sheetViewJobBytes = (job: SheetViewJob) => orderBytes(sheetViewNext(job)) + SHEET_VIEW_JOB_BYTES
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
 export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
 
@@ -412,6 +429,26 @@ export class Pool {
         const r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetTextReply
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** Stage 4c: one `sheet-view` job, with the same affinity, admission, deadline and recycle paths as `sheetText`.
+   * `bytesEstimate` defaults to `sheetViewJobBytes`. */
+  async sheetView(sessionId: string, job: PoolSheetViewJob, bytesEstimate?: number, signal?: AbortSignal): Promise<SheetViewReply> {
+    const { docRef, contentPolicy, clock, ...view } = job
+    const admitted = await this.admit(sessionId, bytesEstimate ?? sheetViewJobBytes(view as SheetViewJob), signal)
+    const slot = this.pick(docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+        if (signal?.aborted) throw new ShowCancelled()
+        const r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob })
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r as SheetViewReply
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)

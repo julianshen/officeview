@@ -24,6 +24,9 @@ import { TILE_PALETTE_COLORS, tileJobProblem, tileLimit, type RenderedTile, type
 import { sessionSizesOf, type WireSizes } from './sheet/view-state'
 import { sheetTextView, type TextView } from './sheet/text-view'
 import { answerSheetText, type SheetTextJob, type SheetTextReply } from './sheet/text-ops'
+import { keyDocument, sheetKeyView, type KeyView } from './sheet/key-view'
+import { openSheetViewPort, type DerivedCache, type DerivedView, type SheetViewJob, type SheetViewPort, type SheetViewReply } from './sheet/view-ops'
+import { canonicalViewHash } from './sheet/view-spec'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import { TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
 import { renderSheetViewport } from '../../src/xlsx/view/renderViewport'
@@ -76,6 +79,12 @@ export const TEXT_VIEWS = 16
 /** Stage 4b: the formatting bytes (CF text scopes) one document's text views may hold together; past it a scope is
  * unavailable, and its sqrefs are blank in the view (P4, fail closed). */
 export const TEXT_VIEW_FORMAT_BYTES = 64 * 1024 * 1024
+/** Stage 4c (P3): `sheet-view` ports kept per document (LRU, by `(sheetIndex, clock)`), disposed on eviction and `drop`. */
+export const SHEET_VIEW_PORTS = 4
+/** Stage 4c (P3): derived views kept per document (LRU, by `(sheetIndex, clock, canonical hash)`), dropped on `drop`. */
+export const DERIVED_VIEWS = 8
+/** One cached `sheet-view` port: `uses` counts the jobs holding it; one evicted while held is disposed by its last user. */
+interface SheetViewEntry { port: Promise<{ port: SheetViewPort; keyView: KeyView }>; uses: number; evicted: boolean }
 /** The canonical hash of session sizes, shared by the sized-geometry and text-view keys. */
 const sizesHash = (sizes: WireSizes) => createHash('sha256').update(JSON.stringify(sizes.map((e) => [e.axis, e.index, e.px]))).digest('hex')
 /** One cached text view: `uses` counts the jobs holding it; an entry evicted while held is released by its last user. */
@@ -128,7 +137,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4b: the snapshot geometries at session sizes, by `snapshot key|sha256(sizes)`, at most `SIZED_GEOMETRIES` (LRU), released on `drop`. */ sizedGeometries?: Map<string, SheetGeometryResult>; /** Stage 4b: text views by `snapshot key|sha256(sizes)`, at most `TEXT_VIEWS` (LRU). */ textViews?: Map<string, TextViewEntry>; /** Stage 4b: the formatting budget every text view of the entry reserves from. */ textBudget?: FormatBudget; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; /** Absent until built: an XLSX entry opened first in tiles mode builds them on its first units use (R5). */ paintables?: PaintableArray; /** The single in-flight lazy build of `paintables`. */ paintablesBuild?: Promise<PaintableArray>; /** Stage 4a (R5): an XLSX entry's projected parse (engine values), retained for the lazy units paintables. */ parsed?: XlsxDocument; /** Stage 4a (F1): the projected package's saved-values parse (`valuePolicy 'cached'`), built by a tiles-mode open; every sheet snapshot reads it, never `parsed`. */ savedParse?: XlsxDocument; /** The single in-flight build of `savedParse` for a tiles open joining a units-created entry. */ savedParseBuild?: Promise<XlsxDocument>; /** Sheet snapshots by `sheetIndex|day|timeZone`, one promise each, released on `drop`. */ snapshots?: Map<string, Promise<SheetSnapshot>>; /** Each saved-parse sheet's coverage and blanked copy, computed once (clock-free) and shared by every snapshot's view. */ servable?: Map<number, ServableSheet>; /** One bounded text-layout cache per snapshot key, shared by its tiles (a layout is a pure function of its key). */ tileLayouts?: Map<string, LayoutCache>; /** Stage 4b: the snapshot geometries at session sizes, by `snapshot key|sha256(sizes)`, at most `SIZED_GEOMETRIES` (LRU), released on `drop`. */ sizedGeometries?: Map<string, SheetGeometryResult>; /** Stage 4b: text views by `snapshot key|sha256(sizes)`, at most `TEXT_VIEWS` (LRU). */ textViews?: Map<string, TextViewEntry>; /** Stage 4b: the formatting budget every text view of the entry reserves from. */ textBudget?: FormatBudget; /** Stage 4c: `sheet-view` ports by `sheetIndex|day|timeZone`, at most `SHEET_VIEW_PORTS` (LRU). */ viewPorts?: Map<string, SheetViewEntry>; /** Stage 4c: derived views by `port key|canonical hash`, at most `DERIVED_VIEWS` (LRU). */ derivedViews?: Map<string, DerivedView>; /** Stage 4a: an XLSX entry's projected (visible) sheet names in tab order. */ sheets?: readonly string[]; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 /** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
@@ -215,6 +224,14 @@ export function tilesUnits(units: readonly UnitSize[]): UnitSize[] {
 function evictTextView(e: TextViewEntry): void {
   e.evicted = true
   if (e.uses === 0) e.view.then((v) => v.release(), () => undefined)
+}
+/** Marks `e` evicted; its port is disposed (and its key view released) now if no job holds it, else by the last job. */
+function evictViewPort(e: SheetViewEntry): void {
+  e.evicted = true
+  if (e.uses === 0) void closeViewPort(e)
+}
+function closeViewPort(e: SheetViewEntry): Promise<void> {
+  return e.port.then(async ({ port, keyView }) => { try { await port.dispose() } finally { keyView.release() } }, () => undefined)
 }
 /** A formatting budget that refuses (throws) past `max` bytes held. */
 function boundedBudget(max: number): FormatBudget {
@@ -424,6 +441,75 @@ export class DocumentHost {
     }
   }
 
+  /**
+   * Stage 4c (P3, P5, P6): one `sheet-view` job (derive, sort, filter, value list, range detection) through the local
+   * engine over the key view of its sheet under the session clock. One port per `(sheetIndex, clock)`, at most
+   * `SHEET_VIEW_PORTS` per document (LRU); derived views per `(sheetIndex, clock, canonical hash)`, at most
+   * `DERIVED_VIEWS` per document (LRU). Both are released on `drop`. `contentPolicy` must be the entry's own.
+   */
+  async sheetView(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', job: SheetViewJob): Promise<SheetViewReply> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if ((doc.contentPolicyId === 'full@1') !== (contentPolicy === 'full')) throw new RenderRefusal('bad-job', 'sheet-view: content policy')
+    const portKey = `${job.sheetIndex}|${clock.day}|${clock.timeZone}`
+    const e = this.viewPortEntry(doc, docKey, portKey, job.sheetIndex, clock, contentPolicy)
+    e.uses++
+    try {
+      const { port } = await e.port
+      const derived = doc.derivedViews ??= new Map()
+      const cache: DerivedCache = {
+        get: (view) => {
+          const key = `${portKey}|${canonicalViewHash(view)}`
+          const hit = derived.get(key)
+          if (hit) { derived.delete(key); derived.set(key, hit) }
+          return hit
+        },
+        put: (d) => {
+          if (this.docs.get(docKey) !== doc) return
+          const key = `${portKey}|${canonicalViewHash(d.view)}`
+          derived.delete(key)
+          derived.set(key, d)
+          while (derived.size > DERIVED_VIEWS) derived.delete(derived.keys().next().value!)
+        },
+      }
+      return await port.job(job, cache)
+    } finally {
+      if (--e.uses === 0 && e.evicted) void closeViewPort(e)
+    }
+  }
+
+  /** The cached `sheet-view` port of `(sheetIndex, clock)`, built on a miss (a failed build is not kept). */
+  private viewPortEntry(doc: OpenDoc, docKey: string, key: string, sheetIndex: number, clock: SheetClock, policy: 'visible-only' | 'full'): SheetViewEntry {
+    const ports = doc.viewPorts ??= new Map()
+    const hit = ports.get(key)
+    if (hit) { ports.delete(key); ports.set(key, hit); return hit }
+    const budget = doc.textBudget ??= boundedBudget(TEXT_VIEW_FORMAT_BYTES)
+    const entry: SheetViewEntry = { uses: 0, evicted: false, port: this.sheetSnapshot(docKey, sheetIndex, clock).then(async (snap) => {
+      const saved = doc.savedParse
+      if (!saved || this.docs.get(docKey) !== doc) throw new RenderRefusal('unknown-doc')
+      const workbook = this.servableWorkbook(doc, saved)
+      const keyView = await sheetKeyView(snap, saved.sheets[sheetIndex]!, { workbook, clock, budget })
+      let port: SheetViewPort
+      try {
+        port = await openSheetViewPort({ sheetIndex, policy, clock, doc: keyDocument(workbook, new Map([[sheetIndex, keyView]])), geometry: snap.geometry })
+      } catch (e) { keyView.release(); throw e }
+      // Dropped while building: nothing else will dispose it.
+      if (this.docs.get(docKey) !== doc) {
+        try { await port.dispose() } finally { keyView.release() }
+        throw new RenderRefusal('unknown-doc')
+      }
+      return { port, keyView }
+    }) }
+    ports.set(key, entry)
+    entry.port.catch(() => { if (ports.get(key) === entry) ports.delete(key) })
+    while (ports.size > SHEET_VIEW_PORTS) {
+      const [oldKey, old] = ports.entries().next().value!
+      ports.delete(oldKey)
+      evictViewPort(old)
+    }
+    return entry
+  }
+
   /** The cached text view entry of `(sheetIndex, clock, sizes)`, built on a miss (a failed build is not kept). */
   private textViewEntry(docKey: string, sheetIndex: number, clock: SheetClock, sizes: WireSizes): TextViewEntry {
     const doc = this.docs.get(docKey)
@@ -554,6 +640,9 @@ export class DocumentHost {
       d.sizedGeometries?.clear()
       for (const e of d.textViews?.values() ?? []) evictTextView(e)
       d.textViews?.clear()
+      for (const e of d.viewPorts?.values() ?? []) evictViewPort(e)
+      d.viewPorts?.clear()
+      d.derivedViews?.clear()
     }
     this.served.drop(docKey)
   }
