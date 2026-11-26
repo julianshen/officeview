@@ -2817,9 +2817,11 @@ export class DocumentSession {
   /** Populated-cell feed for outside-column guards over resident readRows pages.
    * Honors the caller's per-page limit: a store page larger than the limit is
    * served in slices, resuming at an offset within that same store page. With a
-   * slice, each served page (at most 200 source rows) steps the shared budget. */
+   * slice, each served page (at most 200 source rows) steps the shared budget.
+   * Each store page is settled once its cells are copied out: its admission
+   * charge ends with the read, not when the collector reclaims the page. */
   populatedSource(sheetId: string, signal: AbortSignal, slice?: CooperativeSlice<string>): PopulatedCellSource {
-    const store = this.store(sheetId)
+    const store = this.store(sheetId), backing = this.source.store(sheetId)
     return {
       async iterate(range, cursor, limit) {
         if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) throw new RangeError('Invalid populated page limit')
@@ -2837,6 +2839,7 @@ export class DocumentSession {
           .filter(cell => cell.value !== null || cell.formula !== undefined)
           .map(cell => ({ row: cell.row, col: cell.col })))
         const complete = page.completeness === 'complete' && page.error === undefined
+        backing.settle?.(page)
         if (!complete) return { items: [], completeness: 'incomplete', missing: [range] }
         const end = limit === undefined ? all.length : Math.min(all.length, skip + limit)
         const items = all.slice(skip, end)
