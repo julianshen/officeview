@@ -22,7 +22,6 @@
  */
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
 import { withExactCfEvidence } from '../../src/xlsx/cf/evidence'
-import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/verifiedCapabilities'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -1235,23 +1234,8 @@ const exportedSet = (text: string | undefined, name: string): string[] | undefin
  * Stage-1-only rendering once dropped `VERIFIED_STAGE2_CAPABILITIES` and broke `evidence.ts`). Stage 3 is published only
  * with `publishStage3` (Ruling S3-WRITE, Task 23); otherwise its committed export, or its absence, is kept verbatim.
  */
-/**
- * The ids a pending `verifiedCapabilities.ts` source publishes in VERIFIED_CAPABILITIES, for judging the Stage 5 records under
- * the evidence about to be written. Fails closed: throws when the declaration is missing, lists no id, or drops an id of the
- * committed set (a publication only adds), so the gate can never judge under an empty or partial evidence set.
- */
-export function pendingPublishedCapabilities(content: string, committed: ReadonlySet<string>): string[] {
-  const body = /export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(content)?.[1]
-  if (body === undefined) throw new Error('pending verifiedCapabilities source: VERIFIED_CAPABILITIES declaration not found')
-  const ids = (body.match(/'[^']+'/g) ?? []).map(x => x.slice(1, -1))
-  if (ids.length === 0) throw new Error('pending verifiedCapabilities source: VERIFIED_CAPABILITIES lists no id')
-  const pending = new Set(ids)
-  const dropped = [...committed].filter(id => !pending.has(id))
-  if (dropped.length > 0) throw new Error(`pending verifiedCapabilities source drops committed ids: ${dropped.join(', ')}`)
-  return ids
-}
-
-export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
+/** The rendered `verifiedCapabilities.ts` source, and the VERIFIED_CAPABILITIES set it declares (structured, not re-parsed). */
+export function renderVerifiedCapabilities(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): { readonly source: string; readonly allVerified: readonly string[] } {
   const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
   const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
   const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
@@ -1281,7 +1265,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? []), ...(stage5Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
-  return `/**
+  const source = `/**
  * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
  * Generated via bun scripts/cf-refs/audit.ts --write (any --stage; --publish-stage3 publishes Stage 3).
  * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
@@ -1289,6 +1273,11 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
 ${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${stage5Verified !== undefined ? `${block('VERIFIED_STAGE5_CAPABILITIES', stage5Verified)}\n` : ''}${stage5Verified !== undefined && formulaSelectionsBlock !== undefined ? `${formulaSelectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+  return { source, allVerified }
+}
+
+export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
+  return renderVerifiedCapabilities(manifest, rootDir, options).source
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -2695,23 +2684,24 @@ async function main(): Promise<void> {
   // Task 39 fix round 1 (F4): `--write` renders now and writes only after every check below has passed, atomically
   // (a temporary sibling and one rename). Any failure (a thrown scenario, ok=false, an incomplete stage) leaves the
   // target byte-unchanged. `--target` redirects the write (tests); CF_AUDIT_INJECT_FAILURE=after-render is a test seam.
-  let pendingWrite: { target: string; content: string; summary: string } | undefined
+  let pendingWrite: { target: string; content: string; verified: readonly string[]; summary: string } | undefined
   if (args.includes('--write')) {
     const target = args.includes('--target') ? resolve(args[args.indexOf('--target') + 1]!) : resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
     const committed = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
-    const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
+    const rendered = renderVerifiedCapabilities(manifest, REPO_ROOT, {
       committedSource: existsSync(committed) ? readFileSync(committed, 'utf8') : undefined,
       publishStage3: args.includes('--publish-stage3'),
       publishStage4: args.includes('--publish-stage4'),
       publishStage5: args.includes('--publish-stage5'),
     })
+    const content = rendered.source
     if (process.env.CF_AUDIT_INJECT_FAILURE === 'after-render') throw new Error('injected failure after render (test seam)')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
     const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
     const s4 = content.includes('VERIFIED_STAGE4_CAPABILITIES') ? `, ${count('VERIFIED_STAGE4_CAPABILITIES')} S4${args.includes('--publish-stage4') ? ' published' : ' as committed'}` : ', S4 unpublished'
     const s5 = content.includes('VERIFIED_STAGE5_CAPABILITIES') ? `, ${count('VERIFIED_STAGE5_CAPABILITIES')} S5${args.includes('--publish-stage5') ? ' published' : ' as committed'}` : ', S5 unpublished'
     const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4}${s5})`
-    pendingWrite = { target, content, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
+    pendingWrite = { target, content, verified: rendered.allVerified, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
@@ -2864,10 +2854,9 @@ async function main(): Promise<void> {
     // The percent-order follow-up: with `--write --publish-stage5`, the records are judged under the evidence about to be
     // published (the rendered VERIFIED_CAPABILITIES), since a registered reading changes what production paints only once its
     // id is published; without a write they are judged under the committed set, as before.
-    // Fail closed (review P2): the pending set must parse, be non-empty and contain every committed id.
-    const pendingIds = pendingWrite && args.includes('--publish-stage5')
-      ? pendingPublishedCapabilities(pendingWrite.content, VERIFIED_CAPABILITIES)
-      : undefined
+    // Review P2: the exact set the renderer is about to write (structured, never re-parsed from text), smaller than the
+    // committed set when the audit revokes an id.
+    const pendingIds = pendingWrite && args.includes('--publish-stage5') ? pendingWrite.verified : undefined
     const caseRecords5 = pendingIds ? await withExactCfEvidence(pendingIds, () => stage5CaseRecords(manifest, REPO_ROOT)) : await stage5CaseRecords(manifest, REPO_ROOT)
     const compared5 = caseRecords5.filter(r => r.compared)
     const disagree = compared5.filter(r => !r.agrees)
