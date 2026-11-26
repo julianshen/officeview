@@ -30,7 +30,7 @@ import { cellSourceRow } from '../../../src/xlsx/view/sheetCells'
 import { buildSheetGeometry, type SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import { clockEpochMs, type SheetClock } from './clock'
 import { baseCoverage } from './coverage'
-import type { SheetSnapshot } from './snapshot'
+import { blankCell, holdsContent, type SheetSnapshot } from './snapshot'
 
 export interface TextView {
   sheetIndex: number
@@ -50,13 +50,6 @@ export interface TextView {
   styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
   /** Disposes the scope (idempotent). The snapshot is the host's: a view never releases it. */
   release(): void
-}
-
-const holdsContent = (cell: XlsxCell) => (cell.value !== null && cell.value !== undefined) || cell.formula !== undefined
-
-/** `blankCell` (snapshot.ts) semantics: position and style only. */
-function blankCell(cell: XlsxCell): XlsxCell {
-  return { ref: cell.ref, row: cell.row, col: cell.col, value: null, styleIndex: cell.styleIndex, ...(cell.style ? { style: cell.style } : {}) }
 }
 
 /** A copy of `sheet` with every content cell `blank(row, col, cell)` names blanked (`sheet` itself when none is). Rows

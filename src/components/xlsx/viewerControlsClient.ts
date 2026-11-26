@@ -113,6 +113,9 @@ export interface ViewerControlsOptions {
   ledger?: MainMemoryLedger
   /** Explicit migration for callback-only resources: callbacks remain observers. */
   resourceUsage?: 'observer'
+  /** The filter context (locale, date system, time zone, `nowMs`) every rule compiles and evaluates under; a streamed
+   * sheet passes its session clock. Absent, the sheet's semantics and the wall clock. */
+  context?: () => FilterContext
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -127,7 +130,7 @@ export interface ViewerControls { client: ControlsClient; dispose(): void }
 export async function viewerControls(options: ViewerControlsOptions, signal: AbortSignal): Promise<ViewerControls> {
   const { doc, source, sheetId } = options
   const sheet = doc.sheets[source.sheets.findIndex(s => s.sheetId === sheetId)]
-  const context = (): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() })
+  const context = options.context ?? ((): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() }))
   const resources = options.resources ?? createViewerControlResources('D', undefined, options.ledger)
   if (options.ledger) resources.bindLedger(options.ledger, options.resourceUsage)
   if (resources.closed) throw new ValueIndexError('cancelled', 'Controls resources disposed')
@@ -396,7 +399,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       // Cancel the local reply promptly, as the worker kernel does. The session
       // operation and evaluator keep their own charges until the producer drains.
       const work = kind === 'sort' ? engine.sort(engine.identity(sheetId), spec as Parameters<ControlsClient['sort']>[1], abort, hooks)
-        : engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], Date.now(), abort, hooks)
+        : engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], options.context ? filterContext.nowMs : Date.now(), abort, hooks)
       // The input view is still borrowed by a held sort/filter continuation.
       // Its hold ends with that operation, not with the cancelled local reply.
       operation = work.finally(releaseBefore)

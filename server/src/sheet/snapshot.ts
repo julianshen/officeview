@@ -29,8 +29,11 @@ export interface SheetSnapshot {
   release(): void
 }
 
+/** A cell that holds a value or a formula (a blank cell holds neither). */
+export const holdsContent = (cell: XlsxCell) => (cell.value !== null && cell.value !== undefined) || cell.formula !== undefined
+
 /** A covered cell with its value removed: position and style only. */
-function blankCell(cell: XlsxCell): XlsxCell {
+export function blankCell(cell: XlsxCell): XlsxCell {
   return { ref: cell.ref, row: cell.row, col: cell.col, value: null, styleIndex: cell.styleIndex, ...(cell.style ? { style: cell.style } : {}) }
 }
 
