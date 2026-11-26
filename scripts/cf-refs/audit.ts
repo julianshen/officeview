@@ -22,6 +22,7 @@
  */
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
 import { withExactCfEvidence } from '../../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/verifiedCapabilities'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -1234,6 +1235,22 @@ const exportedSet = (text: string | undefined, name: string): string[] | undefin
  * Stage-1-only rendering once dropped `VERIFIED_STAGE2_CAPABILITIES` and broke `evidence.ts`). Stage 3 is published only
  * with `publishStage3` (Ruling S3-WRITE, Task 23); otherwise its committed export, or its absence, is kept verbatim.
  */
+/**
+ * The ids a pending `verifiedCapabilities.ts` source publishes in VERIFIED_CAPABILITIES, for judging the Stage 5 records under
+ * the evidence about to be written. Fails closed: throws when the declaration is missing, lists no id, or drops an id of the
+ * committed set (a publication only adds), so the gate can never judge under an empty or partial evidence set.
+ */
+export function pendingPublishedCapabilities(content: string, committed: ReadonlySet<string>): string[] {
+  const body = /export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(content)?.[1]
+  if (body === undefined) throw new Error('pending verifiedCapabilities source: VERIFIED_CAPABILITIES declaration not found')
+  const ids = (body.match(/'[^']+'/g) ?? []).map(x => x.slice(1, -1))
+  if (ids.length === 0) throw new Error('pending verifiedCapabilities source: VERIFIED_CAPABILITIES lists no id')
+  const pending = new Set(ids)
+  const dropped = [...committed].filter(id => !pending.has(id))
+  if (dropped.length > 0) throw new Error(`pending verifiedCapabilities source drops committed ids: ${dropped.join(', ')}`)
+  return ids
+}
+
 export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
   const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
   const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
@@ -2847,8 +2864,9 @@ async function main(): Promise<void> {
     // The percent-order follow-up: with `--write --publish-stage5`, the records are judged under the evidence about to be
     // published (the rendered VERIFIED_CAPABILITIES), since a registered reading changes what production paints only once its
     // id is published; without a write they are judged under the committed set, as before.
+    // Fail closed (review P2): the pending set must parse, be non-empty and contain every committed id.
     const pendingIds = pendingWrite && args.includes('--publish-stage5')
-      ? (/export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(pendingWrite.content)?.[1]?.match(/'[^']+'/g) ?? []).map(x => x.slice(1, -1))
+      ? pendingPublishedCapabilities(pendingWrite.content, VERIFIED_CAPABILITIES)
       : undefined
     const caseRecords5 = pendingIds ? await withExactCfEvidence(pendingIds, () => stage5CaseRecords(manifest, REPO_ROOT)) : await stage5CaseRecords(manifest, REPO_ROOT)
     const compared5 = caseRecords5.filter(r => r.compared)
