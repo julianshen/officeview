@@ -49,8 +49,12 @@ describe('the canonical view (P2)', () => {
     expect(isIdentityView({ sort: S, sortFilter: null, filter: null })).toBe(false)
     expect(isIdentityView({ sort: null, sortFilter: null, filter: F1 })).toBe(false)
     expect(viewTier('visible-only', { sort: null, sortFilter: null, filter: F1 })).toBe('c1')
-    expect(viewTier('visible-only', { sort: S, sortFilter: F1, filter: null })).toBe('none')
+    // A sortFilter pins rows an earlier filter hid, so it takes C1 as a filter does (controller ruling, Task 4 fix 1).
+    expect(viewTier('visible-only', { sort: S, sortFilter: F1, filter: null })).toBe('c1')
+    expect(viewTier('visible-only', { sort: null, sortFilter: F1, filter: null })).toBe('none')
+    expect(viewTier('visible-only', { sort: S, sortFilter: null, filter: null })).toBe('none')
     expect(viewTier('full', { sort: null, sortFilter: null, filter: F1 })).toBe('none')
+    expect(viewTier('full', { sort: S, sortFilter: F1, filter: null })).toBe('none')
     expect(orderBytes(IDENTITY_VIEW)).toBe(0)
     // One range of 99 body rows (100 rows, 1 header), shared by sort, sortFilter and filter, is counted once.
     expect(orderBytes({ sort: S, sortFilter: F1, filter: F1 })).toBe(8 * 99 + 160 * 1024)

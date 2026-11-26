@@ -68,9 +68,11 @@ export function canonicalViewHash(v: CanonicalView): string {
 /** True iff `v` neither sorts nor filters (a `sortFilter` without a sort is no view). */
 export function isIdentityView(v: CanonicalView): boolean { return v.sort === null && v.filter === null }
 
-/** The C1 tier (parent §12): `'c1'` iff the session is `visible-only` and a filter is set. */
+/** The C1 tier (parent §12): `'c1'` iff the session is `visible-only` and the normal form has a filter or a
+ * `sortFilter` (a sort pins the rows its `sortFilter` hid, so they take C1 as filtered rows do). */
 export function viewTier(policy: 'visible-only' | 'full', v: CanonicalView): 'none' | 'c1' {
-  return policy === 'visible-only' && v.filter !== null ? 'c1' : 'none'
+  const c = canonicalView(v)
+  return policy === 'visible-only' && (c.filter !== null || c.sortFilter !== null) ? 'c1' : 'none'
 }
 
 /**
