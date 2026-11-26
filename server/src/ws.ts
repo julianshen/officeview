@@ -38,7 +38,7 @@ import type { SheetTextReply } from './sheet/text-ops'
 import { showBuildGrant, showMorphGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
-import type { ShowDeliveryRecord } from './audit-store'
+import type { SheetOpRecord, ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates, type RateOverrides } from './rate'
@@ -48,7 +48,7 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { a11yArgs as sheetA11yArgs, copyArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type StreamSheetLayout } from '../../src/stream/sheet-wire'
+import { a11yArgs as sheetA11yArgs, copyArgs, detectArgs, encodeSheetLayout, encodeTileBody, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, VALUE_LIST_LIMITS, FILTER_TEXT_UNITS, valuesArgs, type StreamSheetLayout, type WireRange, type WireSelection } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
@@ -56,6 +56,8 @@ import { sessionLayout, type ServerSheetLayout } from './sheet/layout'
 import { runSheetA11y } from './sheet/a11y-turn'
 import { runSheetCopy } from './sheet/copy-turn'
 import { SessionViews, ViewStateLedger, type WireSizes } from './sheet/view-state'
+import { ListLedger } from './sheet/value-lists'
+import type { SheetViewReply } from './sheet/view-ops'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
 export const CLOSE = {
@@ -269,7 +271,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4b (P6): the sid's in-flight `sheet-find` (one per sid; a newer one supersedes it). */ sheetFind?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4b (P1): true iff the document is in tiles mode and `features` hold `sheet-view@1`; fixed for the sid (a resume presents the same features). */ sheetView: boolean; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState; /** Stage 4b (S4 §6.3): the sid's per-sheet sizes and `viewGen`; survives resume, disposed at teardown. */ views: SessionViews }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun; /** Stage 4b (P6): the sid's in-flight `sheet-find` (one per sid; a newer one supersedes it). */ sheetFind?: SearchRun; /** Stage 4a: the HELLO's validated `features`, fixed for the sid (a resume must present the same list). */ features: readonly string[]; /** Stage 4a: fixed at open. */ sheetMode: SheetMode; /** Stage 4b (P1): true iff the document is in tiles mode and `features` hold `sheet-view@1`; fixed for the sid (a resume presents the same features). */ sheetView: boolean; /** Stage 4a (R9): fixed at open; survives resume. */ clock: SheetClock; /** Stage 4a (R4): the sid's `tiles` batches in progress (by reqId), its tile slots, and the `(sheetId, viewGen)` views already recorded in `sheet_views`. */ tiles: TileState; /** Stage 4b (S4 §6.3): the sid's per-sheet sizes and `viewGen`; survives resume, disposed at teardown. */ views: SessionViews; /** Stage 4c (P6): the value lists issued to the sid; survives resume. */ lists: ListLedger }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -448,7 +450,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision), sheetMode })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, sheetView: sheetMode === 'tiles' && features.includes(SHEET_VIEW_FEATURE), clock, tiles: { batches: new Map(), slots: new TileSlots(o.pool.admission.caps.perSessionOutstanding), views: new Set() }, views: new SessionViews(viewLedger), copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0, ...(opened.sheets ? { sheets: opened.sheets } : {}) }, policy, decision, tokenExp: token.exp, features, sheetMode, sheetView: sheetMode === 'tiles' && features.includes(SHEET_VIEW_FEATURE), clock, tiles: { batches: new Map(), slots: new TileSlots(o.pool.admission.caps.perSessionOutstanding), views: new Set() }, views: new SessionViews(viewLedger), lists: new ListLedger(), copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -1066,6 +1068,157 @@ export function createStreamServer(o: StreamServerOptions) {
       // Fail closed: only a fit answer with a finite size travels.
       if (r.op !== 'fit' || !Number.isFinite(r.size) || r.size < 0) return refuse(ws, reqId, 'policy-refused')
       send(ws, { reqId, type: 'sheet-fit-result', size: r.size })
+    } finally {
+      if (owns(ws, s.sid)) rates.sheetBusy = false
+    }
+  }
+
+  /** P12: one `sheet_ops` row of `sid`, durable before the answer; false when it could not be written (the caller
+   * refuses `policy-refused`). */
+  function sheetOpRow(sid: string, r: Omit<SheetOpRecord, 'sid' | 'at'>): boolean {
+    try { audit.recordSheetOp({ sid, ...r }); return true } catch { return false }
+  }
+
+  /**
+   * Stage 4c (S4 §6.6, plan P4, P6): `filter-values {reqId, token, sheetId, viewGen, range, col, search?}` (a first page)
+   * or `{…, sheetId, viewGen, cursor}` (a later page) on a `sheetView` session. In order, each failure one `refused`
+   * that changes nothing:
+   * - the token (`textOp`); the arguments (`valuesArgs`), else `policy-refused`, uncharged and with no row;
+   * - a first page only: the `'sheet'` rate, then `sheetBusy` (both `rate-limited`; the flag is set before the next
+   *   await and cleared in the `finally` only while this socket owns the sid). A cursor page charges only `'message'`
+   *   and never touches the flag;
+   * - then `valuesPage`.
+   * A first page writes one `sheet_ops` row (`rules` `[[col, 'values']]`, never the search text) for every outcome past
+   * its shape check, the rate refusal included (P12); a cursor page writes none.
+   */
+  async function onFilterValues(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = valuesArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if ('cursor' in args) return valuesPage(ws, reqId, s.sid, sd, args, undefined)
+    const row = { sheetId: args.sheetId, kind: 'filter-values' as const, viewGen: args.viewGen, range: args.range, rules: [[args.col, 'values']] as Array<[number, string]> }
+    const rates = ws.data.rates
+    if (rates.check('sheet', now()) !== 'ok' || rates.sheetBusy) return refuse(ws, reqId, sheetOpRow(s.sid, { ...row, outcome: 'rate-limited' }) ? 'rate-limited' : 'policy-refused')
+    rates.sheetBusy = true
+    try { await valuesPage(ws, reqId, s.sid, sd, args, row) } finally { if (owns(ws, s.sid)) rates.sheetBusy = false }
+  }
+
+  type SessionEntry = NonNullable<ReturnType<typeof sessionDoc.get>>
+  type ValuesRequest = NonNullable<ReturnType<typeof valuesArgs>>
+  /**
+   * One value-list page, in order:
+   * - `stale-view` for a `viewGen` other than the sheet's;
+   * - a cursor page: its list (`ListLedger.continueAt`) must be this sid's, of this sheet and `viewGen`, at an offset
+   *   inside it, else `stale-filter-values`;
+   * - the fingerprint (else close `layout-changed`) and the document ledger, then the sheet's identity layout;
+   * - `hidden-target` when the listed column or the range's `c0` or `c1` is a collapsed column of the authored layout;
+   * - the pool `values` job over the key view, under the sheet's current view (its committed values rule marks the
+   *   `selected` entries). The view is read after the last await before the job, and the `viewGen` is checked again on
+   *   the job's return (a cursor page holds no busy flag);
+   * - `ListLedger.issue` (a first page), the `sheet_ops` row (a first page), then `filter-values-result`. `total` is the
+   *   list's entry count (the id space every page's ids lie in, a search's included). A page is cut by entries to
+   *   `TEXT_MESSAGE_BYTES` of JSON UTF-8, and its cursor continues from the first entry not sent.
+   */
+  async function valuesPage(ws: WS, reqId: number, sid: string, sd: SessionEntry, args: ValuesRequest, row: Omit<SheetOpRecord, 'sid' | 'at' | 'outcome'> | undefined) {
+    const deny = (code: RefusalCode) => refuse(ws, reqId, row && !sheetOpRow(sid, { ...row, outcome: code }) ? 'policy-refused' : code)
+    const { sheetIndex, viewGen } = args
+    if (viewGen !== sd.views.viewGen(sheetIndex)) return deny('stale-view')
+    let at: { range: WireRange; col: number; offset: number; search?: { text: string; wildcards: boolean }; list?: string; part?: string; count?: number }
+    if ('cursor' in args) {
+      const c = sd.lists.continueAt(args.cursor)
+      if (!c || c.entry.sheetIndex !== sheetIndex || c.entry.viewGen !== viewGen) return deny('stale-filter-values')
+      at = { range: c.entry.range, col: c.entry.col, offset: c.offset, list: c.list, part: args.cursor.slice(0, args.cursor.lastIndexOf(':')), count: c.entry.count, ...(c.search ? { search: c.search } : {}) }
+    } else at = { range: args.range, col: args.col, offset: 0, ...(args.search ? { search: args.search } : {}) }
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return deny('policy-refused')
+    const alive = textAlive(ws, sid, sd)
+    let base: ServerSheetLayout
+    try { base = await baseLayout(sid, sd, sheetIndex) } catch (e) { return alive() ? deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    if (!alive()) return
+    const collapsed = (c: number) => base.collapsedCols.some((r) => r.start <= c && c <= r.end)
+    if (collapsed(at.col) || collapsed(at.range.c0) || collapsed(at.range.c1)) return deny('hidden-target')
+    if (viewGen !== sd.views.viewGen(sheetIndex)) return deny('stale-view')
+    const view = sd.views.view(sheetIndex)
+    let r: SheetViewReply
+    try {
+      r = await o.pool.sheetView(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'values', sheetIndex, view, range: at.range, col: at.col, ...(at.search ? { search: at.search } : {}), offset: at.offset }, undefined, ws.data.gone.signal)
+    } catch (e) { return alive() ? deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    if (!alive()) return
+    if (viewGen !== sd.views.viewGen(sheetIndex)) return deny('stale-view')
+    // Fail closed: only a values answer over a list of the cursor's size, with ids inside it, travels.
+    if (r.op !== 'values' || !Number.isInteger(r.count) || r.count < 0 || r.count > VALUE_LIST_LIMITS.entries) return deny('policy-refused')
+    if (at.count !== undefined && r.count !== at.count) return deny('stale-filter-values')
+    const count = r.count, page = r.page
+    if (!page.items.every((i) => Number.isInteger(i.id) && i.id >= 0 && i.id < count && i.text.length <= FILTER_TEXT_UNITS)) return deny('policy-refused')
+    const list = at.list ?? sd.lists.issue({ sheetIndex, range: at.range, col: at.col, viewGen }, count)
+    const part = at.part ?? (at.search ? sd.lists.searched(list, at.search, page.total)! : list)
+    const head = { reqId, type: 'filter-values-result', list, items: [] as Array<[number, string, number]>, blanks: page.blanks, total: count, truncated: page.truncated, ...(page.classification ? { classification: page.classification } : {}) }
+    // The page's bytes with the longest cursor it can carry, then each entry while the message stays in its cap.
+    let size = enc.encode(JSON.stringify({ ...head, cursor: ListLedger.cursor(part, VALUE_LIST_LIMITS.entries) })).length
+    for (const i of page.items) {
+      const item: [number, string, number] = [i.id, i.text, (i.selected ? 1 : 0) | (i.error ? 2 : 0)]
+      const n = enc.encode(JSON.stringify(item)).length + (head.items.length ? 1 : 0)
+      if (size + n > TEXT_MESSAGE_BYTES) break
+      size += n
+      head.items.push(item)
+    }
+    if (page.items.length && !head.items.length) return deny('policy-refused')
+    const end = at.offset + head.items.length
+    if (row && !sheetOpRow(sid, { ...row, outcome: 'ok' })) return refuse(ws, reqId, 'policy-refused')
+    send(ws, { ...head, ...(end < page.total ? { cursor: ListLedger.cursor(part, end) } : {}) })
+  }
+
+  /** The bounding source rect of a selection (header and totals 0), for a `range-detect` row with no detected range. */
+  function selectionRect(sel: WireSelection): WireRange {
+    let r0 = Infinity, r1 = -1, c0 = Infinity, c1 = -1
+    const cell = ([r, c]: [number, number]) => { r0 = Math.min(r0, r); r1 = Math.max(r1, r); c0 = Math.min(c0, c); c1 = Math.max(c1, c) }
+    if (sel.active) cell(sel.active)
+    if (sel.anchor) cell(sel.anchor)
+    for (const g of sel.ranges) for (const [a, b] of g.rows) for (const [c, d] of g.cols) { cell([a, c]); cell([b, d]) }
+    return r1 < 0 ? { r0: 0, r1: 0, c0: 0, c1: 0, header: 0, totals: 0 } : { r0, r1, c0, c1, header: 0, totals: 0 }
+  }
+
+  /**
+   * Stage 4c (S4 §6.6, plan P4, P13): `range-detect {reqId, token, sheetId, viewGen, kind, selection, override?}` on a
+   * `sheetView` session. In order: the token; the arguments (`detectArgs`), else `policy-refused`, uncharged and with no
+   * row; the `'sheet'` rate, then `sheetBusy` (`rate-limited`); the fingerprint (else close `layout-changed`) and the
+   * document ledger; the pool `detect` job over the key view (Task 1: under `visible-only` it stops at withheld lines);
+   * the `sheet_ops` row; then `range-detect-result {range, source, header, overrideIgnored}`, or a local refusal as
+   * `refused {code: 'view-refused', reason, range?, count?, at?}` (P13). Detection reads the identity view, so the
+   * request's `viewGen` is recorded but not checked. Every outcome past the shape check has its row (`rules` `[]`;
+   * `range` the detected range, else the refusal's range, else the selection's bounding rect).
+   */
+  async function onRangeDetect(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = detectArgs(msg, (sd.doc.sheets ?? []).length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    const fallback = selectionRect(args.selection)
+    const rowOk = (range: WireRange, outcome: string) => sheetOpRow(s.sid, { sheetId: args.sheetId, kind: 'range-detect', viewGen: args.viewGen, range, rules: [], outcome })
+    const deny = (code: RefusalCode) => refuse(ws, reqId, rowOk(fallback, code) ? code : 'policy-refused')
+    const rates = ws.data.rates
+    if (rates.check('sheet', now()) !== 'ok' || rates.sheetBusy) return deny('rate-limited')
+    rates.sheetBusy = true
+    try {
+      if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+      if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return deny('policy-refused')
+      const alive = textAlive(ws, s.sid, sd)
+      let r: SheetViewReply
+      try {
+        r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'detect', sheetIndex: args.sheetIndex, kind: args.kind, selection: args.selection, ...(args.override ? { override: args.override } : {}) }, undefined, ws.data.gone.signal)
+      } catch (e) { return alive() ? deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      if (!alive()) return
+      if (r.op !== 'detect') return deny('policy-refused')
+      if ('refused' in r) {
+        const range = r.refused.range ? { ...r.refused.range, header: 0 as const, totals: 0 as const } : fallback
+        if (!rowOk(range, 'view-refused')) return refuse(ws, reqId, 'policy-refused')
+        return send(ws, { reqId, type: 'refused', code: 'view-refused', ...r.refused })
+      }
+      if (!rowOk(r.detection.range, 'ok')) return refuse(ws, reqId, 'policy-refused')
+      send(ws, { reqId, type: 'range-detect-result', ...r.detection })
     } finally {
       if (owns(ws, s.sid)) rates.sheetBusy = false
     }
@@ -1816,6 +1969,8 @@ export function createStreamServer(o: StreamServerOptions) {
     // Stage 4b: a sheet-view session's ops (the gate above admits only those).
     if (m.type === 'sheet-resize') return onSheetResize(ws, m)
     if (m.type === 'sheet-fit') return onSheetFit(ws, m)
+    if (m.type === 'filter-values') return onFilterValues(ws, m)
+    if (m.type === 'range-detect') return onRangeDetect(ws, m)
     if (m.type === 'sheet-find') return onSheetFind(ws, m)
     if (m.type === 'sheet-copy') return onSheetCopy(ws, m)
     if (m.type === 'sheet-a11y') return onSheetA11y(ws, m)
