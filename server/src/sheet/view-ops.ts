@@ -75,6 +75,8 @@ export interface SheetViewPort {
   /** One job at a time: `fn` runs after every earlier job of this port settled. */
   run<T>(fn: () => Promise<T>): Promise<T>
   job(job: SheetViewJob, cache: DerivedCache): Promise<SheetViewReply>
+  /** The bytes the port's main ledger charges now (its engine's working set between jobs). */
+  ledgerBytes(): number
   dispose(): Promise<void>
 }
 
@@ -209,6 +211,10 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   }
   const compact = (v: SheetView['visibility']): CompactRowVisibility => v instanceof CompactRowVisibility ? v : createRowVisibility(1048576, (slot) => v.visible(slot))
   const publish = (next: Pick<SheetView, 'order' | 'visibility' | 'filter' | 'sort'>): ControlSnapshot => {
+    // P11: a committed view's order and mask are charged once, by the server's `DocumentLedger` hold, never also on
+    // this port's ledger past its job; an op that reads them later holds them for its own run.
+    ledger.settle(next.order)
+    ledger.settle(next.visibility)
     let visibility = compact(next.visibility)
     if (policy === 'visible-only' && next.filter) visibility = c1(visibility, next.order, next.filter)
     state = { ...state, order: next.order, visibility, filter: next.filter, sort: next.sort, revision: state.revision + 1 }
@@ -367,6 +373,7 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
         }
       })
     },
+    ledgerBytes: () => ledger.bytes,
     dispose() {
       return port.run(async () => {
         if (disposed) return

@@ -462,6 +462,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       jobs.delete(controller)
       metadata.adopt([controller, controller.signal])
       metadata.release()
+      // Unaborted, the staged operation has ended: nothing keeps its controller.
+      if (!controller.signal.aborted) memory.settle(controller)
     }
   }
   const client = createControlsClient({ allocation: memory, snapshot: options.snapshot, context, cache, runs,
