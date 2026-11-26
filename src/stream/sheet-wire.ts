@@ -532,6 +532,10 @@ export interface WireFilterSpec { range: WireRange; columns: Array<[number, Wire
 export interface SheetOrderHead {
   sheetId: string; viewGen: number; counts: { visible: number; total: number }
   sort: { range: WireRange; keys: WireSortSpec['keys'] } | null; filterSummary: Array<{ col: number; kind: string }>
+  /** Task 9 fix round 1: the committed sort's `caseSensitive` (only with a `sort`) and the committed filter's range (only
+   * with a non-empty `filterSummary`), so a client that re-fetches the view can re-send it. Optional: absent, the
+   * head's bytes are as before. */
+  caseSensitive?: boolean; filterRange?: WireRange
 }
 /** `sourceAtOffset[i]` is the source row shown at display row `r0 + i`; `mask.words` is the display-slot bitset over `[r0, r1]`. */
 export interface SheetOrder {
@@ -680,6 +684,15 @@ export function sortArgs(m: Obj, sheetCount: number): (SheetArgs & { viewGen: nu
   return { ...head, range, keys, caseSensitive: m.caseSensitive === true }
 }
 
+/** Task 9 fix round 1: `sheet-sort {sheetId, viewGen, range, keys: [], caseSensitive?}` clears the sheet's sort (as
+ * `sheet-filter` with `columns: []` clears its filter); the range is checked as a sort's. `sortArgs` still refuses empty
+ * keys, so a caller tries this only when `sortArgs` is undefined. */
+export function sortClearArgs(m: Obj, sheetCount: number): (SheetArgs & { viewGen: number; range: WireRange; keys: [] }) | undefined {
+  const head = sheetArgs(m, sheetCount), range = wireRange(m.range)
+  if (!head || !range || !Array.isArray(m.keys) || m.keys.length !== 0 || (m.caseSensitive !== undefined && typeof m.caseSensitive !== 'boolean')) return undefined
+  return { ...head, range, keys: [] }
+}
+
 /** `sheet-filter {sheetId, viewGen, range, columns: [[col, rule], …]}`. An empty `columns` clears the filter. */
 export function filterArgs(m: Obj, sheetCount: number): (SheetArgs & { viewGen: number } & WireFilterSpec) | undefined {
   const head = sheetArgs(m, sheetCount), range = wireRange(m.range)
@@ -727,7 +740,7 @@ export function orderArgs(m: Obj, sheetCount: number): SheetArgs | undefined {
 // ---- sheet-order parts (P7) ----
 
 function orderHead(v: unknown): SheetOrderHead | undefined {
-  if (!isObj(v) || !keysOk(v, ['sheetId', 'viewGen', 'counts', 'sort', 'filterSummary'])) return undefined
+  if (!isObj(v) || !keysOk(v, ['sheetId', 'viewGen', 'counts', 'sort', 'filterSummary'], ['caseSensitive', 'filterRange'])) return undefined
   if (typeof v.sheetId !== 'string' || !SHEET_ID.test(v.sheetId) || !u32(v.viewGen)) return undefined
   const c = v.counts
   if (!isObj(c) || !keysOk(c, ['visible', 'total']) || !isInt(c.visible, 0, SHEET_MAX_ROWS) || !isInt(c.total, 0, SHEET_MAX_ROWS) || c.visible > c.total) return undefined
@@ -738,7 +751,13 @@ function orderHead(v: unknown): SheetOrderHead | undefined {
     if (!isObj(s) || !keysOk(s, ['col', 'kind']) || !isInt(s.col, 0, SHEET_MAX_COLS - 1) || typeof s.kind !== 'string' || s.kind.length === 0 || s.kind.length > FILTER_KIND_CHARS) return undefined
     filterSummary.push({ col: s.col, kind: s.kind })
   }
-  return { sheetId: v.sheetId, viewGen: v.viewGen, counts: { visible: c.visible, total: c.total }, sort, filterSummary }
+  if ('caseSensitive' in v && (sort === null || typeof v.caseSensitive !== 'boolean')) return undefined
+  const filterRange = 'filterRange' in v ? wireRange(v.filterRange) : undefined
+  if ('filterRange' in v && (!filterRange || filterSummary.length === 0)) return undefined
+  return {
+    sheetId: v.sheetId, viewGen: v.viewGen, counts: { visible: c.visible, total: c.total }, sort, filterSummary,
+    ...('caseSensitive' in v ? { caseSensitive: v.caseSensitive as boolean } : {}), ...(filterRange ? { filterRange } : {}),
+  }
 }
 
 /** `entries` is a permutation of `[r0, r1]`. */

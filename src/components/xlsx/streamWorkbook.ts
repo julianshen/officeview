@@ -135,6 +135,8 @@ interface SheetState {
   geometry?: SheetGeometry
   /** `wire`'s session sizes as maps (rebuilt when `wire` changes). */
   sizes?: SessionSizes
+  /** Task 9 fix round 1: the committed filter's range from the last order head (null: no filter, or not yet known). */
+  filterRange?: WireRange | null
   /** The latest `refresh` of this sheet (an older one's answer is dropped). */
   refreshing?: object
   loaded: boolean
@@ -217,6 +219,7 @@ export class StreamWorkbook implements ViewerSheetSource {
     state.structure.merges = merges
     state.structure.sourceMerges = merges
     state.structure.gen++
+    if (!order) state.filterRange = null
     state.view = order ? this.viewOf(state, order) : identityView(wire.viewGen)
     this.viewMoved(state)
     state.loaded = true
@@ -391,10 +394,11 @@ export class StreamWorkbook implements ViewerSheetSource {
     for (const b of o.bands) for (let i = 0; i < b.sourceAtOffset.length; i++) set(b.r0 + i, base.visible(b.sourceAtOffset[i]!))
     if (o.mask) for (let i = 0; i <= o.mask.r1 - o.mask.r0; i++) set(o.mask.r0 + i, ((o.mask.words[i >>> 5]! >>> (i & 31)) & 1) === 1)
     const previous = state.view, head = o.head
+    state.filterRange = head.filterRange ?? (head.filterSummary.length ? state.filterRange ?? null : null)
     const sort = own && 'sort' in own ? own.sort ?? null
       : !head.sort ? null
-        : previous.sort && sameRange(previous.sort.range, head.sort.range) && previous.sort.keys.length === head.sort.keys.length && previous.sort.keys.every((k, i) => k.col === head.sort!.keys[i]!.col && k.order === head.sort!.keys[i]!.order) ? previous.sort
-          : { range: toFilterRange(head.sort.range), keys: head.sort.keys.map(k => ({ col: k.col, order: k.order })), caseSensitive: false }
+        : previous.sort && sameRange(previous.sort.range, head.sort.range) && previous.sort.caseSensitive === (head.caseSensitive ?? previous.sort.caseSensitive) && previous.sort.keys.length === head.sort.keys.length && previous.sort.keys.every((k, i) => k.col === head.sort!.keys[i]!.col && k.order === head.sort!.keys[i]!.order) ? previous.sort
+          : { range: toFilterRange(head.sort.range), keys: head.sort.keys.map(k => ({ col: k.col, order: k.order })), caseSensitive: head.caseSensitive ?? false }
     // A filter this client did not send is kept only while the summary still names its columns and kinds.
     const kept = previous.filter && previous.filter.columns.size === head.filterSummary.length && head.filterSummary.every(c => previous.filter!.columns.get(c.col)?.kind === c.kind) ? previous.filter : null
     const filter = own && 'filter' in own ? own.filter ?? null : head.filterSummary.length ? kept : null
@@ -410,6 +414,12 @@ export class StreamWorkbook implements ViewerSheetSource {
     state.wire = Object.freeze({ ...state.wire, viewGen: o.head.viewGen, sort: o.head.sort, filterSummary: o.head.filterSummary, counts: { visibleRows: o.head.counts.visible, totalRows: o.head.counts.total } })
     this.viewMoved(state)
     this.notify()
+  }
+  /** The sheet's committed filter as the server names it (P15's `committed` placeholders after a refetch): its range and
+   * summary, or null for no filter (or a range not yet known). */
+  filterHead(sheetId: string): { range: WireRange; columns: ReadonlyArray<{ col: number; kind: string }> } | null {
+    const state = this.state(sheetId)
+    return state.filterRange && state.wire.filterSummary.length ? { range: state.filterRange, columns: state.wire.filterSummary } : null
   }
   /** Re-fetches the layout and, when it is not the identity view, its order (P7); never rejects. */
   refreshOrder(sheetId: string): Promise<void> { return this.refresh(sheetId) }
@@ -439,13 +449,18 @@ export class StreamWorkbook implements ViewerSheetSource {
     this.takeOrder(order, own)
     return { kind: 'committed', view: this.state(sheetId).view }
   }
-  /** A view-only sort at the owner's viewGen (a stale owner is `stale` without sending). A sort cannot be cleared on a
-   * stream (4c's wire has no form for it): `null` is refused without sending. */
+  /** A view-only sort at the owner's viewGen (a stale owner is `stale` without sending). `null` clears the sort (the filter
+   * stays) by `keys: []` over the held sort's range; with no sort held it changes nothing. */
   async sort(owner: CacheIdentity, spec: SortSpec | WireSortSpec | null, signal: AbortSignal, progress?: (completed: number, total: number) => void): Promise<RemoteCommit> {
     if (!this.remoteSheets.sortOps) return refuse('sort')
     const ops = this.sortOpsOrThrow(), sheetId = owner.sheetId
     if (owner.viewGen !== this.state(sheetId).wire.viewGen) return { kind: 'stale' }
-    if (!spec) return localRefusal('unsupported', "Clearing a sort isn't available in this viewing mode.")
+    if (!spec) {
+      const held = this.state(sheetId).wire.sort
+      if (!held) return { kind: 'committed', view: this.state(sheetId).view }
+      const clear: WireSortSpec = { range: held.range, keys: [], caseSensitive: false }
+      return this.commitOp(sheetId, progress, () => ops.sort(sheetId, owner.viewGen, clear, signal), { sort: null })
+    }
     const wire: WireSortSpec = isWireSort(spec) ? spec : { range: toWireRange(spec.range), keys: spec.keys.map(k => ({ col: k.col, order: k.order })), caseSensitive: spec.caseSensitive }
     const local: SortSpec = isWireSort(spec) ? { range: toFilterRange(spec.range), keys: spec.keys, caseSensitive: spec.caseSensitive } : spec
     return this.commitOp(sheetId, progress, () => ops.sort(sheetId, owner.viewGen, wire, signal), { sort: local })
@@ -459,9 +474,9 @@ export class StreamWorkbook implements ViewerSheetSource {
     if (owner.viewGen !== state.wire.viewGen) return { kind: 'stale' }
     let wire: WireFilterSpec, local: FilterSpec | null
     if (!spec) {
-      const held = state.view.filter
-      if (!held) return state.wire.filterSummary.length ? localRefusal('unsupported', "This filter's range is not known; reopen the sheet and try again.") : { kind: 'committed', view: state.view }
-      wire = { range: toWireRange(held.range), columns: [] }
+      const range = state.view.filter ? toWireRange(state.view.filter.range) : state.filterRange
+      if (!range) return state.wire.filterSummary.length ? localRefusal('unsupported', "This filter's range is not known; reopen the sheet and try again.") : { kind: 'committed', view: state.view }
+      wire = { range, columns: [] }
       local = null
     } else if (isWireFilter(spec)) {
       wire = spec
@@ -494,8 +509,8 @@ export class StreamWorkbook implements ViewerSheetSource {
   /** The server's range detection for a sort or filter from `selection` (P4). */
   async detect(sheetId: string, kind: 'sort' | 'filter', selection: WireSelection, override?: { header: 0 | 1 }, signal?: AbortSignal): Promise<WireDetection> {
     if (!this.remoteSheets.sortOps) return refuse('detect')
-    this.state(sheetId)
-    return this.sortOpsOrThrow().detect(sheetId, kind, selection, override, signal)
+    const viewGen = this.state(sheetId).wire.viewGen
+    return this.sortOpsOrThrow().detect(sheetId, viewGen, kind, selection, override, signal)
   }
   /** The session's tile protocol (Task 13 batches it); rejects `closed` once this source is closed. */
   tiles(): RemoteSheets['tiles'] {

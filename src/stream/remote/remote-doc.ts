@@ -76,12 +76,14 @@ export interface RemoteSheets {
 export interface RemoteSortOps {
   /** `manifest.typedFilters === true`: number and date conditions are served (`'full'` only). */
   readonly typedFilters: boolean
-  /** `null` has no wire form (a sort is cleared by no request of 4c's wire): it rejects `unsupported-op` without sending. */
+  /** A spec with `keys: []` clears the sheet's sort (the filter stays; Task 9 fix round 1), over its `range` (the sort's
+   * range, recorded in the audit row). `null` names no range: it rejects `unsupported-op` without sending. */
   sort(sheetId: string, viewGen: number, spec: WireSortSpec | null, signal?: AbortSignal): Promise<SheetOrder>
   /** `null` has no wire form without a range: it rejects `unsupported-op` without sending (`{range, columns: []}` clears). */
   filter(sheetId: string, viewGen: number, spec: WireFilterSpec | null, signal?: AbortSignal): Promise<SheetOrder>
   values(req: ValuesRequest, signal?: AbortSignal): Promise<ValuesPage>
-  detect(sheetId: string, kind: 'sort' | 'filter', selection: WireSelection, override?: { header: 0 | 1 }, signal?: AbortSignal): Promise<WireDetection>
+  /** `viewGen` is the sheet's current one (recorded in the audit row; detection reads the identity view). */
+  detect(sheetId: string, viewGen: number, kind: 'sort' | 'filter', selection: WireSelection, override?: { header: 0 | 1 }, signal?: AbortSignal): Promise<WireDetection>
   order(sheetId: string, signal?: AbortSignal): Promise<SheetOrder>
 }
 
@@ -341,7 +343,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     return Object.freeze({
       get typedFilters() { return session.manifest.typedFilters === true },
       sort(sheetId, viewGen, spec, signal) {
-        if (!spec) return noWire('clearing a sort')
+        if (!spec) return noWire('a sort clear without its range')
         return orderOf({ type: 'sheet-sort', sheetId, viewGen, range: spec.range, keys: spec.keys, caseSensitive: spec.caseSensitive }, signal)
       },
       filter(sheetId, viewGen, spec, signal) {
@@ -353,9 +355,9 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
         await ask({ ...req, type: 'filter-values' }, (x) => { if (x.type === 'filter-values-result') page = x.page }, signal)
         return page!
       },
-      async detect(sheetId, kind, selection, override, signal) {
+      async detect(sheetId, viewGen, kind, selection, override, signal) {
         let detection: WireDetection | undefined
-        await ask({ type: 'range-detect', sheetId, viewGen: 0, kind, selection, ...(override ? { override } : {}) }, (x) => { if (x.type === 'range-detect-result') detection = x.detection }, signal)
+        await ask({ type: 'range-detect', sheetId, viewGen, kind, selection, ...(override ? { override } : {}) }, (x) => { if (x.type === 'range-detect-result') detection = x.detection }, signal)
         return detection!
       },
       order(sheetId, signal) { return orderOf({ type: 'sheet-order', sheetId }, signal) },

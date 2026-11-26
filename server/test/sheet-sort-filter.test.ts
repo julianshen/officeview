@@ -620,3 +620,40 @@ describe('rates, cancel, admission and audit (P8, P11, P12)', () => {
     a.c.close(); await s.h.stop()
   }, 30_000)
 })
+
+describe('Task 9 fix round 1: the sort clear and the head view fields', () => {
+  test('sort then clear: the identity order, the filter kept, a sheet_ops row; the head carries caseSensitive and the filter range', async () => {
+    const bytes = await sortGrid()
+    const s = await serverOn(bytes)
+    const a = await s.open()
+    const f = await a.filter({ range: GRID, columns: [[3, text('contains', 'a')]] })
+    expect(f.order!.head).toMatchObject({ viewGen: 1, sort: null, filterRange: GRID })
+    expect('caseSensitive' in f.order!.head).toBe(false)
+    const sorted = await a.sort({ viewGen: 1, range: GRID, keys: B_DESC, caseSensitive: true })
+    expect(sorted.order!.head).toMatchObject({ viewGen: 2, sort: { range: GRID, keys: B_DESC }, caseSensitive: true, filterRange: GRID })
+    // The refetch path answers the same fields.
+    expect((await a.order()).order!.head).toMatchObject({ viewGen: 2, caseSensitive: true, filterRange: GRID, filterSummary: [{ col: 3, kind: 'text' }] })
+    const cleared = await a.sort({ viewGen: 2, range: GRID, keys: [] })
+    expect(cleared.end).toBeUndefined()
+    const head = cleared.order!.head
+    expect(head).toMatchObject({ viewGen: 3, sort: null, filterSummary: [{ col: 3, kind: 'text' }], filterRange: GRID })
+    expect('caseSensitive' in head).toBe(false)
+    expect(cleared.order!.bands).toEqual([])
+    // The filter alone, as a filter-only view derives it.
+    const resolved: ResolvedFilter = { range: GRID, columns: [[3, { kind: 'text', op: 'contains', first: 'a', wildcards: false }]] }
+    const derive = await hostOf(bytes, 'visible-only')
+    const want = orderOf(await derive(s.h.stream.sheetClockOf(a.sid)!, { sort: null, sortFilter: null, filter: resolved }))
+    expect(shownSources(cleared.order!, 0, 39)).toEqual(shownSources(want, 0, 39))
+    expect(head.counts).toEqual(want.head.counts)
+    expect(s.store.sheetOps(a.sid).at(-1)).toMatchObject({ kind: 'sort', viewGen: 2, range: GRID, rules: [], outcome: 'ok' })
+    const l = await a.layout()
+    expect({ sort: l.sort, filterSummary: l.filterSummary, viewGen: l.viewGen }).toEqual({ sort: null, filterSummary: [{ col: 3, kind: 'text' }], viewGen: 3 })
+    // Clearing the filter too is the identity view: the layout is 4b's.
+    expect((await a.filter({ viewGen: 3, range: GRID, columns: [] })).order!.head).toMatchObject({ viewGen: 4, sort: null, filterSummary: [] })
+    // A malformed clear is refused uncharged, with no row.
+    const rows = s.store.sheetOps(a.sid).length
+    expect((await a.sort({ viewGen: 4, range: { ...GRID, r1: 1_048_576 }, keys: [] })).end).toMatchObject({ type: 'refused', code: 'policy-refused' })
+    expect(s.store.sheetOps(a.sid)).toHaveLength(rows)
+    a.c.close(); await s.h.stop()
+  }, 30_000)
+})

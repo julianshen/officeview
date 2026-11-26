@@ -154,14 +154,14 @@ describe('StreamWorkbook sort and filter (P8)', () => {
     expect(sortOps.filter).toHaveBeenLastCalledWith('0', 2, { range: RANGE, columns: [] }, never)
   })
 
-  it('a stale owner is stale without sending; a local values rule and a sort clear are refused without sending', async () => {
+  it('a stale owner is stale without sending; a local values rule is refused and a clear with no sort held changes nothing, without sending', async () => {
     const { sheets, sortOps } = fakeSheets()
     const wb = new StreamWorkbook(sheets, 'doc')
     await wb.activate('0')
     expect((await wb.sort({ ...owner(wb), viewGen: 5 }, SORT, never)).kind).toBe('stale')
     const values = await wb.filter(owner(wb), { range: SORT.range, columns: new Map([[1, { kind: 'values' as const, selection: { mode: 'queryPatches' as const, base: 'all' as const, patches: [] }, showBlanks: true }]]) }, [], never)
     expect(values.kind).toBe('refused')
-    expect((await wb.sort(owner(wb), null, never)).kind).toBe('refused')
+    expect((await wb.sort(owner(wb), null, never)).kind).toBe('committed')
     expect(sortOps.sort).not.toHaveBeenCalled()
     expect(sortOps.filter).not.toHaveBeenCalled()
   })
@@ -223,9 +223,47 @@ describe('StreamWorkbook sort and filter (P8)', () => {
     wb.applyOrder(orderAt(3))
     const detected = await wb.detect('0', 'filter', { active: [1, 1], anchor: [1, 1], ranges: [] }, { header: 1 })
     expect(detected.source).toBe('region')
-    expect(sortOps.detect).toHaveBeenCalledWith('0', 'filter', { active: [1, 1], anchor: [1, 1], ranges: [] }, { header: 1 }, undefined)
+    expect(sortOps.detect).toHaveBeenCalledWith('0', 3, 'filter', { active: [1, 1], anchor: [1, 1], ranges: [] }, { header: 1 }, undefined)
     expect(((await wb.values('0', { range: RANGE, col: 1 }).catch((e: unknown) => e)) as StreamSessionError).code).toBe('stale-view')
     expect(sortOps.values).toHaveBeenCalledWith({ sheetId: '0', viewGen: 3, range: RANGE, col: 1 }, undefined)
     expect(layout).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Task 9 fix round 1: clears and a refetched view', () => {
+  it('sort(null) clears the held sort by keys: [] over its range, and the filter stays', async () => {
+    const { sheets, sortOps } = fakeSheets({
+      sortOps: { sort: vi.fn(async (_s, viewGen, spec) => spec.keys.length ? orderAt(viewGen + 1) : { head: { sheetId: '0', viewGen: viewGen + 1, counts: { visible: 40, total: 40 }, sort: null, filterSummary: [] }, bands: [], mask: null }) },
+    })
+    const wb = new StreamWorkbook(sheets, 'doc')
+    await wb.activate('0')
+    expect((await wb.sort(owner(wb), SORT, never)).kind).toBe('committed')
+    const progress = vi.fn()
+    const cleared = await wb.sort(owner(wb), null, never, progress)
+    expect(sortOps.sort).toHaveBeenLastCalledWith('0', 1, { range: RANGE, keys: [], caseSensitive: false }, never)
+    expect(progress.mock.calls).toEqual([[0, 1], [1, 1]])
+    expect(cleared.kind).toBe('committed')
+    expect(wb.view('0')).toMatchObject({ revision: 2, sort: null, filter: null })
+    expect(wb.view('0').order.kind).toBe('identity')
+    expect(wb.wireLayout('0').sort).toBeNull()
+  })
+
+  it('after a refetch, filter(null) clears over the head range, the sort keeps caseSensitive, and filterHead names the filter', async () => {
+    const FILTERED: WireRange = { r0: 0, r1: 39, c0: 0, c1: 3, header: 1, totals: 0 }
+    const summary = [{ col: 2, kind: 'values' }]
+    const { sheets, sortOps } = fakeSheets({
+      layout: (id) => wire(id, { viewGen: 4, sort: { range: RANGE, keys: [{ col: 1, order: 'desc' }] }, filterSummary: summary }),
+      sortOps: { order: vi.fn(async () => orderAt(4, () => true, { filterSummary: summary, caseSensitive: true, filterRange: FILTERED })) },
+    })
+    const wb = new StreamWorkbook(sheets, 'doc')
+    await wb.activate('0')
+    expect(wb.view('0').filter).toBeNull()
+    expect(wb.view('0').sort).toEqual({ ...SORT, caseSensitive: true })
+    expect(wb.filterHead('0')).toEqual({ range: FILTERED, columns: summary })
+    const r = await wb.filter(owner(wb), null, [], never)
+    expect(r.kind).toBe('committed')
+    expect(sortOps.filter).toHaveBeenCalledWith('0', 4, { range: FILTERED, columns: [] }, never)
+    // The fake answers a view with no filter: nothing is named any more.
+    expect(wb.filterHead('0')).toBeNull()
   })
 })

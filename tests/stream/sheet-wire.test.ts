@@ -647,3 +647,29 @@ describe('sheet-layout carries the sort (F1)', () => {
     }
   })
 })
+
+// ---- Task 9 fix round 1: the sort clear and the head's view fields ----
+import { sortClearArgs } from '../../src/stream/sheet-wire'
+
+describe('sort clear (Task 9 fix round 1)', () => {
+  it('keys: [] clears the sort; sortArgs still refuses it', () => {
+    expect(sortArgs(sortMsg({ keys: [] }), 1)).toBeUndefined()
+    expect(sortClearArgs(sortMsg({ keys: [] }), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), keys: [] })
+    expect(sortClearArgs(sortMsg({ keys: [], caseSensitive: undefined }), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), keys: [] })
+    for (const m of [sortMsg(), sortMsg({ keys: undefined }), sortMsg({ keys: [], range: wr({ r1: 1_048_576 }) }), sortMsg({ keys: [], range: undefined }), sortMsg({ keys: [], caseSensitive: 1 }), sortMsg({ keys: [], sheetId: '1' }), sortMsg({ keys: [], viewGen: -1 })]) {
+      expect(sortClearArgs(m, 1)).toBeUndefined()
+    }
+  })
+
+  it('the order head carries caseSensitive and the filter range, and stays as before without them', () => {
+    const o = { ...smallOrder(), head: orderHead({ caseSensitive: true, filterRange: wr({ r0: 0, r1: 7, header: 0 }) }) }
+    expect(decodeSheetOrder(orderWire(o)).head).toEqual(o.head)
+    expect(Object.keys(orderWire(smallOrder())[0]!.head)).toEqual(['sheetId', 'viewGen', 'counts', 'sort', 'filterSummary'])
+    expect(decodeSheetOrder(orderWire(smallOrder())).head).toEqual(orderHead())
+    const bad: Array<(h: Record<string, any>) => void> = [
+      (h) => { h.caseSensitive = 1 }, (h) => { h.sort = null; h.caseSensitive = false },
+      (h) => { h.filterRange = wr({ r1: 1_048_576 }) }, (h) => { h.filterSummary = []; h.filterRange = wr() }, (h) => { h.filterRange = { ...wr(), x: 1 } },
+    ]
+    for (const edit of bad) { const parts = orderWire(smallOrder()); edit(parts[0]!.head); orderBad(parts) }
+  })
+})

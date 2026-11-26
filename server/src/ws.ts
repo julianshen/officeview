@@ -48,7 +48,7 @@ import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs,
 import { issueToken, newSid, verifyToken } from './tokens'
 import { parseFeatures, sheetModeOf, type SheetMode } from './sheet/mode'
 import { sheetClockAt, type SheetClock } from './sheet/clock'
-import { a11yArgs as sheetA11yArgs, copyArgs, detectArgs, encodeSheetLayout, encodeSheetOrder, encodeTileBody, filterArgs, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, orderArgs, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, sortArgs, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, VALUE_LIST_LIMITS, FILTER_TEXT_UNITS, valuesArgs, type SheetOrder, type StreamSheetLayout, type WireFilterSpec, type WireRange, type WireRule, type WireSelection } from '../../src/stream/sheet-wire'
+import { a11yArgs as sheetA11yArgs, copyArgs, detectArgs, encodeSheetLayout, encodeSheetOrder, encodeTileBody, filterArgs, findArgs, fitArgs, FIND_MAX_HITS, LayoutTooLarge, MAX_SHEETS, orderArgs, resizeArgs, SHEET_MAX_COLS, SHEET_MAX_ROWS, SHEET_NAME_CHARS, SHEET_VIEW_FEATURE, sortArgs, sortClearArgs, TILE_BATCH_MAX, TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, VALUE_LIST_LIMITS, FILTER_TEXT_UNITS, valuesArgs, type SheetOrder, type StreamSheetLayout, type WireFilterSpec, type WireRange, type WireRule, type WireSelection } from '../../src/stream/sheet-wire'
 import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
 import { TILE_BYTES_ESTIMATE, tileBasisLabel, type RenderedTile } from './sheet/tile'
 import { runTiles, TileSlots, tilesArgs, tilesInGrid, type SheetExtent, type TileBatch, type TileCoord, type TileRefusalCode, type TilesArgs } from './sheet/tiles-op'
@@ -1325,7 +1325,8 @@ export function createStreamServer(o: StreamServerOptions) {
   /**
    * In order, each failure one `refused` that moves nothing:
    * 1. the token (`textOp`);
-   * 2. the arguments (`sortArgs`/`filterArgs`), else `policy-refused`, uncharged and with no row;
+   * 2. the arguments (`sortArgs`, else `sortClearArgs` for a `keys: []` clear, or `filterArgs`), else `policy-refused`,
+   *    uncharged and with no row;
    * 3. the `'sheet'` rate, then `sheetBusy` (both `rate-limited`; the flag is set before the next await and cleared in
    *    the `finally` only while this socket owns the sid);
    * 4. P4 against the authored layout (`baseLayout`) and the sid's lists: `stale-view`; `hidden-target` for a collapsed
@@ -1350,11 +1351,13 @@ export function createStreamServer(o: StreamServerOptions) {
     const { reqId, s, sd } = a
     const sheetCount = (sd.doc.sheets ?? []).length
     const sortReq = kind === 'sort' ? sortArgs(msg, sheetCount) : undefined
+    // Task 9 fix round 1: `keys: []` clears the sort (the filter stays).
+    const clearReq = kind === 'sort' && !sortReq ? sortClearArgs(msg, sheetCount) : undefined
     const filterReq = kind === 'filter' ? filterArgs(msg, sheetCount) : undefined
-    const args = sortReq ?? filterReq
+    const args = sortReq ?? clearReq ?? filterReq
     if (!args) return refuse(ws, reqId, 'policy-refused')
     const { sheetIndex: i, sheetId, viewGen, range } = args
-    let rules: Array<[number, string]> = sortReq ? sortReq.keys.map((k): [number, string] => [k.col, k.order]) : filterReq!.columns.map(([col, rule]): [number, string] => [col, rule.kind])
+    let rules: Array<[number, string]> = clearReq ? [] : sortReq ? sortReq.keys.map((k): [number, string] => [k.col, k.order]) : filterReq!.columns.map(([col, rule]): [number, string] => [col, rule.kind])
     const row = (outcome: string) => sheetOpRow(s.sid, { sheetId, kind, viewGen, range, rules, outcome })
     const deny = (code: RefusalCode) => refuse(ws, reqId, row(code) ? code : 'policy-refused')
     const rates = ws.data.rates
@@ -1372,14 +1375,15 @@ export function createStreamServer(o: StreamServerOptions) {
       if (op.cancelled) return deny('cancelled')
       if (viewGen !== sd.views.viewGen(i)) return deny('stale-view')
       const collapsed = (c: number) => base.collapsedCols.some((r) => r.start <= c && c <= r.end)
-      const cols = sortReq ? sortReq.keys.map((k) => k.col) : filterReq!.columns.map(([col]) => col)
+      const cols = clearReq ? [] : sortReq ? sortReq.keys.map((k) => k.col) : filterReq!.columns.map(([col]) => col)
       if ([range.c0, range.c1, ...cols].some(collapsed)) return deny('hidden-target')
       const visibleOnly = sd.policy.contentPolicy === 'visible-only'
       if (visibleOnly && base.coverageUnknown) return deny('coverage-unknown')
       if (visibleOnly && filterReq?.columns.some(([, rule]) => typedCondition(rule))) return deny('filter-condition-refused')
       const current = sd.views.view(i)
       let job: SheetViewJob
-      if (sortReq) job = { op: 'sort', sheetIndex: i, base: current, sort: { range, keys: sortReq.keys, caseSensitive: sortReq.caseSensitive } }
+      if (clearReq) job = { op: 'sort', sheetIndex: i, base: current, sort: null }
+      else if (sortReq) job = { op: 'sort', sheetIndex: i, base: current, sort: { range, keys: sortReq.keys, caseSensitive: sortReq.caseSensitive } }
       else {
         const filter = resolveFilter(sd.lists, i, viewGen, filterReq!, current)
         if (typeof filter === 'string') return deny(filter)

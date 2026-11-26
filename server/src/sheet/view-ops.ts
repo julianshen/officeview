@@ -428,6 +428,9 @@ export function sheetOrderOf(sheetIndex: number, view: CanonicalView, order: Row
       sheetId: String(sheetIndex), viewGen: 0, counts: { visible, total },
       sort: view.sort ? { range: view.sort.range, keys: view.sort.keys } : null,
       filterSummary: view.filter ? view.filter.columns.map(([col, rule]) => ({ col, kind: rule.kind })) : [],
+      // Task 9 fix round 1: what a client re-fetching the view needs to re-send it.
+      ...(view.sort ? { caseSensitive: view.sort.caseSensitive } : {}),
+      ...(view.filter && view.filter.columns.length ? { filterRange: view.filter.range } : {}),
     },
     bands: order.bands.map((b) => ({ r0: b.r0, r1: b.r1, sourceAtOffset: b.sourceAtOffset })),
     mask,

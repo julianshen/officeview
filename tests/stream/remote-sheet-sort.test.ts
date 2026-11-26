@@ -148,10 +148,10 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     sock.text(VALUES(v2.reqId))
     expect((await page).items).toHaveLength(2)
 
-    const detect = ops(doc).detect('0', 'filter', sel, { header: 0 })
+    const detect = ops(doc).detect('0', 2, 'filter', sel, { header: 0 })
     await settle()
     const d = sock.of('range-detect')[0]!
-    expect(d).toEqual({ reqId: d.reqId, type: 'range-detect', token: tokenFor('j1'), sheetId: '0', viewGen: 0, kind: 'filter', selection: sel, override: { header: 0 } })
+    expect(d).toEqual({ reqId: d.reqId, type: 'range-detect', token: tokenFor('j1'), sheetId: '0', viewGen: 2, kind: 'filter', selection: sel, override: { header: 0 } })
     sock.text(DETECTED(d.reqId))
     expect(await detect).toEqual({ range: RANGE, source: 'region', header: 'heuristic', overrideIgnored: false })
 
@@ -201,7 +201,7 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     const sort = errorOf(ops(doc).sort('0', 0, { range: RANGE, keys: [{ col: 1, order: 'asc' }], caseSensitive: false }))
     const filter = errorOf(ops(doc).filter('0', 0, { range: RANGE, columns: [] }))
     const values = ops(doc).values({ sheetId: '0', viewGen: 0, range: RANGE, col: 1 })
-    const detect = ops(doc).detect('0', 'sort', sel)
+    const detect = ops(doc).detect('0', 0, 'sort', sel)
     const order = ops(doc).order('0')
     await settle()
     const v1 = sock.of('filter-values')[0]!, o1 = sock.of('sheet-order')[0]!
@@ -265,7 +265,7 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     expect(formula.refusal).toEqual({ reason: 'formula-value-unavailable', count: 3, firstAddress: { row: 4, col: 1 } })
     const drawing = await at(ops(doc).filter('0', 0, { range: RANGE, columns: [] }), 'sheet-filter', { reason: 'drawing-impact' })
     expect(drawing.refusal).toEqual({ reason: 'drawing-impact', drawingId: '' })
-    const ambiguous = await at(ops(doc).detect('0', 'sort', sel), 'range-detect', { reason: 'ambiguous-selection' })
+    const ambiguous = await at(ops(doc).detect('0', 0, 'sort', sel), 'range-detect', { reason: 'ambiguous-selection' })
     expect(ambiguous.refusal).toEqual({ reason: 'ambiguous-selection', message: VIEW_REFUSAL_MESSAGES['ambiguous-selection'] })
     // Anything off the P13 contract is policy-refused.
     for (const m of [{ reason: 'merge' }, { reason: 'incomplete' }, { reason: 'made-up' }, { reason: 'merge', range: { r0: 3, r1: 2, c0: 0, c1: 0 } }, { reason: 'formula-value-unavailable', count: 1 }]) {
@@ -288,12 +288,12 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     const cases: Array<[() => Promise<unknown>, string, (reqId: number) => object[]]> = [
       [() => ops(doc).order('0'), 'sheet-order', () => notPermutation],
       [() => ops(doc).values({ sheetId: '0', viewGen: 0, range: RANGE, col: 1 }), 'filter-values', (reqId) => [{ ...VALUES(reqId), items: [[2, 'x', 0]] }]],
-      [() => ops(doc).detect('0', 'sort', sel), 'range-detect', (reqId) => [{ ...DETECTED(reqId), range: { ...RANGE, r1: SHEET_MAX_ROWS } }]],
+      [() => ops(doc).detect('0', 0, 'sort', sel), 'range-detect', (reqId) => [{ ...DETECTED(reqId), range: { ...RANGE, r1: SHEET_MAX_ROWS } }]],
       // Another sheet's order, and a sort answered below its own viewGen.
       [() => ops(doc).order('0'), 'sheet-order', () => encodeSheetOrder({ ...orderOf(1, 0, 39), head: { ...orderOf(1, 0, 39).head, sheetId: '1' } })],
       [() => ops(doc).sort('0', 3, { range: RANGE, keys: [{ col: 1, order: 'asc' }], caseSensitive: false }), 'sheet-sort', () => encodeSheetOrder(orderOf(2, 0, 39))],
       // An answer of another op's shape.
-      [() => ops(doc).detect('0', 'sort', sel), 'range-detect', (reqId) => [VALUES(reqId)]],
+      [() => ops(doc).detect('0', 0, 'sort', sel), 'range-detect', (reqId) => [VALUES(reqId)]],
       [() => ops(doc).values({ sheetId: '0', viewGen: 0, range: RANGE, col: 1 }), 'filter-values', () => encodeSheetOrder(orderOf(1, 0, 39))],
     ]
     for (const [start, type, answer] of cases) {
@@ -306,10 +306,23 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     expect(s.stats().pending).toBe(0)
     expect(s.isEnded()).toBe(false)
     // The session stays open: the next request is answered.
-    const next = ops(doc).detect('0', 'sort', sel)
+    const next = ops(doc).detect('0', 0, 'sort', sel)
     await settle()
     sock.text(DETECTED(sock.of('range-detect').at(-1)!.reqId))
     expect((await next).header).toBe('heuristic')
+    doc.close()
+  })
+
+  it('a sort clear travels as keys: []; null names no range and is not sent (fix round 1)', async () => {
+    const { doc, sock } = await opened()
+    const clear = ops(doc).sort('0', 2, { range: RANGE, keys: [], caseSensitive: false })
+    await settle()
+    const c = sock.of('sheet-sort')[0]!
+    expect(c).toEqual({ reqId: c.reqId, type: 'sheet-sort', token: tokenFor('j1'), sheetId: '0', viewGen: 2, range: RANGE, keys: [], caseSensitive: false })
+    send(sock, c.reqId, encodeSheetOrder({ head: { sheetId: '0', viewGen: 3, counts: { visible: 39, total: 39 }, sort: null, filterSummary: [] }, bands: [], mask: null }))
+    expect((await clear).head.sort).toBeNull()
+    expect((await errorOf(ops(doc).sort('0', 3, null))).code).toBe('unsupported-op')
+    expect(sock.of('sheet-sort')).toHaveLength(1)
     doc.close()
   })
 
