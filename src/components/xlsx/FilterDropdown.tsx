@@ -11,7 +11,11 @@ import { useControlMedia } from './controlMedia'
 import { m } from 'motion/react'
 import { popover, sheet, useMotionProps } from '../motion/presets'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
-export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
+/** `typedConditions: false` (P16, a stream without `typedFilters`): number and date conditions are not offered. */
+export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null; typedConditions?: boolean }
+/** P16: the title of the number or date filter choice a viewing mode does not serve. */
+export const TYPED_CONDITIONS_UNAVAILABLE = "This filter isn't available in this viewing mode."
+const TEXT_CONDITIONS = Object.freeze(['text'] as const)
 /** Reserved height of the loaded page's controls ((Blanks), the selected-count
  * line, Previous/Next values) so their arrival moves nothing below them. */
 const PAGE_BLOCK_MIN_HEIGHT = 160
@@ -79,6 +83,8 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       periods.push(`${rule.preset}: ${day(interval.start)} through ${day(interval.end - 1)} (${context.timeZone}); re-resolved when applied.`)
     }
   }
+  const typedOff = props.typedConditions === false && (classification.kind === 'number' || classification.kind === 'date')
+  const conditionKinds = props.typedConditions === false ? { kinds: TEXT_CONDITIONS } : {}
   const canApply = Boolean(range) && (method === 'values' ? Boolean(page?.complete) : Boolean(custom) && !validation)
   const apply = (shortcut?: 'clear' | 'clearAll' | 'asc' | 'desc') => {
     if (busy || life.invalid || (!shortcut && !canApply)) return
@@ -104,7 +110,12 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       if (!job.accepts(outcome)) return
       const replacement = !shortcut && props.applied && range && !sameFilterRange(props.applied.range, range.range)
       const text = shortcut === 'asc' || shortcut === 'desc' ? 'View-only sort applied; formulas unchanged.' : shortcut ? `Filter cleared.${props.snapshotHidden ? " File's saved hidden rows remain hidden." : ''}` : `${outcome.kind === 'unchanged' ? 'Filter unchanged.' : 'Filter applied.'}${replacement ? ' Previous filter range replaced.' : ''}`
-      if (!life.result(outcome, text)) { setError(failureText(outcome as Parameters<typeof failureText>[0])); setBusy(false) }
+      if (!life.result(outcome, text)) {
+        setError(failureText(outcome as Parameters<typeof failureText>[0])); setBusy(false)
+        // A stream draft whose list the server re-listed shows the new list.
+        const fresh = session.current?.relisted?.()
+        if (fresh) { setQuery({ text: '', offset: 0 }); setPage(fresh) }
+      }
     })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
   }
   if (props.open === false) return null
@@ -125,7 +136,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
       {/* Space reserved for what the value list's arrival fills in, so nothing below moves (no layout shift). */}
       <p style={{ minHeight: '2.6em' }}>{range && <>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</>}</p>
-      <label>Filter method <select aria-label="Filter method" className={SELECT_CLS} style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
+      <label>Filter method <select aria-label="Filter method" className={SELECT_CLS} style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom" {...(typedOff ? { disabled: true, title: TYPED_CONDITIONS_UNAVAILABLE } : {})}>{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
         <label>Search <input ref={searchInput} aria-label="Search all values" className={CONTROL_CLS} disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
@@ -143,9 +154,9 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
           <p>{page.count.count} selected values{page.count.pending ? `; ${page.count.pending} pending` : ''}; {page.count.complete ? 'complete universe' : 'universe incomplete'}.</p>
           <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}</div>
       </> : <>
-        <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} />
+        <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} {...conditionKinds} />
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
-        {compound && <><label>Combine <select aria-label="Combine conditions" className={SELECT_CLS} style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
+        {compound && <><label>Combine <select aria-label="Combine conditions" className={SELECT_CLS} style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} {...conditionKinds} /></>}
         {classification.kind === 'date' && <p>Calendar dates in {props.client.context().timeZone}; periods include times and resolve at apply time.</p>}
       </>}
       {periods.map(period => <p key={period}>{period}</p>)}

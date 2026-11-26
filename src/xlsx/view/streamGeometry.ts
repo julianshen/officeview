@@ -7,6 +7,7 @@
  */
 import type { StreamSheetLayout } from '../../stream/sheet-wire'
 import type { XlsxMergeRange } from '../types'
+import type { RowOrder, RowVisibility } from './contracts'
 import { createAxisMetrics } from './axes'
 import { mergeAxisOverrides } from './axisSizes'
 import { MAX_COLS, MAX_ROWS } from './coordinates'
@@ -20,10 +21,13 @@ const NO_DRAWINGS: readonly never[] = Object.freeze([])
  * session sizes (`mergeAxisOverrides`); collapsed runs still win in the axis. */
 const withSession = (base: StreamSheetLayout['rows'], session: Array<[number, number]> | undefined) => session?.length ? mergeAxisOverrides(base, new Map(session)) : base
 
-export function streamSheetGeometry(l: StreamSheetLayout): SheetGeometry {
-  const rows = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: l.defaults.rowPx, overrides: withSession(l.rows, l.sessionRows), ...(l.collapsedRows.length ? { collapsed: l.collapsedRows } : {}) })
+/** Stage 4c (P7): under the server's view (`view`: its order and display-slot mask) the row axis keeps no collapsed run;
+ * the mask decides which rows show (it already hides the authored-hidden rows C1 keeps hidden), as `buildSheetGeometry`
+ * builds a view's rows. Without `view` (the identity view) the authored collapsed rows collapse the axis, as in 4a/4b. */
+export function streamSheetGeometry(l: StreamSheetLayout, view?: { order: RowOrder; visibility: RowVisibility }): SheetGeometry {
+  const rows = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: l.defaults.rowPx, overrides: withSession(l.rows, l.sessionRows), ...(!view && l.collapsedRows.length ? { collapsed: l.collapsedRows } : {}) })
   const cols = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: l.defaults.colPx, overrides: withSession(l.cols, l.sessionCols), ...(l.collapsedCols.length ? { collapsed: l.collapsedCols } : {}) })
-  const metrics = createSheetMetrics({ rows, cols })
+  const metrics = createSheetMetrics(view ? { rows, cols, order: view.order, visibility: view.visibility } : { rows, cols })
   const merges = RectangleIndex.build(l.merges.map((r): { rect: typeof r; value: XlsxMergeRange } => ({ rect: { r0: r.r0, r1: r.r1, c0: r.c0, c1: r.c1 }, value: { minRow: r.r0, maxRow: r.r1, minCol: r.c0, maxCol: r.c1 } })))
   return Object.freeze({
     kind: 'ready' as const,

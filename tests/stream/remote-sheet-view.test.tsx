@@ -247,3 +247,40 @@ describe('RemoteSheetView (tiles mode, 4b sheetView)', { timeout: 30_000 }, () =
     expect(doc.search).not.toHaveBeenCalled()
   })
 })
+
+// Stage 4c Task 10 (P16, S4 §6.11): with `sheetSort: 1` (and its `sortOps`) the column headers carry the sort and
+// filter buttons; a 4b session (`sheetView: 1` alone) still mounts none.
+describe('RemoteSheetView (tiles mode, 4c sheetSort)', { timeout: 30_000 }, () => {
+  const textOps = () => ({
+    find: vi.fn(async () => ({ hits: [], total: 0, truncated: false })), copy: vi.fn(async () => ''), a11y: vi.fn(async () => []),
+    fit: vi.fn(async () => 64), resize: vi.fn(),
+  })
+  const sortOps = () => ({
+    typedFilters: false, sort: vi.fn(), filter: vi.fn(), order: vi.fn(),
+    values: vi.fn(async () => ({ list: 'L', items: [], blanks: { present: false, selected: true }, total: 0, truncated: false })),
+    detect: vi.fn(async () => ({ range: { r0: 0, r1: 39, c0: 0, c1: 9, header: 1, totals: 0 }, source: 'region', header: 'heuristic', overrideIgnored: false })),
+  })
+  it('4c stream mounts the filter buttons', async () => {
+    for (const sheetSort of [true, false]) {
+      const { doc, sheets } = fakeDoc()
+      ;(doc.manifest as Record<string, unknown>).sheetView = 1
+      ;(sheets as { view?: unknown }).view = textOps()
+      if (sheetSort) {
+        ;(doc.manifest as Record<string, unknown>).sheetSort = 1
+        ;(sheets as { sortOps?: unknown }).sortOps = sortOps()
+      }
+      const v = view(doc)
+      await grid(v)
+      await waitFor(() => expect(v.container.querySelectorAll('[role="gridcell"]').length).toBeGreaterThan(10))
+      if (sheetSort) {
+        expect(await v.findByRole('button', { name: /^Filter column A / })).toBeTruthy()
+        expect(v.getByRole('button', { name: /^Cycle sort column A/ })).toBeTruthy()
+      } else {
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(v.queryByRole('button', { name: /^Filter column/ })).toBeNull()
+        expect(v.queryByRole('button', { name: /sort|filter/i })).toBeNull()
+      }
+      cleanup()
+    }
+  })
+})

@@ -34,6 +34,8 @@ export interface ValuesDraftPort {
   inspect(ordinal: number, signal: AbortSignal): Promise<string>
   transfer(): void
   cancel(): void
+  /** A stream draft whose list the server re-listed (`stale-filter-values`): the new list's first page, once. */
+  relisted?(): DraftPage | null
 }
 export interface ControlsClient {
   owner(): CacheIdentity
