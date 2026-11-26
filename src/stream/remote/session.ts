@@ -27,14 +27,14 @@ import { decodeShowMessage, MEDIA_ID, SHOW_PLAN_LIMITS } from '../show-plan'
 import type { AllocationOwner, Lease } from '../../slideshow/types'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
-import type { StreamSheetLayout } from '../sheet-wire'
+import { decodeSheetOrder, LAYOUT_PART_BYTES, ORDER_LIMITS, type SheetOrder, type StreamSheetLayout } from '../sheet-wire'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { MediaSendLog } from './media-pacing'
 import { UNIT_FIRST_CAP, UNIT_RESEND_CAP, UNIT_SPAN_MS, UnitSendLog, type UnitBudgetView } from './unit-budget'
 import { SheetChannel, type DecodedTile, type TilesRequest, type TilesResult } from './sheet-channel'
-import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, SHEET_TEXT_TYPES, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
+import { admit, emptyTally, isTerminal, requestBody, SHEET_ORDER_TYPES, SHEET_SORT_TYPES, SORT_REFUSALS, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, SHEET_TEXT_TYPES, textMessage, utf8Bytes, viewRefusal, type SortRefusalCode, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 export type { PrintedPage } from './print-wire'
@@ -195,6 +195,8 @@ interface TextReq {
   /** What the current issue has received (checked against TEXT_LIMITS). */
   tally: TextTally
   rotatedRetry: boolean
+  /** Stage 4c (P7): the current issue's `sheet-order` parts, in arrival order (reset when it is re-issued). */
+  parts: unknown[]
 }
 interface PrintJob {
   from: number; n: number; reqId: number
@@ -343,8 +345,9 @@ interface MediaShowReq {
 /** Re-issued after a resume; copy and a11y are not (the server may already
  * have counted them against the copy quota). Stage 4b (P13): `sheet-find` and
  * `sheet-fit` are re-issued; `sheet-copy`, `sheet-a11y` (counted, audited) and
- * `sheet-resize` (it may have advanced the view) are not. */
-const REISSUED = new Set<TextRequest['type']>(['search', 'select', 'sheet-find', 'sheet-fit'])
+ * `sheet-resize` (it may have advanced the view) are not. Stage 4c (P8): `filter-values`, `range-detect` and
+ * `sheet-order` are re-issued; `sheet-sort` and `sheet-filter` (they may have moved the view) are not. */
+const REISSUED = new Set<TextRequest['type']>(['search', 'select', 'sheet-find', 'sheet-fit', 'filter-values', 'range-detect', 'sheet-order'])
 
 const abortError = () => Object.assign(new Error('The stream session was closed.'), { name: 'AbortError' })
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
@@ -509,11 +512,22 @@ export class StreamSession {
    * one ('closed'), as the server does. On resume `sheet-find` and `sheet-fit`
    * are re-issued; `sheet-copy`, `sheet-a11y` and `sheet-resize` reject
    * 'session-rotated' (P13).
+   *
+   * Stage 4c: the sort ops are sent only on a `sheetSort` session (else
+   * `unsupported-op`, without sending). A `sheet-sort`, `sheet-filter` or
+   * `sheet-order` answer is its `sheet-order` parts (each ≤ 64 KiB, at most
+   * 160, in `seq` order), delivered once assembled and decoded as one
+   * `{type: 'sheet-order', order}` naming the sheet asked (a sort or filter: at
+   * no older viewGen). Aborting a sent sort or filter sends `sheet-cancel
+   * {target}`. On resume `filter-values`, `range-detect` and `sheet-order` are
+   * re-issued; `sheet-sort` and `sheet-filter` reject 'session-rotated' (P8).
+   * `view-refused` rejects with the local `refusal` (P13).
    */
   async text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     if (signal?.aborted) throw signal.reason ?? abortError()
     if (SHEET_TEXT_TYPES.has(request.type) && (this.manifest.sheetMode !== 'tiles' || this.manifest.sheetView !== 1)) throw new StreamSessionError('unsupported-op', 'this session does not serve the sheet-view ops')
+    if (SHEET_SORT_TYPES.has(request.type) && (this.manifest.sheetMode !== 'tiles' || this.manifest.sheetView !== 1 || this.manifest.sheetSort !== 1)) throw new StreamSessionError('unsupported-op', 'this session does not serve the sort ops')
     return new Promise<void>((resolve, reject) => {
       // The one settlement path: idempotent, drops the request and its abort listener.
       let settled = false
@@ -524,9 +538,15 @@ export class StreamSession {
         signal?.removeEventListener('abort', onAbort)
         done()
       }
-      const onAbort = () => req.reject(signal!.reason ?? abortError())
+      // P8: a sent sort or filter's pool job is cancelled; nothing more of it is delivered.
+      const onAbort = () => {
+        if (!settled && req.sent && (request.type === 'sheet-sort' || request.type === 'sheet-filter') && this.state === 'open' && this.sock?.readyState === 1) {
+          try { this.send({ reqId: this.allocId(), type: 'sheet-cancel', target: req.reqId }) } catch { /* the socket is failing */ }
+        }
+        req.reject(signal!.reason ?? abortError())
+      }
       const req: TextReq = {
-        request, reqId: 0, on, sent: false, seq: 0, tally: emptyTally(), rotatedRetry: false,
+        request, reqId: 0, on, sent: false, seq: 0, tally: emptyTally(), rotatedRetry: false, parts: [],
         resolve: () => settle(resolve),
         reject: (e) => settle(() => reject(e)),
       }
@@ -964,7 +984,7 @@ export class StreamSession {
   }
   private issueText(req: TextReq) {
     this.texts.delete(req.reqId)
-    req.reqId = this.allocId(); req.seq = 0; req.sent = false; req.tally = emptyTally()
+    req.reqId = this.allocId(); req.seq = 0; req.sent = false; req.tally = emptyTally(); req.parts = []
     this.texts.set(req.reqId, req)
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
     req.sent = true
@@ -1425,10 +1445,12 @@ export class StreamSession {
     if (m.type === 'refused') {
       // A RENEW race (refused before the op ran): a search/select is retried once.
       if (m.code === 'session-rotated' && REISSUED.has(req.request.type) && !req.rotatedRetry) { req.rotatedRetry = true; return this.reissueText(req) }
+      if (SHEET_SORT_TYPES.has(req.request.type)) return req.reject(this.sortRefusal(m))
       const code: TextRefusalCode = TEXT_REFUSALS.has(m.code as TextRefusalCode) ? m.code as TextRefusalCode : 'policy-refused'
       const limit = isCount(m.limit) ? m.limit : undefined, requested = isCount(m.requested) ? m.requested : undefined
       return req.reject(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }))
     }
+    if (m.type === 'sheet-order' && SHEET_ORDER_TYPES.has(req.request.type)) return this.onOrderPart(req, m, bytes)
     // Over-limit answers fail closed (never truncated); the session carries on.
     if (bytes > TEXT_MESSAGE_BYTES) return req.reject(new StreamSessionError('policy-refused', `${String(m.type)} message over 48 KiB of UTF-8`))
     const msg = textMessage(req.request, m, req.seq, { unitCount: this.manifest.units.count, sheetCount: this.manifest.sheets?.length ?? 0 })
@@ -1437,6 +1459,32 @@ export class StreamSession {
     if (over) return req.reject(new StreamSessionError('policy-refused', over))
     if ('seq' in msg) req.seq++
     if (this.deliver(req, msg) && isTerminal(msg)) req.resolve()
+  }
+
+  /** A Stage 4c refusal: its code when it is one (SORT_REFUSALS), with the local refusal of a `view-refused` (P13);
+   * a `view-refused` off the P13 contract, or any other code, is `policy-refused`. */
+  private sortRefusal(m: Record<string, unknown>): StreamSessionError {
+    const code: SortRefusalCode = SORT_REFUSALS.has(m.code as SortRefusalCode) ? m.code as SortRefusalCode : 'policy-refused'
+    if (code !== 'view-refused') return new StreamSessionError(code)
+    const refusal = viewRefusal(m)
+    return refusal ? new StreamSessionError('view-refused', `view-refused: ${refusal.reason}`, { refusal }) : new StreamSessionError('policy-refused', 'malformed view-refused')
+  }
+  /** One `sheet-order` part (P7). Fail closed on arrival: over 64 KiB, a `seq` that is not the next, past 160 parts.
+   * On `last: true` the parts decode as one answer (`decodeSheetOrder`), which must name the sheet asked and, for a
+   * sort or filter, no older viewGen than the request's. */
+  private onOrderPart(req: TextReq, m: Record<string, unknown>, bytes: number) {
+    const r = req.request as Extract<TextRequest, { type: 'sheet-sort' | 'sheet-filter' | 'sheet-order' }>
+    const hostile = (why: string) => req.reject(new StreamSessionError('policy-refused', why))
+    if (bytes > LAYOUT_PART_BYTES) return hostile('a sheet-order part over 64 KiB')
+    if (m.seq !== req.parts.length) return hostile(`sheet-order part ${String(m.seq)} out of order`)
+    if (req.parts.length >= ORDER_LIMITS.parts) return hostile(`more than ${ORDER_LIMITS.parts} sheet-order parts`)
+    req.parts.push(m)
+    if (m.last !== true) return
+    let order: SheetOrder
+    try { order = decodeSheetOrder(req.parts) } catch (e) { return hostile((e as Error).message) } finally { req.parts = [] }
+    if (order.head.sheetId !== r.sheetId) return hostile(`an order of sheet ${order.head.sheetId}, asked for ${r.sheetId}`)
+    if (r.type !== 'sheet-order' && order.head.viewGen < r.viewGen) return hostile(`an order at viewGen ${order.head.viewGen}, below ${r.viewGen}`)
+    if (this.deliver(req, { type: 'sheet-order', order })) req.resolve()
   }
 
   private now() { return (this.o.now ?? (() => performance.now()))() }
@@ -1575,7 +1623,7 @@ export class StreamSession {
     if (mediaShow) return this.onMediaShowText(mediaShow, m, data)
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
     // Only text-service answers are held to 48 KiB (refused/diag are control messages).
-    if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
+    if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) || m.type === 'sheet-order' ? utf8Bytes(data) : 0)
     if (m.type === 'refused' && typeof m.reqId === 'number') {
       const req = this.units.get(m.reqId)
       // R28: the log blocks every charged unit send (any caller) before the caller

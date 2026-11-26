@@ -1,4 +1,5 @@
 /** Typed stream-session failures (§6.2 rule 8 registry, client view; §10). */
+import type { OperationRefusal } from '../../xlsx/view/contracts'
 
 /** The server's session CLOSE numbers (4007 is client-originated). */
 export const CLOSE_NAMES = {
@@ -31,6 +32,9 @@ export type StreamErrorCode =
   /** Stage 4b sheet-op refusals (P12): the row or column is collapsed, the sheet's coverage is unknown under
    * `visible-only`, or the session's view state is at its cap. */
   | 'hidden-target' | 'coverage-unknown' | 'view-state-limit'
+  /** Stage 4c sort-op refusals (S4 §6.6; P4, P8, P13): a value-list id or cursor the server no longer holds, a typed
+   * condition this viewing mode refuses, the local engine's refusal (`StreamSessionError.refusal`), a cancelled op. */
+  | 'stale-filter-values' | 'filter-condition-refused' | 'view-refused' | 'cancelled'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'
@@ -38,10 +42,13 @@ export class StreamSessionError extends Error {
   readonly limit?: number
   /** What the refused request asked for against `limit`, when the server gave it. */
   readonly requested?: number
-  constructor(readonly code: StreamErrorCode, message: string = code, nums: { limit?: number; requested?: number } = {}) {
+  /** Stage 4c (P13): a `view-refused` refusal's local engine refusal, rebuilt with local message strings. */
+  readonly refusal?: OperationRefusal
+  constructor(readonly code: StreamErrorCode, message: string = code, nums: { limit?: number; requested?: number; refusal?: OperationRefusal } = {}) {
     super(message)
     if (nums.limit !== undefined) this.limit = nums.limit
     if (nums.requested !== undefined) this.requested = nums.requested
+    if (nums.refusal !== undefined) this.refusal = nums.refusal
   }
 }
 
