@@ -7,8 +7,19 @@
  *   per axis per sheet, and at most `ViewStateLedger.maxBytes` (16 MiB) per process at `SESSION_SIZE_ENTRY_BYTES`
  *   (128 B) per entry. Only a new index is charged; a reset and `dispose` return the bytes.
  * - A refusal changes nothing, and `viewGen` advances only when the sizes change.
+ *
+ * Stage 4c (plan P2, P11, F4): each sheet also carries its canonical sort and filter view.
+ * - A sheet is "ordered" when its view sorts or filters; at most `MAX_ORDERED_SHEETS` per session. A third is
+ *   `'view-state-limit'`; sizes are not capped by it.
+ * - An ordered view is admitted by the caller's `hold`, which returns its release, or `null` when refused. The new
+ *   hold is taken before the replaced one is released; `dispose` releases every hold.
+ * - `viewGen` advances when the sizes or the view change.
  */
 import { clampSize, MAX_SESSION_SIZES, SESSION_SIZE_ENTRY_BYTES, type SessionSizes } from '../../../src/xlsx/view/axisSizes'
+import { canonicalView, canonicalViewHash, IDENTITY_VIEW, isIdentityView, type CanonicalView } from './view-spec'
+
+/** P11: at most two sheets per session hold a sort or a filter (S4 §6.3). */
+export const MAX_ORDERED_SHEETS = 2
 
 /** The canonical wire form of one sheet's sizes: axis `'col'` before `'row'`, each ascending by index. */
 export type WireSizes = Array<{ axis: 'row' | 'col'; index: number; px: number }>
@@ -27,7 +38,9 @@ export class ViewStateLedger {
   get bytes(): number { return this.used }
 }
 
-interface SheetView { gen: number; rows: Map<number, number>; cols: Map<number, number> }
+interface SheetView { gen: number; rows: Map<number, number>; cols: Map<number, number>; view: CanonicalView; viewHash: string; release: (() => void) | null }
+const IDENTITY_HASH = canonicalViewHash(IDENTITY_VIEW)
+const emptySheet = (): SheetView => ({ gen: 0, rows: new Map(), cols: new Map(), view: IDENTITY_VIEW, viewHash: IDENTITY_HASH, release: null })
 export type ViewChange = { axis: 'row' | 'col'; index: number; size: number } | { reset: true }
 
 /** One session's view state, per sheet index. Survives a resume; `dispose` at teardown. */
@@ -69,14 +82,46 @@ export class SessionViews {
       if (!this.ledger.take(SESSION_SIZE_ENTRY_BYTES)) return 'view-state-limit'
       this.charged += SESSION_SIZE_ENTRY_BYTES
     }
-    if (!v) this.sheets.set(sheetIndex, v = { gen: 0, rows: new Map(), cols: new Map() })
+    if (!v) this.sheets.set(sheetIndex, v = emptySheet())
     ;(change.axis === 'row' ? v.rows : v.cols).set(change.index, applied)
     return { viewGen: ++v.gen, applied }
   }
 
-  /** Returns every charged byte to the ledger (idempotent). */
+  /** The sheet's canonical sort and filter view (the identity view when it has none). */
+  view(sheetIndex: number): CanonicalView { return this.sheets.get(sheetIndex)?.view ?? IDENTITY_VIEW }
+
+  /** How many sheets hold a sort or a filter. */
+  orderedSheets(): number {
+    let n = 0
+    for (const v of this.sheets.values()) if (!isIdentityView(v.view)) n++
+    return n
+  }
+
+  /**
+   * Commits `next` as the sheet's view and returns the new `viewGen`. An equal view changes nothing. An ordered view
+   * past `MAX_ORDERED_SHEETS`, or one whose `hold` is refused, is `'view-state-limit'` and changes nothing. The
+   * identity view takes no hold. The replaced view's hold is released after the new one is taken.
+   */
+  commit(sheetIndex: number, next: CanonicalView, hold: () => (() => void) | null): number | 'view-state-limit' {
+    const view = canonicalView(next), viewHash = canonicalViewHash(view)
+    const v = this.sheets.get(sheetIndex)
+    if ((v?.viewHash ?? IDENTITY_HASH) === viewHash) return v?.gen ?? 0
+    const ordered = !isIdentityView(view)
+    if (ordered && (!v || isIdentityView(v.view)) && this.orderedSheets() >= MAX_ORDERED_SHEETS) return 'view-state-limit'
+    const release = ordered ? hold() : null
+    if (ordered && !release) return 'view-state-limit'
+    const s = v ?? emptySheet()
+    if (!v) this.sheets.set(sheetIndex, s)
+    const old = s.release
+    s.view = view; s.viewHash = viewHash; s.release = release
+    old?.()
+    return ++s.gen
+  }
+
+  /** Returns every charged byte to the ledger and releases every view hold (idempotent). */
   dispose(): void {
     this.release(this.charged)
+    for (const v of this.sheets.values()) { const r = v.release; v.release = null; r?.() }
     this.sheets.clear()
   }
 

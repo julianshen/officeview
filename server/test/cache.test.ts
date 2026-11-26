@@ -107,3 +107,46 @@ describe('Stage 4b view-state hash (S4 §6.3)', () => {
     expect(viewStateHash({ clock, sizes: [{ px: 1790, index: 2, axis: 'col' }], authorHiddenTier: 'none', filters: [], sort: null })).toBe(a)
   })
 })
+
+// ---- Stage 4c Task 4 (P2, P11): the canonical view in the hash, and view holds in the document ledger ----
+import { IDENTITY_VIEW } from '../src/sheet/view-spec'
+
+describe('Stage 4c view-state hash (P2)', () => {
+  const clock = { day: '2026-11-23', timeZone: 'UTC' }
+  test('identity hashes unchanged', () => {
+    // Printed by `viewStateHash` at fb624989 (4b), under this clock: the identity view, and a sizes-only view.
+    const sizes = [{ axis: 'col' as const, index: 2, px: 1790 }, { axis: 'row' as const, index: 5, px: 40 }]
+    expect(viewStateHash({ view: IDENTITY_VIEW, sizes: [], authorHiddenTier: 'none', clock })).toBe('ed406e854c26f24450bbdd81d392b23810110369f6d89c8cd5d9302ebd51c645')
+    expect(viewStateHash({ view: IDENTITY_VIEW, sizes, authorHiddenTier: 'none', clock })).toBe('af1e4ca982de561a2e671905e6fe66234c5b6fca2fa693a2d7f461dc1aec9fe0')
+    expect(viewStateHash({ sort: null, filters: [], sizes, authorHiddenTier: 'none', clock })).toBe('af1e4ca982de561a2e671905e6fe66234c5b6fca2fa693a2d7f461dc1aec9fe0')
+  })
+})
+
+describe('Stage 4c view holds (P11)', () => {
+  test('admission', () => {
+    const MiB = 1 << 20
+    const dropped: string[] = []
+    const l = new DocumentLedger((d, p) => dropped.push(`${d}|${p}`), 10 << 20)
+    expect(l.touch('d1', 'visible-only', (4 * MiB) / 8)).toBe(true)   // a 4 MiB parse
+    expect(l.hold('v1', 8 * MiB)).toBe(true)                           // 12 MiB > 10 MiB: the parse is evicted
+    expect(dropped).toEqual(['d1|visible-only'])
+    expect(l.size).toBe(8 * MiB)
+    expect(l.hold('v1', 8 * MiB)).toBe(true)                           // a second holder charges nothing more
+    expect(l.size).toBe(8 * MiB)
+    expect(l.hold('v2', 8 * MiB)).toBe(false)                          // a third distinct hold cannot fit
+    expect(l.size).toBe(8 * MiB)
+    expect(dropped).toEqual(['d1|visible-only'])
+    expect(l.touch('d2', 'visible-only', (4 * MiB) / 8)).toBe(false)  // a held view is never evicted for a parse
+    l.release('v1')
+    expect(l.size).toBe(8 * MiB)
+    l.release('v1')                                                     // both holders gone: freed
+    expect(l.size).toBe(0)
+    l.release('v1')                                                     // an extra release is a no-op
+    expect(l.size).toBe(0)
+    expect(l.hold('v2', 8 * MiB)).toBe(true)
+    // A hold key never meets a parse key.
+    expect(l.touch('v2', 'visible-only', 1)).toBe(true)
+    expect(l.size).toBe(8 * MiB + 8)
+    expect(dropped).toEqual(['d1|visible-only'])
+  })
+})

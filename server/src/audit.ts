@@ -5,7 +5,7 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type MediaDeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type SheetViewRecord, type ShowDeliveryRecord, type StoredRow, type TileDeliveryRecord } from './audit-store'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type MediaDeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type SheetOpRecord, type SheetViewRecord, type ShowDeliveryRecord, type StoredRow, type TileDeliveryRecord } from './audit-store'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
@@ -106,6 +106,12 @@ export class AuditTable {
   recordSheetView(r: Omit<SheetViewRecord, 'at'>): void {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putSheetView({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
+  /** Stage 4c (P12): one sort, filter, value-list or range-detect request of `sid`, durable before its answer. Throws
+   * for an unknown or expired sid, or a rule word that is not a kind (the caller refuses `policy-refused`). */
+  recordSheetOp(r: Omit<SheetOpRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putSheetOp({ ...r, at: Math.floor(Date.now() / 1000) })
   }
   /** One copy (or counted a11y answer) is about to go to `sid`: durable before the send (a sheet copy with its `sheetId` and
    * bounding `rect`, Stage 4b P8). Throws for an unknown or expired sid. */

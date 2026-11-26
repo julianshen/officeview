@@ -8,7 +8,9 @@ import type { AuditRowInput } from './audit'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 import type { MarkSpec } from './render'
 import type { SheetClock } from './sheet/clock'
+import type { WireRange, WireSortSpec } from '../../src/stream/sheet-wire'
 import type { WireSizes } from './sheet/view-state'
+import type { ResolvedFilter } from './sheet/view-spec'
 
 /** §9.3: rows are kept 90 days, then deleted. */
 export const AUDIT_RETENTION_SEC = 90 * 24 * 3600
@@ -29,7 +31,26 @@ export interface DeliveryRecord { sid: string; unitIndex: number; scale: number;
  */
 export interface TileDeliveryRecord { sid: string; sheetId: string; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: 'light' | 'dark'; col: number; row: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
 /** The sheet view a sid's tiles of `(sheetId, viewGen)` were drawn under (R7; Stage 4b: the session's canonical sizes, `[]` for the identity view), with the session clock. Write-once. */
-export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: { sort: null; filters: []; sizes: WireSizes }; clock: SheetClock; at: number }
+/** A sheet view's audited spec. 4a/4b wrote `{sort: null, filters: [], sizes}`, which reads back as written (F2). Stage 4c
+ * (P12) writes the canonical view `{sort, sortFilter, filter, sizes}`, values rules by list `{range, col}` and positions,
+ * typed operands in the clear. `sheetViewSpecOf` reads either form as the 4c one. */
+export type SheetViewSpec =
+  | { sort: null; filters: []; sizes: WireSizes }
+  | { sort: WireSortSpec | null; sortFilter: ResolvedFilter | null; filter: ResolvedFilter | null; sizes: WireSizes }
+export interface SheetViewRecord { sid: string; sheetId: string; viewGen: number; spec: SheetViewSpec; clock: SheetClock; at: number }
+/** Either spec form as the 4c one: a 4b record has no sort, `sortFilter` or filter. */
+export function sheetViewSpecOf(spec: SheetViewSpec): { sort: WireSortSpec | null; sortFilter: ResolvedFilter | null; filter: ResolvedFilter | null; sizes: WireSizes } {
+  if ('filters' in spec) return { sort: null, sortFilter: null, filter: null, sizes: spec.sizes }
+  return { sort: spec.sort, sortFilter: spec.sortFilter, filter: spec.filter, sizes: spec.sizes }
+}
+/**
+ * Stage 4c (P12): one sort, filter, value-list or range-detect request of a sid that passed its shape check, written
+ * before the answer. `rules` is `[[col, ruleKind | 'asc' | 'desc'], …]` and never holds an operand; `outcome` is `ok`
+ * or the refusal code. Never deduplicated.
+ */
+export interface SheetOpRecord { sid: string; sheetId: string; kind: 'sort' | 'filter' | 'filter-values' | 'range-detect'; viewGen: number; range: WireRange; rules: Array<[number, string]>; outcome: string; at: number }
+/** The only words a `sheet_ops` rule may carry: a sort order or a rule kind. */
+export const SHEET_OP_RULE_KINDS: ReadonlySet<string> = new Set(['asc', 'desc', 'text', 'number', 'date', 'datePreset', 'compound', 'values', 'committed'])
 /** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated.
  * Stage 4b (P8): a sheet copy also carries its wire `sheetId` and `rect`, the bounding source rect of its selection
  * (`fromUnit`/`toUnit` then hold the sheet index); absent on a units-mode record. No text is stored. */
@@ -75,6 +96,8 @@ CREATE INDEX IF NOT EXISTS deliveries_unit ON deliveries (unit_index);
 CREATE TABLE IF NOT EXISTS tile_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, zoom_step INTEGER NOT NULL, dpr INTEGER NOT NULL, palette TEXT NOT NULL, col INTEGER NOT NULL, row INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen, zoom_step, dpr, palette, col, row, ref_sha256, status));
 CREATE INDEX IF NOT EXISTS tile_deliveries_tile ON tile_deliveries (sheet_id, zoom_step, dpr, palette, col, row);
 CREATE TABLE IF NOT EXISTS sheet_views (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, view_gen INTEGER NOT NULL, spec TEXT NOT NULL, clock TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, sheet_id, view_gen));
+CREATE TABLE IF NOT EXISTS sheet_ops (sid TEXT NOT NULL REFERENCES rows (sid), sheet_id TEXT NOT NULL, kind TEXT NOT NULL, view_gen INTEGER NOT NULL, range TEXT NOT NULL, rules TEXT NOT NULL, outcome TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS sheet_ops_sid ON sheet_ops (sid);
 CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL, sheet_id TEXT, rect TEXT);
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
 CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
@@ -196,6 +219,19 @@ export class AuditStore {
     const r = this.db.query<{ sid: string; sheet_id: string; view_gen: number; spec: string; clock: string; at: number }, [string, string, number]>('SELECT * FROM sheet_views WHERE sid = ? AND sheet_id = ? AND view_gen = ?').get(sid, sheetId, viewGen)
     return r ? { sid: r.sid, sheetId: r.sheet_id, viewGen: r.view_gen, spec: JSON.parse(r.spec) as SheetViewRecord['spec'], clock: JSON.parse(r.clock) as SheetClock, at: r.at } : undefined
   }
+  /** Appends one sort/filter op record (repeats are kept); throws for a rule word outside `SHEET_OP_RULE_KINDS` and for
+   * a sid with no row. */
+  putSheetOp(r: SheetOpRecord): void {
+    this.writable()
+    for (const [col, kind] of r.rules) if (!Number.isInteger(col) || !SHEET_OP_RULE_KINDS.has(kind)) throw new Error(`sheet_ops: not a rule kind: ${JSON.stringify(kind).slice(0, 16)}`)
+    const range = { r0: r.range.r0, r1: r.range.r1, c0: r.range.c0, c1: r.range.c1, header: r.range.header, totals: r.range.totals }
+    this.db.query('INSERT INTO sheet_ops (sid, sheet_id, kind, view_gen, range, rules, outcome, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.sid, r.sheetId, r.kind, r.viewGen, JSON.stringify(range), JSON.stringify(r.rules), r.outcome, r.at)
+  }
+  sheetOps(sid: string): SheetOpRecord[] {
+    return this.db.query<{ sid: string; sheet_id: string; kind: SheetOpRecord['kind']; view_gen: number; range: string; rules: string; outcome: string; at: number }, [string]>('SELECT * FROM sheet_ops WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, sheetId: r.sheet_id, kind: r.kind, viewGen: r.view_gen, range: JSON.parse(r.range) as WireRange, rules: JSON.parse(r.rules) as Array<[number, string]>, outcome: r.outcome, at: r.at }))
+  }
   /** Every delivery, any status, of `docRef`'s sheet `sheetId` at `(zoomStep, dpr, palette)` whose tile lies in the
    * inclusive `window` (`tileRangeFor`'s `c0..c1` × `r0..r1`), with its row. `palette` defaults to `'light'` (F24). */
   tileCandidates(docRef: string, sheetId: string, zoomStep: number, dpr: 1 | 2, window: { c0: number; c1: number; r0: number; r1: number }, palette: 'light' | 'dark' = 'light'): Array<{ sid: string; row: StoredRow; delivery: TileDeliveryRecord }> {
@@ -311,12 +347,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, tile deliveries, sheet views, copies, prints, notes images (audited and marked), show sends, media deliveries and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, tile deliveries, sheet views, sheet ops, copies, prints, notes images (audited and marked), show sends, media deliveries and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'tile_deliveries', 'sheet_views', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'media_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'tile_deliveries', 'sheet_views', 'sheet_ops', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'media_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }
