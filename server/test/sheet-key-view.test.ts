@@ -174,10 +174,11 @@ describe('sheetKeyView (S4 §6.2, §6.12 item 7; plan P5)', () => {
     expect(masked.style?.formatCode).toBeUndefined()
     blank.add(`${mr}:${mc}`)
 
-    // Every other cell holds what sortGrid's key view holds.
-    for (const cell of allCells(grid.view.sheet)) {
+    // Every other cell holds its projected value, which is sortGrid's.
+    for (const cell of allCells(projected)) {
       if (blank.has(`${cell.row}:${cell.col}`)) continue
       expect(valueAt(view.sheet, cell.row, cell.col)).toEqual(cell.value)
+      expect(valueAt(grid.projected, cell.row, cell.col)).toEqual(cell.value)
     }
     expect(view.withheld).toBe(allCells(projected).filter((c) => c.value !== null).length - allCells(view.sheet).filter((c) => c.value !== null).length)
   }, 30_000)
