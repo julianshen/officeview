@@ -115,8 +115,11 @@ function gridSelection(s: WireSelection): GridSelection {
 interface Merged { text: string; label: string; ordinals: number[]; error: boolean }
 interface MergedList { entries: Merged[]; idOf: Map<string, number>; truncated: boolean }
 
+/** Ends the main-ledger lease of a draft page the job has consumed (its entries are copied into the merged list). */
+type Settle = (page: object) => void
+
 /** Every displayable local entry of `draft`, merged by full display text in local (first-occurrence) order. */
-async function mergedList(draft: ValuesDraftPort, signal: AbortSignal): Promise<MergedList> {
+async function mergedList(draft: ValuesDraftPort, signal: AbortSignal, settle: Settle): Promise<MergedList> {
   const entries: Merged[] = [], idOf = new Map<string, number>()
   let offset = 0, displayed = 0, truncated = false
   do {
@@ -130,6 +133,7 @@ async function mergedList(draft: ValuesDraftPort, signal: AbortSignal): Promise<
       m.ordinals.push(e.ordinal)
       if (e.kind !== 'error') m.error = false
     }
+    settle(page)
     if (page.entries.length === 0) break
     offset += page.entries.length
   } while (offset < displayed)
@@ -137,7 +141,7 @@ async function mergedList(draft: ValuesDraftPort, signal: AbortSignal): Promise<
 }
 
 /** The merged ids `search` matches, ascending. */
-async function searchIds(draft: ValuesDraftPort, list: MergedList, search: { text: string; wildcards: boolean }, signal: AbortSignal): Promise<number[]> {
+async function searchIds(draft: ValuesDraftPort, list: MergedList, search: { text: string; wildcards: boolean }, signal: AbortSignal, settle: Settle): Promise<number[]> {
   const ids = new Set<number>()
   let offset = 0, displayed = 0
   do {
@@ -147,6 +151,7 @@ async function searchIds(draft: ValuesDraftPort, list: MergedList, search: { tex
       const id = list.idOf.get(e.labelTruncated ? await draft.inspect(e.ordinal, signal) : e.label)
       if (id !== undefined) ids.add(id)
     }
+    settle(page)
     if (page.entries.length === 0) break
     offset += page.entries.length
   } while (offset < displayed)
@@ -213,6 +218,7 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   // One main ledger per port, with no per-port document charge: the server charges documents and held views to its
   // own `DocumentLedger` (Task 4).
   const ledger = new MainMemoryLedger()
+  const settle: Settle = (page) => ledger.settle(page)
   const resources: ViewerControlResources = createViewerControlResources('D', undefined, ledger)
   let controls: ViewerControls
   try {
@@ -237,15 +243,15 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   const valuesRule = async (rule: Extract<ResolvedRule, { kind: 'values' }>, drafts: ValuesDraftPort[], signal: AbortSignal): Promise<ColumnRule | null> => {
     const draft = await draftOf(rule.list.range, rule.list.col, signal)
     drafts.push(draft)
-    const list = await mergedList(draft, signal)
+    const list = await mergedList(draft, signal, settle)
     const include = rule.mode === 'include'
-    await draft.change({ kind: 'all', selected: !include, includeBlanks: false }, QUIET, signal)
+    settle(await draft.change({ kind: 'all', selected: !include, includeBlanks: false }, QUIET, signal))
     for (const position of rule.positions) {
       const entry = list.entries[position]
       if (!entry) throw new SheetViewFailed('values position past its list')
-      for (const ordinal of entry.ordinals) await draft.change({ kind: 'toggle', ordinal, selected: include }, QUIET, signal)
+      for (const ordinal of entry.ordinals) settle(await draft.change({ kind: 'toggle', ordinal, selected: include }, QUIET, signal))
     }
-    await draft.change({ kind: 'blanks', selected: rule.blanks }, QUIET, signal)
+    settle(await draft.change({ kind: 'blanks', selected: rule.blanks }, QUIET, signal))
     return draft.candidate(signal)
   }
   const localFilter = async (f: ResolvedFilter, drafts: ValuesDraftPort[], signal: AbortSignal): Promise<FilterSpec | null> => {
@@ -294,8 +300,8 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   async function values(job: Extract<SheetViewJob, { op: 'values' }>, signal: AbortSignal): Promise<SheetViewReply> {
     const draft = await draftOf(job.range, job.col, signal)
     try {
-      const list = await mergedList(draft, signal)
-      const ids = job.search ? await searchIds(draft, list, job.search, signal) : list.entries.map((_, i) => i)
+      const list = await mergedList(draft, signal, settle)
+      const ids = job.search ? await searchIds(draft, list, job.search, signal, settle) : list.entries.map((_, i) => i)
       const filter = canonicalView(job.view).filter
       const rule = filter && sameRange(filter.range, job.range) ? filter.columns.find(([col]) => col === job.col)?.[1] : undefined
       const values = rule?.kind === 'values' && rule.list.col === job.col && sameRange(rule.list.range, job.range) ? rule : undefined
