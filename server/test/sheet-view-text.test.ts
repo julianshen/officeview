@@ -27,6 +27,7 @@ import type { WireRange, WireSelection, WireSortSpec } from '../../src/stream/sh
 import type { XlsxDocument } from '../../src/xlsx/types'
 import { serverBackend } from '../src/backend'
 import { decodePng } from '../src/mark/png'
+import { Pool } from '../src/pool'
 import { DocumentHost } from '../src/render'
 import type { SheetClock } from '../src/sheet/clock'
 import type { SheetTextJob, SheetTextReply } from '../src/sheet/text-ops'
@@ -39,8 +40,10 @@ const T = 512
 const signal = () => new AbortController().signal
 
 const hosts: DocumentHost[] = []
-afterAll(() => {
+const pools: Pool[] = []
+afterAll(async () => {
   for (const h of hosts) for (const k of [...(h as unknown as { docs: Map<string, unknown> }).docs.keys()]) h.drop(k)
+  await Promise.all(pools.map((p) => p.dispose()))
 })
 
 interface HostDoc { derivedViews?: Map<string, unknown>; sizedGeometries?: Map<string, unknown>; textViews?: Map<string, unknown> }
@@ -167,6 +170,12 @@ describe('tiles and text ops under the view (plan P9)', () => {
       const both = decodePng((await s.host.renderTile(s.docKey, tileJob({ ...sorted(desc), filter: containsA }))).png).rgba
       expect([s.doc().derivedViews?.size, s.doc().sizedGeometries?.size]).toEqual([2, 2])
       expect(differing(both, got)).toBeGreaterThan(1000)
+
+      // Through the pool: its worker receives the view and paints the same tile.
+      const pool = new Pool({ workers: 1 }); pools.push(pool)
+      await pool.open('grid', bytes, 'visible-only', { sheetMode: 'tiles' })
+      const pooled = await pool.tile('s1', { docRef: 'grid', contentPolicy: 'visible-only', ...tileJob(sorted(desc)) }, 4 * T * T * 2)
+      expect(differing(decodePng(pooled.png).rgba, got)).toBe(0)
     } finally { await o.dispose() }
   }, 30_000)
 
@@ -247,6 +256,8 @@ describe('tiles and text ops under the view (plan P9)', () => {
     const band = order.order.bands[0]!
     expect(band.sourceAtOffset[2 - band.r0]).toBe(29)
     expect(findOf(await s.text({ ...under, view }))).toEqual({ op: 'find', hits: [], more: false })
+    // Positive control: row 30's D cell, outside the box, still reads under the same view (coverage is known, not blank-all).
+    expect(findOf(await s.text({ ...under, query: wordOf(30), view })).hits).toEqual([[29, 3]])
     // The zero-height row's cells stay blank under the sort (they moved display slot, not size).
     const hidden = { ...under, query: wordOf(SORT_GRID.zeroHeightRow + 1), matchCase: false }
     expect(findOf(await s.text({ ...hidden, view })).hits).toEqual([])
