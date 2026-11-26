@@ -110,7 +110,7 @@ describe('stage5-cfvo-relative-a1: the case', () => {
       expect(CF_STAGE5_UNSUPPORTED[cap], cap).toBeUndefined()
     }
     // Appended last at the time; only the cfvo-nonnumeric confirmation case comes after it.
-    expect(CF_STAGE5_CASES.slice(-2).map(x => x.id)).toEqual([ID, 'stage5-cfvo-nonnumeric-v2'])
+    expect(CF_STAGE5_CASES.slice(-3).map(x => x.id)).toEqual([ID, 'stage5-cfvo-nonnumeric-v2', 'stage5-icon-percent-order'])
     expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toContain(ID)
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
     for (const old of ['stage5-cfvo-scope', 'stage5-cfvo-scope-v2', 'stage5-cfvo-formulas']) expect(manifest.cases.find(x => x.id === old)!.status, old).toBe('measured')

@@ -5,8 +5,14 @@
  * phase-1 report gives: no painted cell disagrees with `as-literal`, every captured formula result equals its 15-digit
  * rounding, so no captured cell tells `as-literal` from `fifteen-digit`. It checks the harness, not Excel, and registers nothing.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { fifteenDigit, formulaBoundsCensusOf, type FormulaBoundsRow } from '../scripts/cf-refs/formula-bounds-census'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let census: Awaited<ReturnType<typeof formulaBoundsCensusOf>>

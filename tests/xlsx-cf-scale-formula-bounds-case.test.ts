@@ -20,7 +20,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createCanvas } from 'canvas'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
@@ -56,6 +57,11 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { CF_FORMULA_BOUNDS_CAP, CF_FORMULA_BOUNDS_NEAR_TOP_CAP, CF_FORMULA_BOUNDS_READINGS, cfFormulaBoundFifteenDigit, injectCfFormulaBoundsReadings, safeFraction } from '../src/xlsx/cf/colorScale'
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
 import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = S2_FORMULA_BOUNDS_ID
@@ -136,8 +142,8 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
 
 describe('stage2-scale-formula-bounds: the case', () => {
   it('is appended last; owns its three ids; both questions unregistered and in the registry (captured d2660d46: no single reading matched, so nothing is registered), the twins recorded', async () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual(['stage2-scale-upper-segment', ID])
+    // Appended last at its time; the percent-order follow-up is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-3)).toEqual(['stage2-scale-upper-segment', ID, 'stage2-scale-percent-order'])
     for (const id of [CAP, NEAR, TWIN]) {
       expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === id).map(e => e.caseId), id).toEqual([ID])
       expect(CF_STAGE2_NONDISCRIMINATING[id], id).toMatch(/./)
@@ -449,7 +455,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 /** The measured Stage 2 cases before this capture (d2660d46): the rehearsal's earlier captures. */
-const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== ID).map(x => x.id)
+const STAGE2_MEASURED = manifest.cases.filter(x => x.stage === 2 && x.status === 'measured' && x.id !== ID && x.id !== 'stage2-scale-percent-order').map(x => x.id)
 
 describe('the rehearsal: each registration against every committed capture, and this case on a synthetic capture', () => {
   it('each registration: no violation over the measured Stage 2 cases and nothing moves (no committed Stage 2 capture holds a formula bound that resolves)', async () => {
@@ -497,12 +503,14 @@ describe('the rehearsal: each registration against every committed capture, and 
 
   it('Stage 5: every measured case agrees with Excel under each registration; the only records that change are E4 and E5 of stage5-cfvo-nonnumeric-v2 (the formula-bounded upper integer class), newly painted at Excel\'s fill', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const base = await stage5CaseRecords(manifest, REPO_ROOT)
+    // As of its capture: the later stage5-icon-percent-order capture (ecf00906) is left out of the records.
+    const stage5CaseRecordsAsOf = async (...a: Parameters<typeof stage5CaseRecords>) => (await stage5CaseRecords(...a)).filter(r => r.caseId !== 'stage5-icon-percent-order')
+    const base = await stage5CaseRecordsAsOf(manifest, REPO_ROOT)
     expect(base.filter(r => r.compared && !r.agrees)).toEqual([])
     const k = (r: (typeof base)[number]): string => `${r.caseId}:${r.ref}`
     const was = new Map(base.map(r => [k(r), r]))
     for (const reading of S2_FORMULA_BOUNDS_READINGS) {
-      const rows = await withRegistration(reading, () => stage5CaseRecords(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || id === CAP || id === NEAR }))
+      const rows = await withRegistration(reading, () => stage5CaseRecordsAsOf(manifest, REPO_ROOT, { published: id => VERIFIED_CAPABILITIES.has(id) || id === CAP || id === NEAR }))
       expect(rows.length, reading).toBe(base.length)
       expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`), reading).toEqual([])
       const changed = rows.filter(r => JSON.stringify(r.production) !== JSON.stringify(was.get(k(r))!.production))

@@ -5,7 +5,8 @@
  * stage2-scale-literal-lower (a3f85309) among them. This pins the numbers the phase-1 report gives; it checks the harness,
  * not Excel, and registers nothing.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   channelTable,
   countBy,
@@ -18,6 +19,11 @@ import {
   type CandidateResult,
   type CensusRow,
 } from '../scripts/cf-refs/upper-segment-candidates'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let census: Awaited<ReturnType<typeof upperSegmentCensusOf>>

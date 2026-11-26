@@ -181,7 +181,9 @@ describe('percent and percentile thresholds reuse the shared primitives', () => 
     expect(src).not.toMatch(/sort\(/)
     expect(src).not.toMatch(/rank\s*=|Math\.floor\(/)
     expect(src).toMatch(/percentileOrderStatistic\(/)
-    expect(src).toMatch(/lerp\(/)
+    // The percent-order follow-up: the shared percent primitive is colorScale.ts's `percentThreshold` (lerp under lerp-first).
+    expect(src).toMatch(/percentThreshold\(/)
+    expect(src).not.toMatch(/\/ 100/)
   })
 })
 

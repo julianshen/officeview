@@ -32,17 +32,50 @@
  * longer (`upperWholeShapeAt`, `stage2NumSegmentShape`); formula-bounded upper segments stay justified.
  */
 import { isCellInSqref } from './verify'
-import { CF_FORMULA_BOUNDS_CAP, CF_FORMULA_BOUNDS_NEAR_TOP_CAP, CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, cfFormulaBoundsReading, CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperNearTopReading, cfUpperSegmentReading, cfUpperWindowReading, type CfFormulaBoundsReading, type CfLiteralLowerReading, type CfUpperSegmentReading } from '../../src/xlsx/cf/colorScale'
+import { CF_FORMULA_BOUNDS_CAP, CF_FORMULA_BOUNDS_NEAR_TOP_CAP, CF_FORMULA_BOUNDS_V2_CAP, CF_GUARD_BOUNDARY_CAP, CF_LITERAL_LOWER_CAP, CF_SCALE_PERCENT_ORDER_CAP, CF_SCALE_PERCENTILE_ORDER_CAP, cfFormulaBoundsReading, cfFormulaBoundsV2Reading, cfPercentOrderNarrowed, cfPercentOrderReading, CF_UPPER_NEAR_TOP_CAP, CF_UPPER_SEGMENT_CAP, CF_UPPER_WINDOW_CAP, cfGuardBoundaryReading, cfLiteralLowerReading, cfUpperNearTopReading, cfUpperSegmentReading, cfUpperWindowReading, type CfFormulaBoundsReading, type CfLiteralLowerReading, type CfUpperSegmentReading } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type UpperWholeCfvo = Readonly<{ type: string; val?: string; f?: string }>
 export type UpperWholeMarker = Readonly<{ ruleType: string; sqref: string; scale?: Readonly<{ cfvo: readonly UpperWholeCfvo[]; colors: readonly string[] }> }>
 
-/** PERCENTILE.INC (Ruling S2-L) over ascending values. */
-function percentileInc(sorted: readonly number[], p: number): number {
+/**
+ * PERCENTILE.INC (Ruling S2-L) over ascending values, under a percent order (the percent-order follow-up): `lerp-first` as
+ * before, `multiply-first` from the 1-based rank 1 + (p·(n − 1))/100 (production's definition, restated).
+ */
+function percentileInc(sorted: readonly number[], p: number, order: JustifyPercentOrder = 'lerp-first'): number {
+  if (order === 'multiply-first') return justifyPercentileRanked(sorted, p, order)
   const rank = (p / 100) * (sorted.length - 1)
   const lo = Math.floor(rank)
   return lo + 1 < sorted.length ? sorted[lo]! + (rank - lo) * (sorted[lo + 1]! - sorted[lo]!) : sorted[lo]!
+}
+
+/** PERCENTILE.INC from production's 1-based rank under either reading, restated (the narrowing compares the two orders on it). */
+export function justifyPercentileRanked(sorted: readonly number[], p: number, order: 'lerp-first' | 'multiply-first'): number {
+  const n = sorted.length
+  if (p <= 0) return sorted[0]!
+  if (p >= 100) return sorted[n - 1]!
+  const rank = order === 'lerp-first' ? 1 + (p / 100) * (n - 1) : 1 + (p * (n - 1)) / 100, ip = Math.floor(rank), i = ip - 1
+  return i >= n - 1 ? sorted[n - 1]! : sorted[i]! + (rank - ip) * (sorted[i + 1]! - sorted[i]!)
+}
+
+export type JustifyPercentOrder = 'lerp-first' | 'multiply-first' | 'withhold-differing'
+/**
+ * The percent-order follow-up: the order production applies to one id, read from the registration tables only (never
+ * production's arithmetic): the narrowing, else the registered reading with its evidence, else `lerp-first`.
+ */
+export function justifyPercentOrder(capability: string): JustifyPercentOrder {
+  if (cfPercentOrderNarrowed(capability)) return 'withhold-differing'
+  const r = cfPercentOrderReading(capability)
+  return r !== undefined && hasEvidence(capability) ? r : 'lerp-first'
+}
+/** A percent threshold under a reading, restated (`lerp-first`: min + (p/100)·(max − min); `multiply-first`: min + ((max − min)·p)/100). */
+export const justifyPercent = (min: number, max: number, p: number, order: 'lerp-first' | 'multiply-first'): number =>
+  order === 'lerp-first' ? min + (p / 100) * (max - min) : min + ((max - min) * p) / 100
+/** A threshold under an order; `differs` when the narrowing applies and the two readings give different doubles. */
+function underOrder(order: JustifyPercentOrder, at: (r: 'lerp-first' | 'multiply-first') => number): number | 'differs' {
+  if (order !== 'withhold-differing') return at(order)
+  const a = at('lerp-first'), b = at('multiply-first')
+  return a === b ? a : 'differs'
 }
 
 /** The segment fraction, mirroring production's overflow handling (halved differences) and its clamp. */
@@ -100,12 +133,31 @@ export const literalLowerReadingRegistered = (): CfLiteralLowerReading | undefin
  */
 export const formulaBoundsReadingRegistered = (): CfFormulaBoundsReading | undefined => {
   const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
+  if (r !== undefined && hasEvidence(CF_FORMULA_BOUNDS_CAP)) return r
+  return formulaBoundsV2Registered()
+}
+/** The v1 id alone (the near-top sub-shape is decided with it only). */
+const formulaBoundsV1Registered = (): CfFormulaBoundsReading | undefined => {
+  const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
   return r !== undefined && hasEvidence(CF_FORMULA_BOUNDS_CAP) ? r : undefined
 }
+/**
+ * The percent-order follow-up: `scale:formula-bounds-v2` registered with its evidence and its order equal to the colour-scale
+ * percent order production applies (`justifyPercentOrder`), split to its formula-bounds reading (undefined: none).
+ */
+export const formulaBoundsV2Registered = (): CfFormulaBoundsReading | undefined => {
+  const v = cfFormulaBoundsV2Reading(CF_FORMULA_BOUNDS_V2_CAP)
+  if (v === undefined || !hasEvidence(CF_FORMULA_BOUNDS_V2_CAP)) return undefined
+  const [reading, order] = v.split('+') as [CfFormulaBoundsReading, string]
+  return justifyPercentOrder(CF_SCALE_PERCENT_ORDER_CAP) === order ? reading : undefined
+}
+/** Whether a formula-bounds reading admits a segment bounded by `bounds`: the v1 id, or the v2 id unless a bound is a formula percentile. */
+const formulaBoundsAdmitBounds = (bounds: readonly UpperWholeCfvo[]): boolean =>
+  formulaBoundsV1Registered() !== undefined || (formulaBoundsV2Registered() !== undefined && !bounds.some(x => x.type === 'percentile' && formulaCfvo(x)))
 /** `fifteen-digit`'s rounding restated (production's `cfFormulaBoundFifteenDigit`; a test pins the two equal). */
 export const independentFifteenDigit = (x: number): number => (Number.isFinite(x) ? Number(x.toPrecision(15)) : x)
 /** Whether a segment bounded by `lo` / `hi` is painted in a settled shape: no formula bound, or a formula-bounds reading registered. */
-const formulaBoundsAdmit = (lo: UpperWholeCfvo, hi: UpperWholeCfvo): boolean => (!formulaCfvo(lo) && !formulaCfvo(hi)) || formulaBoundsReadingRegistered() !== undefined
+const formulaBoundsAdmit = (lo: UpperWholeCfvo, hi: UpperWholeCfvo): boolean => (!formulaCfvo(lo) && !formulaCfvo(hi)) || formulaBoundsAdmitBounds([lo, hi])
 const opaqueHex = (argb: string): boolean => argb.slice(0, 2).toUpperCase() === 'FF'
 
 /** Whether production's upper-segment reading `r` paints between `from` and `to` (ARGB hex): `index-position` only between two opaque colours. */
@@ -159,8 +211,15 @@ function independentThresholds(marker: UpperWholeMarker, ref: string, values: Re
     if (raw === undefined) return undefined
     const n = (x.type === 'formula' || x.f !== undefined) && formulaBoundsReadingRegistered() === 'fifteen-digit' ? independentFifteenDigit(raw) : raw
     if (x.type === 'num' || x.type === 'formula') return n
-    if (x.type === 'percent') return min + (n / 100) * (max - min)
-    if (x.type === 'percentile') return percentileInc(scope, n)
+    // The percent-order follow-up: the registered order of each bound type; under the narrowing a threshold whose orders
+    // differ is withheld by its own justification (`percentOrderShapeAt`), never this shape.
+    const known = (t: number | 'differs'): number | undefined => (t === 'differs' ? undefined : t)
+    if (x.type === 'percent') return known(underOrder(justifyPercentOrder(CF_SCALE_PERCENT_ORDER_CAP), r => justifyPercent(min, max, n, r)))
+    if (x.type === 'percentile') {
+      const order = justifyPercentOrder(CF_SCALE_PERCENTILE_ORDER_CAP)
+      // Under the narrowing the two orders are compared on production's 1-based rank (`justifyPercentileRanked`).
+      return known(underOrder(order, r => (order === 'withhold-differing' ? justifyPercentileRanked(scope, n, r) : percentileInc(scope, n, r))))
+    }
     return undefined
   }
   const t = marker.scale.cfvo.map(at)
@@ -211,8 +270,9 @@ export function upperNearTopShapeAt(marker: UpperWholeMarker, ref: string, value
   if (!near) return false
   const r = upperSegmentReadingRegistered()
   const formula = formulaCfvo(marker.scale.cfvo[1]!) || formulaCfvo(marker.scale.cfvo[2]!)
-  const fr = formulaBoundsReadingRegistered()
-  // A formula-bounded near-top cell: also the formula near-top id at the same formula-bounds reading, with its evidence.
+  const fr = formulaBoundsV1Registered()
+  // A formula-bounded near-top cell: also the formula near-top id at the same formula-bounds reading, with its evidence (the
+  // v1 id only: scale:formula-bounds-v2 never lifts the near-top sub-shape).
   const formulaPainted = !formula || (fr !== undefined && cfFormulaBoundsReading(CF_FORMULA_BOUNDS_NEAR_TOP_CAP) === fr && hasEvidence(CF_FORMULA_BOUNDS_NEAR_TOP_CAP))
   const painted = upperSegmentReadingPaints(r, from, to) && cfUpperNearTopReading(CF_UPPER_NEAR_TOP_CAP) === r && hasEvidence(CF_UPPER_NEAR_TOP_CAP) && formulaPainted
   return !painted
@@ -268,6 +328,32 @@ export function guardBoundaryShapeAt(marker: UpperWholeMarker, ref: string, valu
   const f = independentFraction(value, lo, hi)
   if (f === undefined || !independentGuardBoundary(marker.scale.colors[0]!, marker.scale.colors[1]!, f)) return false
   // A formula-bounded segment is painted only with a formula-bounds reading registered with its evidence, between opaque colours.
-  const formulaOk = !bounds.some(formulaCfvo) || (formulaBoundsReadingRegistered() !== undefined && opaqueHex(marker.scale.colors[0]!) && opaqueHex(marker.scale.colors[1]!))
+  const formulaOk = !bounds.some(formulaCfvo) || (formulaBoundsAdmitBounds(bounds) && opaqueHex(marker.scale.colors[0]!) && opaqueHex(marker.scale.colors[1]!))
   return !(guardReadingRegistered() && formulaOk)
+}
+
+/**
+ * The percent-order follow-up, the pre-committed narrowing (`withhold-differing`, production's `cf-unmeasured-percent-order`),
+ * restated: a colour-scale rule with a percent (percentile) cfvo whose id is narrowed and whose two orders give different
+ * doubles over the rule's scope withholds every cell of the rule. Thresholds come from the marker and the scope's numbers
+ * (`formulaBound` resolves a formula p), never from production.
+ */
+export function percentOrderShapeAt(marker: UpperWholeMarker, ref: string, values: ReadonlyMap<string, number>, formulaBound?: (cfvo: UpperWholeCfvo) => number | undefined): boolean {
+  if (marker.ruleType !== 'colorScale' || !marker.scale || !isCellInSqref(ref, marker.sqref)) return false
+  const scope = [...values].filter(([k]) => isCellInSqref(k, marker.sqref)).map(([, v]) => v).sort((x, y) => x - y)
+  if (scope.length === 0) return false
+  return percentOrderDiffers(marker.scale.cfvo, scope, { percent: CF_SCALE_PERCENT_ORDER_CAP, percentile: CF_SCALE_PERCENTILE_ORDER_CAP }, formulaBound)
+}
+
+/** Whether some percent / percentile cfvo of a narrowed id has thresholds that differ between the orders over `scope` (ascending). */
+export function percentOrderDiffers(cfvo: readonly UpperWholeCfvo[], scope: readonly number[], caps: Readonly<{ percent: string; percentile: string }>, formulaBound?: (cfvo: UpperWholeCfvo) => number | undefined): boolean {
+  const min = scope[0]!, max = scope[scope.length - 1]!
+  return cfvo.some(x => {
+    if (x.type !== 'percent' && x.type !== 'percentile') return false
+    if (!cfPercentOrderNarrowed(x.type === 'percent' ? caps.percent : caps.percentile)) return false
+    const raw = x.f !== undefined ? formulaBound?.(x) : x.val !== undefined && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(x.val.trim()) ? Number(x.val) : undefined
+    if (raw === undefined || !(raw >= 0 && raw <= 100)) return false
+    const [a, b] = (['lerp-first', 'multiply-first'] as const).map(r => (x.type === 'percent' ? justifyPercent(min, max, raw, r) : justifyPercentileRanked(scope, raw, r)))
+    return a !== b
+  })
 }

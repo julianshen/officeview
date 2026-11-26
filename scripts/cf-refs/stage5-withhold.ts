@@ -37,7 +37,8 @@ import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import type { CfCellState, CfOutcome, CfRule } from '../../src/xlsx/cf/model'
 import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
 import { isCellInSqref } from './verify'
-import { guardBoundaryShapeAt, upperNearTopShapeAt, upperWholeShapeAt } from './upper-whole-justify'
+import { guardBoundaryShapeAt, percentOrderDiffers, percentOrderShapeAt, upperNearTopShapeAt, upperWholeShapeAt } from './upper-whole-justify'
+import { CF_ICON_PERCENT_ORDER_CAP, CF_ICON_PERCENTILE_ORDER_CAP } from '../../src/xlsx/cf/colorScale'
 import type { CfOracleCase } from './cases'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
@@ -48,7 +49,7 @@ type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; 
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
 /** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
-export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' | 'cf-unmeasured-upper-segment-whole-product' | 'cf-unmeasured-guard-boundary' | 'cf-unmeasured-upper-near-top' }
+export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' | 'cf-unmeasured-upper-segment-whole-product' | 'cf-unmeasured-guard-boundary' | 'cf-unmeasured-upper-near-top' | 'cf-unmeasured-percent-order' }
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -283,6 +284,12 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
       // The guard-boundary withhold (owner ruling after capture ed0fccb6, stage2-scale-upper-window), recomputed likewise.
       if (upperNearTopShapeAt(marker, ref, value, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'upper segment of a 3-colour scale, strictly inside, with a step product within 1e-11 below the full span (recomputed from the sheet; the upper-segment near-top withhold)', refused: 'cf-unmeasured-upper-near-top' })
       if (guardBoundaryShapeAt(marker, ref, value, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'a 2-colour scale or 3-colour lower segment, strictly inside, with a step product within 1e-11 below a whole number (recomputed from the sheet; the stage2-scale-upper-window withhold)', refused: 'cf-unmeasured-guard-boundary' })
+      if (percentOrderShapeAt(marker, ref, numbers, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'a percent / percentile threshold whose two arithmetic orders give different doubles, under the pre-committed narrowing (recomputed from the sheet; the percent-order follow-up)', refused: 'cf-unmeasured-percent-order' })
+    }
+    // The percent-order narrowing on icon sets, recomputed likewise over the rule's numeric cells.
+    for (const m of covering.filter(x => x.ruleType === 'iconSet' && x.icon)) {
+      const scope = [...numbers].filter(([k]) => isCellInSqref(k, m.sqref)).map(([, v]) => v).sort((a, b) => a - b)
+      if (scope.length > 0 && percentOrderDiffers(m.icon?.cfvo ?? [], scope, { percent: CF_ICON_PERCENT_ORDER_CAP, percentile: CF_ICON_PERCENTILE_ORDER_CAP }, cfvo => stage5FormulaBound(cfvo, cells, published))) add(m, { reason: 'an icon threshold whose two arithmetic orders give different doubles, under the pre-committed narrowing (recomputed from the sheet; the percent-order follow-up)', refused: 'cf-unmeasured-percent-order' })
     }
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {

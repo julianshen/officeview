@@ -10,7 +10,8 @@
  * (ce3f701d) matched raw-floor, it is registered and published (docs/validation/xlsx-cf.md §14.z.18): the default is
  * raw-floor with the id's evidence, and the pre-capture default (withheld) is pinned without that evidence.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_GUARD_BOUNDARY_CAP,
   CF_GUARD_BOUNDARY_PRODUCTION_READINGS,
@@ -28,6 +29,11 @@ import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evide
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { guardBoundaryShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()

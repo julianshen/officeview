@@ -42,6 +42,7 @@ export function percentileOrderStatistic(
   sortedAsc: Float64Array | readonly number[],
   percentile: number,
   variant: CfPercentileVariant,
+  order: CfPercentOrderReading = 'lerp-first',
 ): number | undefined {
   const n = sortedAsc.length
   if (n === 0) return undefined
@@ -54,7 +55,9 @@ export function percentileOrderStatistic(
     if (p === 0) return sortedAsc[0]!
     if (p === 1) return sortedAsc[n - 1]!
 
-    const rank = 1 + p * (n - 1)
+    // The percent-order follow-up: `lerp-first` (production) scales p first, 1 + (p/100)·(n − 1); `multiply-first`
+    // multiplies first, 1 + (p·(n − 1))/100. The interpolation below is the same under both.
+    const rank = order === 'lerp-first' ? 1 + p * (n - 1) : 1 + (percentile * (n - 1)) / 100
     const intPart = Math.floor(rank)
     const frac = rank - intPart
     const index = intPart - 1 // 0-indexed
@@ -64,7 +67,8 @@ export function percentileOrderStatistic(
     const v1 = sortedAsc[index + 1]!
     return lerp(v0, v1, frac)
   } else {
-    // variant === 'exc'
+    // variant === 'exc'. No capture measured `multiply-first` here: fail closed.
+    if (order !== 'lerp-first') return undefined
     if (p <= 0 || p >= 1) return undefined
     const rank = p * (n + 1)
     if (rank < 1 || rank > n) return undefined
@@ -78,6 +82,85 @@ export function percentileOrderStatistic(
     const v1 = sortedAsc[index + 1]!
     return lerp(v0, v1, frac)
   }
+}
+
+/**
+ * The percent-order follow-up (brief cf-percent-order, Phase 1 task 2): the order of a percent / percentile threshold's
+ * arithmetic, pre-registered per rule kind and per bound type (each its own id), by stage2-scale-percent-order (colour
+ * scales) and stage5-icon-percent-order (icon sets). Readings:
+ * - `lerp-first` (production): percent t = lo + (p/100)·(hi − lo) (`lerp`); percentile rank 1 + (p/100)·(n − 1);
+ * - `multiply-first`: percent t = lo + ((hi − lo)·p)/100; percentile rank 1 + (p·(n − 1))/100 (PERCENTILE.INC only;
+ *   PERCENTILE.EXC under it is unmeasured and withholds). A non-finite intermediate withholds (`cf-invalid-bound`): unlike
+ *   `lerp`, the product has no overflow-safe form.
+ * The post-capture hypothesis of stage2-scale-formula-bounds (d2660d46, E2..E6) formed it; that capture registers nothing.
+ * Unregistered (the default) every kind is `lerp-first`, as on main. A registered reading applies only with its evidence.
+ * The pre-committed narrowing (no reading matches): `withhold-differing` withholds every cell evaluated against a threshold
+ * whose two orders give different doubles (`cf-unmeasured-percent-order`), since the true threshold is then unknown; it is
+ * selected by `CF_PERCENT_ORDER_NARROWINGS`, which is empty. Data bars take neither: their thresholds stay `lerp-first`
+ * (a one-ulp threshold moves a bar end far below the 1 px the captures resolve, so no case can measure them).
+ */
+export const CF_PERCENT_ORDER_READINGS = ['lerp-first', 'multiply-first'] as const
+export type CfPercentOrderReading = (typeof CF_PERCENT_ORDER_READINGS)[number]
+/** A threshold order as production applies it: a reading, or the pre-committed narrowing. */
+export type CfPercentOrder = CfPercentOrderReading | 'withhold-differing'
+export const CF_SCALE_PERCENT_ORDER_CAP = 'scale:percent-order'
+export const CF_SCALE_PERCENTILE_ORDER_CAP = 'scale:percentile-order'
+export const CF_ICON_PERCENT_ORDER_CAP = 'icon:percent-order'
+export const CF_ICON_PERCENTILE_ORDER_CAP = 'icon:percentile-order'
+export const CF_PERCENT_ORDER_CAPS = [CF_SCALE_PERCENT_ORDER_CAP, CF_SCALE_PERCENTILE_ORDER_CAP, CF_ICON_PERCENT_ORDER_CAP, CF_ICON_PERCENTILE_ORDER_CAP] as const
+/**
+ * The reading production implements per id, registered from the captures of stage2-scale-percent-order and
+ * stage5-icon-percent-order (Excel 16.115, ecf00906; docs/validation/xlsx-cf.md §14.z.24), each matched on its own groups by
+ * the reading pre-registered before it (e44463a4): a percent threshold is `multiply-first` for colour scales and icon sets
+ * alike, a PERCENTILE.INC rank `lerp-first` (production's arithmetic, unchanged). A reading applies only with its evidence;
+ * without it every threshold is `lerp-first`. The audits' production-reading tables spread this one.
+ */
+export const CF_PERCENT_ORDER_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfPercentOrderReading>>> = Object.freeze({
+  [CF_SCALE_PERCENT_ORDER_CAP]: 'multiply-first',
+  [CF_SCALE_PERCENTILE_ORDER_CAP]: 'lerp-first',
+  [CF_ICON_PERCENT_ORDER_CAP]: 'multiply-first',
+  [CF_ICON_PERCENTILE_ORDER_CAP]: 'lerp-first',
+})
+/** The ids under the pre-committed narrowing (`withhold-differing`): none. */
+export const CF_PERCENT_ORDER_NARROWINGS: readonly string[] = Object.freeze([])
+let proposedPercentOrderReadings: Readonly<Partial<Record<string, CfPercentOrderReading>>> | null = null
+let proposedPercentOrderNarrowings: readonly string[] | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfPercentOrderReadings(readings: Readonly<Partial<Record<string, CfPercentOrderReading>>> | null): void {
+  proposedPercentOrderReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** Test seam: rehearse the narrowing on the given ids as if they were in CF_PERCENT_ORDER_NARROWINGS. Null clears. */
+export function injectCfPercentOrderNarrowings(ids: readonly string[] | null): void {
+  proposedPercentOrderNarrowings = ids ? Object.freeze([...ids]) : null
+}
+/** The percent-order reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfPercentOrderReading(capability: string): CfPercentOrderReading | undefined {
+  const r = proposedPercentOrderReadings && Object.prototype.hasOwnProperty.call(proposedPercentOrderReadings, capability) ? proposedPercentOrderReadings[capability] : CF_PERCENT_ORDER_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_PERCENT_ORDER_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+/** Whether the narrowing applies to one id (the test seam's list first). */
+export function cfPercentOrderNarrowed(capability: string): boolean {
+  return (proposedPercentOrderNarrowings ?? CF_PERCENT_ORDER_NARROWINGS).includes(capability)
+}
+/** The order production applies for one id: the narrowing, else the registered reading with its evidence, else `lerp-first`. */
+export function cfPercentOrder(capability: string, checkEvidence: (cap: string) => boolean): CfPercentOrder {
+  if (cfPercentOrderNarrowed(capability)) return 'withhold-differing'
+  const r = cfPercentOrderReading(capability)
+  return r !== undefined && checkEvidence(capability) ? r : 'lerp-first'
+}
+/** A percent threshold under one reading (non-finite under `multiply-first` when the span or the product overflows). */
+export function percentThreshold(lo: number, hi: number, p: number, order: CfPercentOrderReading): number {
+  return order === 'lerp-first' ? lerp(lo, hi, p / 100) : lo + ((hi - lo) * p) / 100
+}
+/**
+ * A threshold under an order: the reading's value; under `withhold-differing` the common value when both readings give the
+ * same double (or both none), else `'differs'` (the caller withholds, `cf-unmeasured-percent-order`).
+ */
+export function orderedThreshold(order: CfPercentOrder, at: (reading: CfPercentOrderReading) => number | undefined): number | undefined | 'differs' {
+  if (order !== 'withhold-differing') return at(order)
+  const a = at('lerp-first'), b = at('multiply-first')
+  if (a === undefined && b === undefined) return undefined
+  return a !== undefined && b !== undefined && a === b ? a : 'differs'
 }
 
 /**
@@ -289,9 +372,15 @@ function extractPoints<P extends CfThresholdPoint>(pointsOrRule: readonly P[] | 
 export function resolveScaleThresholds(
   pointsOrRule: readonly CfThresholdPoint[] | { points: readonly CfThresholdPoint[] } | CfDefinition,
   stats: CfRangeStatistics,
-  options: { hasEvidence?: (cap: string) => boolean } = {},
+  options: {
+    hasEvidence?: (cap: string) => boolean
+    /** The percent-order follow-up: the order of each bound type's arithmetic (default `lerp-first`). Data bars pass none. */
+    percentOrders?: Readonly<{ percent: CfPercentOrder; percentile: CfPercentOrder }>
+  } = {},
 ): CfOutcome<readonly number[]> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
+  const percentOrder = options.percentOrders?.percent ?? 'lerp-first'
+  const percentileOrder = options.percentOrders?.percentile ?? 'lerp-first'
   const points = extractPoints(pointsOrRule)
 
   if (!points || (points.length !== 2 && points.length !== 3)) {
@@ -381,8 +470,10 @@ export function resolveScaleThresholds(
       if (stats.min === undefined || stats.max === undefined || !Number.isFinite(stats.min) || !Number.isFinite(stats.max)) {
         return { kind: 'unresolved', reason: 'cf-no-numeric-values' }
       }
-      const val = lerp(stats.min, stats.max, bound.value / 100)
-      if (!Number.isFinite(val)) {
+      const min = stats.min, max = stats.max
+      const val = orderedThreshold(percentOrder, r => percentThreshold(min, max, bound.value, r))
+      if (val === 'differs') return { kind: 'unresolved', reason: 'cf-unmeasured-percent-order' }
+      if (val === undefined || !Number.isFinite(val)) {
         return { kind: 'unresolved', reason: 'cf-invalid-bound' }
       }
       thresholds.push(val)
@@ -391,7 +482,8 @@ export function resolveScaleThresholds(
         return { kind: 'unresolved', reason: 'cf-no-numeric-values' }
       }
       // Excel definition is PERCENTILE.INC per Ruling S2-L
-      const val = percentileOrderStatistic(stats.sortedAsc, bound.value, 'inc')
+      const val = orderedThreshold(percentileOrder, r => percentileOrderStatistic(stats.sortedAsc, bound.value, 'inc', r))
+      if (val === 'differs') return { kind: 'unresolved', reason: 'cf-unmeasured-percent-order' }
       if (val === undefined || !Number.isFinite(val)) {
         return { kind: 'unresolved', reason: 'cf-invalid-bound' }
       }
@@ -612,7 +704,7 @@ function guardedInterpolation(c0: number, c1: number, value: number, lo: number,
   if (rounding === 'truncate' && guardBoundaryProduct(c0, c1, value, lo, hi, fraction)) {
     // A formula-resolved bound was never captured in this shape (no capture holds one in it): withheld unless a formula-bounds
     // reading is registered with its evidence, and then only between opaque endpoint colours (fail closed on alpha).
-    const formulaOk = !bounds.some(formulaResolvedBound) || (formulaBoundsLift(checkEvidence) !== undefined && opaque(c0) && opaque(c1))
+    const formulaOk = !bounds.some(formulaResolvedBound) || (formulaBoundsLift(checkEvidence, bounds) !== undefined && opaque(c0) && opaque(c1))
     const r = colorSpace === 'sRGB' && formulaOk ? cfGuardBoundaryReading(CF_GUARD_BOUNDARY_CAP) : undefined
     const argb = r !== undefined && checkEvidence(CF_GUARD_BOUNDARY_CAP) ? upperWindowReadingColor(r, c0, c1, fraction) : undefined
     return argb !== undefined ? { kind: 'ready', value: argb } : { kind: 'unresolved', reason: 'cf-unmeasured-guard-boundary' }
@@ -859,14 +951,66 @@ export function cfFormulaBoundsReading(capability: string = CF_FORMULA_BOUNDS_CA
 }
 /** `fifteen-digit`'s rounding of a formula result: the double nearest its 15-significant-digit decimal (non-finite stays so). */
 export const cfFormulaBoundFifteenDigit = (x: number): number => (Number.isFinite(x) ? Number(x.toPrecision(15)) : x)
-/** The formula-bounds reading registered with its evidence (undefined: none; formula-bounded cells of the settled shapes stay withheld). */
-function formulaBoundsLift(checkEvidence: (cap: string) => boolean): CfFormulaBoundsReading | undefined {
+
+/**
+ * The percent-order follow-up (brief cf-percent-order): `scale:formula-bounds-v2`, the formula-bounds question asked again
+ * by stage2-scale-percent-order, with each formula-bounds reading evaluated under each percent order (the post-capture
+ * hypothesis of d2660d46: `as-literal` with `multiply-first` explains every cell of that capture). A reading is
+ * `<formula reading>+<percent order>`. Registered with its evidence, it lifts the same formula-bound exclusions as
+ * CF_FORMULA_BOUNDS_CAP (the guard-boundary shape and the upper integer and window classes), only:
+ * - when its order is the order production applies to colour-scale percent bounds (`cfPercentOrder(CF_SCALE_PERCENT_ORDER_CAP)`,
+ *   `lerp-first` unregistered; the narrowing matches neither), so formula and literal percent bounds share one arithmetic;
+ * - not for a segment bounded by a formula-resolved percentile (that case holds none: unmeasured);
+ * - not at the near-top sub-shape (its own id, CF_FORMULA_BOUNDS_NEAR_TOP_CAP, is decided with CF_FORMULA_BOUNDS_CAP only).
+ * Under a `fifteen-digit+…` reading the service rounds every colour-scale formula result, as under CF_FORMULA_BOUNDS_CAP.
+ * Unregistered (the default), nothing changes.
+ */
+export const CF_FORMULA_BOUNDS_V2_CAP = 'scale:formula-bounds-v2'
+export const CF_FORMULA_BOUNDS_V2_READINGS = ['as-literal+lerp-first', 'as-literal+multiply-first', 'fifteen-digit+lerp-first', 'fifteen-digit+multiply-first'] as const
+export type CfFormulaBoundsV2Reading = (typeof CF_FORMULA_BOUNDS_V2_READINGS)[number]
+/**
+ * The reading production implements per id: `as-literal+multiply-first`, matched by the capture of stage2-scale-percent-order
+ * (ecf00906; §14.z.24) together with `multiply-first` for scale:percent-order, as the dependency rule requires. The audit's
+ * CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> = Object.freeze({ [CF_FORMULA_BOUNDS_V2_CAP]: 'as-literal+multiply-first' })
+let proposedFormulaBoundsV2Readings: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfFormulaBoundsV2Readings(readings: Readonly<Partial<Record<string, CfFormulaBoundsV2Reading>>> | null): void {
+  proposedFormulaBoundsV2Readings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The v2 formula-bounds reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfFormulaBoundsV2Reading(capability: string = CF_FORMULA_BOUNDS_V2_CAP): CfFormulaBoundsV2Reading | undefined {
+  const r = proposedFormulaBoundsV2Readings && Object.prototype.hasOwnProperty.call(proposedFormulaBoundsV2Readings, capability) ? proposedFormulaBoundsV2Readings[capability] : CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_FORMULA_BOUNDS_V2_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+/** The orders production applies to colour-scale percent and percentile bounds. */
+export function cfScalePercentOrders(checkEvidence: (cap: string) => boolean): Readonly<{ percent: CfPercentOrder; percentile: CfPercentOrder }> {
+  return { percent: cfPercentOrder(CF_SCALE_PERCENT_ORDER_CAP, checkEvidence), percentile: cfPercentOrder(CF_SCALE_PERCENTILE_ORDER_CAP, checkEvidence) }
+}
+/** The v2 reading registered with its evidence whose order is production's colour-scale percent order, split (undefined: none). */
+function formulaBoundsV2Active(checkEvidence: (cap: string) => boolean): CfFormulaBoundsReading | undefined {
+  const v = cfFormulaBoundsV2Reading(CF_FORMULA_BOUNDS_V2_CAP)
+  if (v === undefined || !checkEvidence(CF_FORMULA_BOUNDS_V2_CAP)) return undefined
+  const [reading, order] = v.split('+') as [CfFormulaBoundsReading, CfPercentOrderReading]
+  return cfPercentOrder(CF_SCALE_PERCENT_ORDER_CAP, checkEvidence) === order ? reading : undefined
+}
+const percentileFormulaBound = (p: CfScalePoint): boolean => p.bound.type === 'percentile' && 'resolved' in p.bound && p.bound.resolved === 'formula'
+/**
+ * The formula-bounds reading registered with its evidence for a segment bounded by `bounds` (undefined: none; formula-bounded
+ * cells of the settled shapes stay withheld): CF_FORMULA_BOUNDS_CAP's, else the v2 id's (`v2: true`) under its conditions.
+ */
+function formulaBoundsLift(checkEvidence: (cap: string) => boolean, bounds: readonly CfScalePoint[] = []): { reading: CfFormulaBoundsReading; v2: boolean } | undefined {
   const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
-  return r !== undefined && checkEvidence(CF_FORMULA_BOUNDS_CAP) ? r : undefined
+  if (r !== undefined && checkEvidence(CF_FORMULA_BOUNDS_CAP)) return { reading: r, v2: false }
+  const v = formulaBoundsV2Active(checkEvidence)
+  return v !== undefined && !bounds.some(percentileFormulaBound) ? { reading: v, v2: true } : undefined
 }
 /** Whether the service substitutes `fifteen-digit`'s rounded result for a colour-scale formula bound (registered with its evidence). */
 export function fifteenDigitFormulaBounds(checkEvidence: (cap: string) => boolean): boolean {
-  return formulaBoundsLift(checkEvidence) === 'fifteen-digit'
+  const r = cfFormulaBoundsReading(CF_FORMULA_BOUNDS_CAP)
+  if (r !== undefined && checkEvidence(CF_FORMULA_BOUNDS_CAP)) return r === 'fifteen-digit'
+  return formulaBoundsV2Active(checkEvidence) === 'fifteen-digit'
 }
 const opaque = (argb: number): boolean => ((argb >>> 24) & 0xff) === 0xff
 
@@ -878,9 +1022,9 @@ const opaque = (argb: number): boolean => ((argb >>> 24) & 0xff) === 0xff
 function upperSegmentReadingColour(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegment, checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant, nearTop = false): number | undefined {
   if (seg.segment !== 1 || colorSpace !== 'sRGB' || rounding !== 'truncate') return undefined
   if (formulaResolvedBound(lo) || formulaResolvedBound(hi)) {
-    const f = formulaBoundsLift(checkEvidence)
+    const f = formulaBoundsLift(checkEvidence, [lo, hi])
     if (f === undefined) return undefined
-    if (nearTop && (cfFormulaBoundsReading(CF_FORMULA_BOUNDS_NEAR_TOP_CAP) !== f || !checkEvidence(CF_FORMULA_BOUNDS_NEAR_TOP_CAP))) return undefined
+    if (nearTop && (f.v2 || cfFormulaBoundsReading(CF_FORMULA_BOUNDS_NEAR_TOP_CAP) !== f.reading || !checkEvidence(CF_FORMULA_BOUNDS_NEAR_TOP_CAP))) return undefined
   }
   const r = cfUpperSegmentReading(CF_UPPER_SEGMENT_CAP)
   if (r === undefined || !checkEvidence(CF_UPPER_SEGMENT_CAP)) return undefined

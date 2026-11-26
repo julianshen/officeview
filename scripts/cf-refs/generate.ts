@@ -33,6 +33,13 @@ import {
   s2LiteralLowerMarkers,
   s2LiteralLowerRange,
   S2_FORMULA_BOUNDS,
+  S2_PERCENT_ORDER,
+  S2_PERCENT_ORDER_CELLS,
+  S2_PERCENT_ORDER_ID,
+  s2PercentOrderCells,
+  s2PercentOrderColumnControls,
+  s2PercentOrderLayout,
+  s2PercentOrderMarkers,
   S2_FORMULA_BOUNDS_CELLS,
   S2_FORMULA_BOUNDS_ID,
   s2FormulaBoundsCells,
@@ -1380,6 +1387,36 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       for (const [ref, text] of Object.entries(S2_FORMULA_BOUNDS_CELLS)) cells.push({ ref, v: Number(text) })
       const cfvoXml = (v: { type: string; val?: string; f?: string }): string => `<cfvo type="${v.type}"${v.f !== undefined ? ` val="${esc(v.f)}"` : v.val !== undefined ? ` val="${v.val}"` : ''}/>`
       const markers = s2FormulaBoundsMarkers()
+      const scaleXml = markers.map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+      const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
+      return {
+        dimension: `A1:${fx.boundCol}${fx.controlRow}`,
+        cells,
+        legacyCfXml: [...scaleXml, ...pcXml].join(''),
+        dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,
+      }
+    }
+
+    case S2_PERCENT_ORDER_ID: {
+      // The percent-order follow-up (as the formula-bounds case): one colour rule per block and per twin rule (catalogue markers, priority order; a formula
+      // cfvo writes its formula text as @val), then one literal cellIs rule per positive control (value 1 = 1, its own dxf),
+      // sharing the unformatted control. Row 1 labels each column; the control row holds the controls; column AH holds the
+      // literal cells the reference cfvo read (no cell formula). Values are written as their exact decimals.
+      const fx = S2_PERCENT_ORDER
+      const { positiveControls, twins, positiveControlCol } = s2PercentOrderLayout()
+      const blockCols = new Map(s2PercentOrderCells().map(c => [/^[A-Z]+/.exec(c.ref)![0], c.block.id] as const))
+      const twinCols = [...new Set(twins.map(t => /^[A-Z]+/.exec(t.ref)![0]))]
+      const header: Array<[string, string]> = [...blockCols, ...twinCols.map(col => [col, 'Twin'] as [string, string]), [positiveControlCol, 'PosCtl'], [fx.boundCol, 'Bounds']]
+      const cells: CellSpec[] = header.map(([col, v]) => ({ ref: `${col}1`, v }))
+      for (const c of s2PercentOrderCells()) cells.push({ ref: c.ref, v: c.value })
+      for (const c of s2PercentOrderColumnControls()) cells.push({ ref: c.ref, v: Number(c.text) })
+      for (const t of twins) cells.push({ ref: t.ref, v: Number(t.text) })
+      cells.push({ ref: `${twinCols[0]!}${fx.controlRow}`, v: 0 })
+      cells.push({ ref: `${positiveControlCol}${fx.controlRow}`, v: 1 })
+      for (const p of positiveControls) cells.push({ ref: p.ref, v: 1 })
+      for (const [ref, text] of Object.entries(S2_PERCENT_ORDER_CELLS)) cells.push({ ref, v: Number(text) })
+      const cfvoXml = (v: { type: string; val?: string; f?: string }): string => `<cfvo type="${v.type}"${v.f !== undefined ? ` val="${esc(v.f)}"` : v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      const markers = s2PercentOrderMarkers()
       const scaleXml = markers.map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
       const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
       return {

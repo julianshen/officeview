@@ -21,6 +21,7 @@
  * algorithmic bounds. No timing assertion gates any outcome.
  */
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
+import { withExactCfEvidence } from '../../src/xlsx/cf/evidence'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -84,7 +85,7 @@ import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
-import { CF_FORMULA_BOUNDS_PRODUCTION_READINGS, CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
+import { CF_FORMULA_BOUNDS_PRODUCTION_READINGS, CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS, CF_PERCENT_ORDER_PRODUCTION_READINGS, CF_GUARD_BOUNDARY_PRODUCTION_READINGS, CF_LITERAL_LOWER_PRODUCTION_READINGS, CF_UPPER_NEAR_TOP_PRODUCTION_READINGS, CF_UPPER_SEGMENT_PRODUCTION_READINGS, CF_UPPER_WINDOW_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
 import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
 import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
@@ -279,6 +280,10 @@ export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
   ...(CF_UPPER_SEGMENT_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_UPPER_NEAR_TOP_PRODUCTION_READINGS as Readonly<Record<string, string>>),
   ...(CF_FORMULA_BOUNDS_PRODUCTION_READINGS as Readonly<Record<string, string>>),
+  // The percent-order follow-up: the colour-scale order ids and scale:formula-bounds-v2 (both empty until
+  // stage2-scale-percent-order's capture matches a reading and it is registered there).
+  ...(Object.fromEntries(Object.entries(CF_PERCENT_ORDER_PRODUCTION_READINGS).filter(([id]) => id.startsWith('scale:'))) as Readonly<Record<string, string>>),
+  ...(CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS as Readonly<Record<string, string>>),
 }
 
 export function auditStage2Manifest(
@@ -1054,7 +1059,12 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
  * beside the published set (`renderFormulaSelectionsBlock`, Task 39).
  * A capability with a matched reading but no entry (`formula:truth-range`, `formula:fn-today`, ...) is withheld.
  */
-export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
+export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = {
+  ...CF_FORMULA_PRODUCTION_READINGS,
+  // The percent-order follow-up: the icon order ids (empty until stage5-icon-percent-order's capture matches a reading and it
+  // is registered in CF_PERCENT_ORDER_PRODUCTION_READINGS, colorScale.ts).
+  ...(Object.fromEntries(Object.entries(CF_PERCENT_ORDER_PRODUCTION_READINGS).filter(([id]) => id.startsWith('icon:'))) as Readonly<Record<string, string>>),
+}
 
 /**
  * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses
@@ -1224,7 +1234,8 @@ const exportedSet = (text: string | undefined, name: string): string[] | undefin
  * Stage-1-only rendering once dropped `VERIFIED_STAGE2_CAPABILITIES` and broke `evidence.ts`). Stage 3 is published only
  * with `publishStage3` (Ruling S3-WRITE, Task 23); otherwise its committed export, or its absence, is kept verbatim.
  */
-export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
+/** The rendered `verifiedCapabilities.ts` source, and the VERIFIED_CAPABILITIES set it declares (structured, not re-parsed). */
+export function renderVerifiedCapabilities(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): { readonly source: string; readonly allVerified: readonly string[] } {
   const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
   const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
   const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
@@ -1254,7 +1265,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? []), ...(stage5Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
-  return `/**
+  const source = `/**
  * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
  * Generated via bun scripts/cf-refs/audit.ts --write (any --stage; --publish-stage3 publishes Stage 3).
  * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
@@ -1262,6 +1273,11 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
 ${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${stage5Verified !== undefined ? `${block('VERIFIED_STAGE5_CAPABILITIES', stage5Verified)}\n` : ''}${stage5Verified !== undefined && formulaSelectionsBlock !== undefined ? `${formulaSelectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+  return { source, allVerified }
+}
+
+export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
+  return renderVerifiedCapabilities(manifest, rootDir, options).source
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -2668,23 +2684,24 @@ async function main(): Promise<void> {
   // Task 39 fix round 1 (F4): `--write` renders now and writes only after every check below has passed, atomically
   // (a temporary sibling and one rename). Any failure (a thrown scenario, ok=false, an incomplete stage) leaves the
   // target byte-unchanged. `--target` redirects the write (tests); CF_AUDIT_INJECT_FAILURE=after-render is a test seam.
-  let pendingWrite: { target: string; content: string; summary: string } | undefined
+  let pendingWrite: { target: string; content: string; verified: readonly string[]; summary: string } | undefined
   if (args.includes('--write')) {
     const target = args.includes('--target') ? resolve(args[args.indexOf('--target') + 1]!) : resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
     const committed = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
-    const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
+    const rendered = renderVerifiedCapabilities(manifest, REPO_ROOT, {
       committedSource: existsSync(committed) ? readFileSync(committed, 'utf8') : undefined,
       publishStage3: args.includes('--publish-stage3'),
       publishStage4: args.includes('--publish-stage4'),
       publishStage5: args.includes('--publish-stage5'),
     })
+    const content = rendered.source
     if (process.env.CF_AUDIT_INJECT_FAILURE === 'after-render') throw new Error('injected failure after render (test seam)')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
     const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
     const s4 = content.includes('VERIFIED_STAGE4_CAPABILITIES') ? `, ${count('VERIFIED_STAGE4_CAPABILITIES')} S4${args.includes('--publish-stage4') ? ' published' : ' as committed'}` : ', S4 unpublished'
     const s5 = content.includes('VERIFIED_STAGE5_CAPABILITIES') ? `, ${count('VERIFIED_STAGE5_CAPABILITIES')} S5${args.includes('--publish-stage5') ? ' published' : ' as committed'}` : ', S5 unpublished'
     const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4}${s5})`
-    pendingWrite = { target, content, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
+    pendingWrite = { target, content, verified: rendered.allVerified, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
@@ -2834,7 +2851,13 @@ async function main(): Promise<void> {
     console.log(`${cyc.name}: cycles=${cyc.cycles} ready=${cyc.ready} pending=${cyc.pending} closedMidRead=${cyc.cancelled} maxNetBetween=${cyc.maxNetBetween} net=${cyc.netBytes}`)
     if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
     for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
-    const caseRecords5 = await stage5CaseRecords(manifest, REPO_ROOT)
+    // The percent-order follow-up: with `--write --publish-stage5`, the records are judged under the evidence about to be
+    // published (the rendered VERIFIED_CAPABILITIES), since a registered reading changes what production paints only once its
+    // id is published; without a write they are judged under the committed set, as before.
+    // Review P2: the exact set the renderer is about to write (structured, never re-parsed from text), smaller than the
+    // committed set when the audit revokes an id.
+    const pendingIds = pendingWrite && args.includes('--publish-stage5') ? pendingWrite.verified : undefined
+    const caseRecords5 = pendingIds ? await withExactCfEvidence(pendingIds, () => stage5CaseRecords(manifest, REPO_ROOT)) : await stage5CaseRecords(manifest, REPO_ROOT)
     const compared5 = caseRecords5.filter(r => r.compared)
     const disagree = compared5.filter(r => !r.agrees)
     // eslint-disable-next-line no-console

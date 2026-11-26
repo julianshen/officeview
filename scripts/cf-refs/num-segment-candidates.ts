@@ -101,12 +101,20 @@ export const withheldShape = (s: CfScaleSegment): boolean =>
  * stage2-scale-upper-window (ed0fccb6), stage2-scale-raw-floor (ce3f701d) and stage2-scale-literal-lower (a3f85309). Pass
  * `{ include: 'all' }` to add them.
  */
-export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds']
+export const SEARCH_EXCLUDED_CASES: readonly string[] = ['stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds', 'stage2-scale-percent-order']
+
+/**
+ * Captures no census or search of this file's family was run on: stage2-scale-percent-order (ecf00906) postdates them all, and
+ * its registration (§14.z.24) changed production's percent arithmetic, so the censuses, kept as of their captures, leave it
+ * out even under `{ include: 'all' }`.
+ */
+export const SEGMENT_CENSUS_LATER_CASES: readonly string[] = ['stage2-scale-percent-order']
 
 export async function collectSegmentCells(manifest: CfManifest, rootDir: string = REPO_ROOT, opts: { include?: 'search' | 'all' } = {}): Promise<SegmentCollection> {
   const out: SegmentCollection = { cells: [], excluded: [], faults: [] }
   for (const c of manifest.cases) {
     if (c.status !== 'measured' || !c.markers.some(m => m.ruleType === 'colorScale')) continue
+    if (SEGMENT_CENSUS_LATER_CASES.includes(c.id)) continue
     if ((opts.include ?? 'search') === 'search' && SEARCH_EXCLUDED_CASES.includes(c.id)) continue
     const fills = excelFills(c, rootDir)
     if (!fills) { out.excluded.push({ caseId: c.id, ref: '*', reason: 'no DisplayFormat fill observation in the capture (bar/icon sidecar)', group: 'a' }); continue }

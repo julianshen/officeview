@@ -12,7 +12,8 @@
  * guard-boundary shape, nor under another colour space or rounding. The justifications narrow only with the registration plus
  * its evidence. This checks production, not Excel.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import {
   CF_FORMULA_BOUNDS_CAP,
   CF_FORMULA_BOUNDS_NEAR_TOP_CAP,
@@ -31,6 +32,11 @@ import {
 import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import { formulaBoundsReadingRegistered, guardBoundaryShapeAt, independentFifteenDigit, upperNearTopShapeAt, upperWholeShapeAt, type UpperWholeMarker } from '../scripts/cf-refs/upper-whole-justify'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 afterEach(() => { injectCfFormulaBoundsReadings(null) })
 

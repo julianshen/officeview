@@ -5159,6 +5159,420 @@ function stage2FormulaBoundsCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The percent-order follow-up (brief cf-percent-order): stage2-scale-percent-order
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_PERCENT_ORDER_ID = 'stage2-scale-percent-order'
+/** The colour-scale percent question: the order of a literal percent threshold's arithmetic. Registrable. */
+export const S2_PERCENT_ORDER_CAP = 'scale:percent-order'
+/** The colour-scale percentile question: the order of a literal PERCENTILE.INC rank's arithmetic. Registrable. */
+export const S2_PERCENTILE_ORDER_CAP = 'scale:percentile-order'
+/** The formula-bounds question asked again, each formula reading under each percent order. Registrable. */
+export const S2_FORMULA_BOUNDS_V2_CAP = 'scale:formula-bounds-v2'
+/** The twins (the P-line twin line): comparison references only. */
+export const S2_PERCENT_ORDER_TWIN = 'scale:percent-order-twin'
+export const S2_PERCENT_ORDER_READINGS = ['lerp-first', 'multiply-first'] as const
+export type S2PercentOrderReading = (typeof S2_PERCENT_ORDER_READINGS)[number]
+export const S2_FORMULA_BOUNDS_V2_READINGS = ['as-literal+lerp-first', 'as-literal+multiply-first', 'fifteen-digit+lerp-first', 'fifteen-digit+multiply-first'] as const
+export type S2FormulaBoundsV2Reading = (typeof S2_FORMULA_BOUNDS_V2_READINGS)[number]
+export type S2PercentOrderCapability = typeof S2_PERCENT_ORDER_CAP | typeof S2_PERCENTILE_ORDER_CAP | typeof S2_FORMULA_BOUNDS_V2_CAP
+/** What the model evaluates a block under: the order of the percent and the percentile arithmetic, and the formula-result reading. */
+export type S2PercentOrderWorld = Readonly<{ percent: S2PercentOrderReading; percentile: S2PercentOrderReading; formula: S2FormulaBoundsReading }>
+/** Production's default: lerp-first for both, a formula result used as written. */
+export const S2_PERCENT_ORDER_DEFAULT_WORLD: S2PercentOrderWorld = { percent: 'lerp-first', percentile: 'lerp-first', formula: 'as-literal' }
+/** The world a capability's reading names (the other components at production's default). */
+export function s2PercentOrderWorldOf(cap: S2PercentOrderCapability, reading: string): S2PercentOrderWorld {
+  if (cap === S2_PERCENT_ORDER_CAP) return { ...S2_PERCENT_ORDER_DEFAULT_WORLD, percent: reading as S2PercentOrderReading }
+  if (cap === S2_PERCENTILE_ORDER_CAP) return { ...S2_PERCENT_ORDER_DEFAULT_WORLD, percentile: reading as S2PercentOrderReading }
+  const [formula, percent] = reading.split('+') as [S2FormulaBoundsReading, S2PercentOrderReading]
+  return { ...S2_PERCENT_ORDER_DEFAULT_WORLD, formula, percent }
+}
+/** The readings pre-registered for a capability. */
+export const s2PercentOrderReadingsOf = (cap: S2PercentOrderCapability): readonly string[] => (cap === S2_FORMULA_BOUNDS_V2_CAP ? S2_FORMULA_BOUNDS_V2_READINGS : S2_PERCENT_ORDER_READINGS)
+
+/**
+ * A cell's role: `decisive` (some readings of the block's capability differ), `kept` (they agree, at a cell production
+ * withholds today: a settled shape with a formula bound), `clear` (they agree and production paints it today), `control`
+ * (an endpoint or a value beyond the bounds: all agree).
+ */
+export type S2PercentOrderRole = 'decisive' | 'kept' | 'clear' | 'control'
+export type S2PercentOrderCfvo = Readonly<{ type: 'num' | 'min' | 'max' | 'percent' | 'percentile' | 'formula'; val?: string; f?: string }>
+export interface S2PercentOrderBlock {
+  /** The evidence configuration (replication group). */
+  id: string
+  col: string
+  cap: S2PercentOrderCapability
+  cfvo: readonly S2PercentOrderCfvo[]
+  colors: readonly string[]
+  values: ReadonlyArray<{ text: string; role: S2PercentOrderRole }>
+}
+
+/** The literal cells the formula cfvo read (column AH, outside every rule and the capture range), as their doubles' shortest text. */
+export const S2_PERCENT_ORDER_CELLS: Readonly<Record<string, string>> = {
+  AH2: '33.333333333333336', AH3: '46.666666666666664', AH4: '28.000000000000004',
+  AH5: '0.30000000000000004', AH6: '0.30000000000000004', AH7: '210.00000000000003', AH8: '419.99999999999994',
+}
+const s2poV = (role: S2PercentOrderRole, ...texts: string[]): Array<{ text: string; role: S2PercentOrderRole }> => texts.map(text => ({ text, role }))
+const s2poNum = (val: string): S2PercentOrderCfvo => ({ type: 'num', val })
+const s2poRef = (type: 'num' | 'formula' | 'percent', ref: string): S2PercentOrderCfvo => ({ type, f: `$${/^[A-Z]+/.exec(ref)![0]}$${/\d+$/.exec(ref)![0]}` })
+const S2PO_P = s2UwLine(0), S2PO_Q = s2UwLine(210)
+
+/** The designated values of the percent and formula-percent blocks (proposed by search, every role checked by the layout). */
+const S2PO_VALUES: Readonly<Record<string, ReadonlyArray<{ text: string; role: S2PercentOrderRole }>>> = {
+  // percent 92 over -90 .. 120: lerp-first 103.20000000000002 > multiply-first 103.19999999999999.
+  'po-lo-pq': [...s2poV('decisive', '103.36', '104.08', '104.8', '105.52', '106.4'), ...s2poV('clear', '105'), ...s2poV('control', '-90', '120')],
+  // percent 98 over -90 .. 120: lerp-first 115.79999999999998 < multiply-first 115.80000000000001.
+  'po-lo-qp': [...s2poV('decisive', '115.84', '116', '116.3', '116.6', '117'), ...s2poV('clear', '118.4'), ...s2poV('control', '-90', '120')],
+  // percent 73 over -60 .. 150 (the upper bound): lerp-first 93.29999999999998 < multiply-first 93.30000000000001.
+  'po-hi-qp': [...s2poV('decisive', '-48.32', '-30.07', '-14.74', '4.24', '15.19'), ...s2poV('clear', '-57'), ...s2poV('control', '-60', '150')],
+  // percent 81 over -7 .. 203 (the upper bound): lerp-first 163.10000000000002 > multiply-first 163.1.
+  'po-hi-pq': [...s2poV('decisive', '-4.57', '1.1', '10.01', '22.16', '33.5'), ...s2poV('clear', '-3'), ...s2poV('control', '-7', '203')],
+  // percentile 10 over 8 values (rank 1.7 between -105 and 0): lerp-first -31.499999999999986 > multiply-first -31.5.
+  'pl-pq': [...s2poV('decisive', '3', '26', '49', '72', '95'), ...s2poV('clear', '0'), ...s2poV('control', '-105', '210')],
+  // percentile 30 over 10 values (rank 3.7 between 0 and 30): lerp-first 20.999999999999993 < multiply-first 21.000000000000007.
+  'pl-qp': [...s2poV('decisive', '35', '42', '56', '70', '104.3'), ...s2poV('clear', '30'), ...s2poV('control', '-60', '-30', '0', '168')],
+  // percent =$AH$2 (33.333333333333336; rounded 33.3333333333333) over -90 .. 210: as-literal+lerp-first alone above 10.
+  'fp-33': [...s2poV('decisive', '30', '50', '70', '90', '110'), ...s2poV('clear', '12'), ...s2poV('control', '-90', '210')],
+  // percent =$AH$3 (46.666666666666664; rounded 46.6666666666667) over -60 .. 240 (the upper bound): as-literal below or at 80,
+  // fifteen-digit above it; three cells where as-literal+lerp-first alone differs.
+  'fp-47': [...s2poV('decisive', '-50', '-30', '-10', '10', '30', '-42', '-24', '12'), ...s2poV('clear', '-57'), ...s2poV('control', '-60', '240')],
+  // percent =$AH$4 (28.000000000000004; rounded 28) over -90 .. 210: fifteen-digit+multiply-first alone at -6, the others above.
+  'fp-28': [...s2poV('decisive', '1.2', '15.6', '30', '51.6', '94.8'), ...s2poV('clear', '-5'), ...s2poV('control', '-90', '210')],
+}
+
+/** The blocks (columns A..L, rows 2..13). Classes and outcomes per cell are pinned in the case test and listed in recipe §15.4. */
+export function s2PercentOrderBlocks(): S2PercentOrderBlock[] {
+  return [
+    // scale:percent-order: literal percent bounds at both positions, both colour orders, both signs of lerp-first − multiply-first.
+    { id: 'po-lo-pq', col: 'A', cap: S2_PERCENT_ORDER_CAP, cfvo: [{ type: 'percent', val: '92' }, { type: 'max' }], colors: [S2PO_P, S2PO_Q], values: S2PO_VALUES['po-lo-pq']! },
+    { id: 'po-lo-qp', col: 'B', cap: S2_PERCENT_ORDER_CAP, cfvo: [{ type: 'percent', val: '98' }, { type: 'max' }], colors: [S2PO_Q, S2PO_P], values: S2PO_VALUES['po-lo-qp']! },
+    { id: 'po-hi-qp', col: 'C', cap: S2_PERCENT_ORDER_CAP, cfvo: [{ type: 'min' }, { type: 'percent', val: '73' }], colors: [S2PO_Q, S2PO_P], values: S2PO_VALUES['po-hi-qp']! },
+    { id: 'po-hi-pq', col: 'D', cap: S2_PERCENT_ORDER_CAP, cfvo: [{ type: 'min' }, { type: 'percent', val: '81' }], colors: [S2PO_P, S2PO_Q], values: S2PO_VALUES['po-hi-pq']! },
+    // scale:percentile-order: literal PERCENTILE.INC bounds whose rank falls between two fixed low values, both signs.
+    { id: 'pl-pq', col: 'E', cap: S2_PERCENTILE_ORDER_CAP, cfvo: [{ type: 'percentile', val: '10' }, { type: 'max' }], colors: [S2PO_P, S2PO_Q], values: S2PO_VALUES['pl-pq']! },
+    { id: 'pl-qp', col: 'F', cap: S2_PERCENTILE_ORDER_CAP, cfvo: [{ type: 'percentile', val: '30' }, { type: 'max' }], colors: [S2PO_Q, S2PO_P], values: S2PO_VALUES['pl-qp']! },
+    // scale:formula-bounds-v2: formula percent bounds whose p differs from its 15-digit rounding (each group cuts the four
+    // readings differently), then the formula-bound shapes of stage2-scale-formula-bounds (guard boundary, 3-colour lower, upper).
+    { id: 'fp-33', col: 'G', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [s2poRef('percent', 'AH2'), { type: 'max' }], colors: [S2PO_P, S2PO_Q], values: S2PO_VALUES['fp-33']! },
+    { id: 'fp-47', col: 'H', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [{ type: 'min' }, s2poRef('percent', 'AH3')], colors: [S2PO_Q, S2PO_P], values: S2PO_VALUES['fp-47']! },
+    { id: 'fp-28', col: 'I', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [s2poRef('percent', 'AH4'), { type: 'max' }], colors: [S2PO_Q, S2PO_P], values: S2PO_VALUES['fp-28']! },
+    { id: 'fn-hi', col: 'J', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [s2poNum('0'), s2poRef('num', 'AH5')], colors: [S2PO_P, S2PO_Q],
+      values: [...s2poV('decisive', '0.01', '0.03', '0.07', '0.09', '0.14'), ...s2poV('clear', '0.1', '0.2'), ...s2poV('control', '0')] },
+    { id: 'f3-lower', col: 'K', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [s2poNum('0'), s2poRef('num', 'AH6'), s2poNum('0.6')], colors: [S2PO_Q, S2PO_P, S2PO_Q],
+      values: [...s2poV('decisive', '0.02', '0.04', '0.06', '0.12', '0.15'), ...s2poV('clear', '0.05', '0.1'), ...s2poV('control', '0', '0.6')] },
+    { id: 'f3-upper', col: 'L', cap: S2_FORMULA_BOUNDS_V2_CAP, cfvo: [s2poNum('-210'), s2poRef('num', 'AH7'), s2poRef('formula', 'AH8')], colors: [S2PO_Q, S2PO_P, S2PO_Q],
+      values: [...s2poV('decisive', '217', '220', '230', '233', '244'), ...s2poV('kept', '211', '214', '225'), ...s2poV('control', '-210')] },
+  ]
+}
+
+/** The layout's fixed slots: data rows, the control row, the twin line's spans and the literal positive controls. */
+export const S2_PERCENT_ORDER = {
+  firstRow: 2,
+  lastDataRow: 13,
+  /** Row 14: each data column's unformatted control (the column's first designated value), the twins' and the positive controls'. */
+  controlRow: 14,
+  /** The column of the referenced literal cells (outside the capture range). */
+  boundCol: 'AH',
+  /** The P-line twin line: num 0 / 1 between two P-line steps 128 apart; a twin of step k has value (k − from)/128 (exact). */
+  twinSpans: [{ from: 0, to: 128 }, { from: 82, to: 210 }] as const,
+  /** Literal cellIs positive controls (readback of a dxf fill). */
+  literalControls: ['FFF8696B', 'FF63BE7B'] as const,
+}
+
+/** A formula cfvo's result, restated: an absolute reference to a cell of S2_PERCENT_ORDER_CELLS reads its double. */
+export function s2PercentOrderResult(f: string): number | undefined {
+  const ref = /^\$([A-Z]+)\$(\d+)$/.exec(f)
+  const t = ref ? S2_PERCENT_ORDER_CELLS[`${ref[1]}${ref[2]}`] : undefined
+  return t === undefined ? undefined : Number(t)
+}
+
+/**
+ * The model's percent threshold under an order, restated: `lerp-first` min + (p/100)·(max − min), `multiply-first`
+ * min + ((max − min)·p)/100.
+ */
+export const s2PercentOrderPercent = (min: number, max: number, p: number, order: S2PercentOrderReading): number =>
+  order === 'lerp-first' ? min + (p / 100) * (max - min) : min + ((max - min) * p) / 100
+/**
+ * The model's PERCENTILE.INC under an order, restated: rank 1 + (p/100)·(n − 1) (`lerp-first`) or 1 + (p·(n − 1))/100
+ * (`multiply-first`), then x_i + frac·(x_{i+1} − x_i) over the ascending values.
+ */
+export function s2PercentOrderPercentile(sorted: readonly number[], p: number, order: S2PercentOrderReading): number {
+  const n = sorted.length
+  if (p <= 0) return sorted[0]!
+  if (p >= 100) return sorted[n - 1]!
+  const rank = order === 'lerp-first' ? 1 + (p / 100) * (n - 1) : 1 + (p * (n - 1)) / 100
+  const ip = Math.floor(rank), i = ip - 1
+  return i >= n - 1 ? sorted[n - 1]! : sorted[i]! + (rank - ip) * (sorted[i + 1]! - sorted[i]!)
+}
+
+/** A block's thresholds in a world, positional (cfvo order); min / max / percent / percentile over the block's values. */
+export function s2PercentOrderThresholds(b: S2PercentOrderBlock, w: S2PercentOrderWorld): number[] {
+  const vs = b.values.map(x => Number(x.text)).sort((x, y) => x - y)
+  const min = vs[0]!, max = vs[vs.length - 1]!
+  return b.cfvo.map(c => {
+    if (c.type === 'min') return min
+    if (c.type === 'max') return max
+    let n: number
+    if (c.f !== undefined) {
+      const r = s2PercentOrderResult(c.f)
+      if (r === undefined) throw new Error(`${S2_PERCENT_ORDER_ID}: ${b.id} formula ${c.f} has no result`)
+      n = w.formula === 'fifteen-digit' ? s2FormulaBoundsRound(r) : r
+    } else n = Number(c.val)
+    if (c.type === 'percent') return s2PercentOrderPercent(min, max, n, w.percent)
+    if (c.type === 'percentile') return s2PercentOrderPercentile(vs, n, w.percentile)
+    return n
+  })
+}
+
+export interface S2PercentOrderCell {
+  ref: string
+  block: S2PercentOrderBlock
+  text: string
+  value: number
+  role: S2PercentOrderRole
+  /** The configuration: the block's id, or `controls:<capability>`. */
+  configuration: string
+}
+
+/** Every cell of every block. */
+export function s2PercentOrderCells(): S2PercentOrderCell[] {
+  return s2PercentOrderBlocks().flatMap(b => {
+    if (b.values.length > S2_PERCENT_ORDER.lastDataRow - S2_PERCENT_ORDER.firstRow + 1) throw new Error(`${S2_PERCENT_ORDER_ID}: ${b.id} has too many values`)
+    return b.values.map((x, i): S2PercentOrderCell => ({
+      ref: `${b.col}${S2_PERCENT_ORDER.firstRow + i}`, block: b, text: x.text, value: Number(x.text), role: x.role,
+      configuration: x.role === 'control' ? `controls:${b.cap}` : b.id,
+    }))
+  })
+}
+
+/** The segment a cell is in, in a world (thresholds sorted, colours positional; the 3-colour midpoint-above-max re-sort), its clamped fraction, and whether it is strictly inside. */
+export function s2PercentOrderSegment(c: Pick<S2PercentOrderCell, 'block' | 'value'>, w: S2PercentOrderWorld): { upper: boolean; lo: number; hi: number; from: string; to: string; f: number; interior: boolean } {
+  const t = s2PercentOrderThresholds(c.block, w), k = c.block.colors, v = c.value
+  let lo: number, hi: number, from: string, to: string, upper = false
+  if (t.length === 2) {
+    if (!(t[0]! < t[1]!)) throw new Error(`${S2_PERCENT_ORDER_ID}: ${c.block.id} thresholds are not ascending`)
+    ;[lo, hi] = [t[0]!, t[1]!]; [from, to] = [k[0]!, k[1]!]
+  } else {
+    const [mid, top] = t[1]! > t[2]! ? [t[2]!, t[1]!] : [t[1]!, t[2]!]
+    if (!(t[0]! < mid && mid < top)) throw new Error(`${S2_PERCENT_ORDER_ID}: ${c.block.id} thresholds are not ascending once re-sorted`)
+    upper = v > mid
+    ;[lo, hi] = upper ? [mid, top] : [t[0]!, mid]
+    ;[from, to] = upper ? [k[1]!, k[2]!] : [k[0]!, k[1]!]
+  }
+  return { upper, lo, hi, from, to, f: Math.max(0, Math.min(1, (v - lo) / (hi - lo))), interior: v > lo && v < hi }
+}
+
+/**
+ * Whether production withholds a cell today (nothing of this case registered): strictly inside a formula-bounded segment of a
+ * settled shape, at production's default world (or the thresholds of world `w`, where no v2 reading lifts the shape). Lower / 2-colour: some ARGB channel's f·d within 1e-11 strictly below a whole
+ * number. Upper: some RGB channel's f·d within 1e-11 of a whole k, 0 < k < d, or within 1e-11 below d.
+ */
+export function s2PercentOrderWithheldToday(c: Pick<S2PercentOrderCell, 'block' | 'value'>, w: S2PercentOrderWorld = S2_PERCENT_ORDER_DEFAULT_WORLD): boolean {
+  if (!c.block.cfvo.some(x => x.f !== undefined)) return false
+  const s = s2PercentOrderSegment(c, w)
+  if (!s.interior) return false
+  if (!s.upper) return [0, 2, 4, 6].some(i => { const p = s.f * s2fbD(s.from, s.to, i); return Math.floor(p + 1e-11) !== Math.floor(p) })
+  return [2, 4, 6].some(i => {
+    const d = s2fbD(s.from, s.to, i)
+    if (d === 0) return false
+    const p = s.f * d, k = Math.round(p)
+    return (k > 0 && k < d && Math.abs(p - k) <= 1e-11) || d - p <= 1e-11
+  })
+}
+
+/**
+ * What a world predicts at a cell: the segment under its thresholds, then the registered arithmetic per ARGB channel
+ * (d = |c1 − c0|): a lower or 2-colour segment raw floor floor(f·d) on every channel when some channel's f·d lies within
+ * 1e-11 strictly below a whole number (raw-floor), else floor(f·d + 1e-11); an upper segment index-position,
+ * floor(((1 + f) − 1)·d).
+ */
+export function s2PercentOrderPrediction(c: Pick<S2PercentOrderCell, 'block' | 'value'>, w: S2PercentOrderWorld): string {
+  const s = s2PercentOrderSegment(c, w)
+  return s2UpperSegmentColour(s.upper ? 'index-position' : 'lower', s.from, s.to, s.f)
+}
+/** A capability reading's prediction at a cell. */
+export const s2PercentOrderReadingPrediction = (c: Pick<S2PercentOrderCell, 'block' | 'value'>, reading: string): string => s2PercentOrderPrediction(c, s2PercentOrderWorldOf(c.block.cap, reading))
+
+const S2PO_CONFIGURATIONS: ReadonlyArray<{ id: string; cap: S2PercentOrderCapability; role?: 'negative-control'; note?: string }> = [
+  ...s2PercentOrderBlocks().map(b => ({ id: b.id, cap: b.cap })),
+  ...([S2_PERCENT_ORDER_CAP, S2_PERCENTILE_ORDER_CAP, S2_FORMULA_BOUNDS_V2_CAP] as const).map(cap => ({
+    id: `controls:${cap}`, cap, role: 'negative-control' as const,
+    note: 'Negative controls: endpoints and values beyond the bounds, where every reading predicts the endpoint colour; Excel must match it, never evidence.',
+  })),
+]
+
+export interface S2PercentOrderTwin {
+  ref: string
+  fill: string
+  text: string
+  rule: { sqref: string; cfvo: readonly string[]; colors: readonly string[] }
+}
+
+/** The P-line twin line (num 0 / 1 between two P-line steps 128 apart, a twin of step k at (k − from)/128); every product checked to be an IEEE integer. */
+function s2poTwins(lineSteps: readonly number[], firstCol: number): { twins: S2PercentOrderTwin[]; lastCol: number } {
+  const fx = S2_PERCENT_ORDER
+  const rows = fx.lastDataRow - fx.firstRow + 1
+  const twins: S2PercentOrderTwin[] = []
+  let col = firstCol
+  for (const span of fx.twinSpans) {
+    const mine = lineSteps.filter(k => (span === fx.twinSpans[0] ? k <= span.to : k > fx.twinSpans[0].to) && k >= span.from && k <= span.to)
+    // Columns filled evenly (never a short last column).
+    const per = Math.ceil(mine.length / Math.ceil(mine.length / rows))
+    for (let i = 0; i < mine.length; i += per) {
+      const name = s2llCol(col++)
+      const chunk = mine.slice(i, i + per)
+      // A twin rule over one cell would be the degenerate single-cell scope: never.
+      if (chunk.length < 2) throw new Error(`${S2_PERCENT_ORDER_ID}: a twin rule of one cell at ${name}`)
+      const sqref = s2llSqref(name, fx.firstRow, fx.firstRow + chunk.length - 1)
+      chunk.forEach((k, j) => {
+        const t: S2PercentOrderTwin = { ref: `${name}${fx.firstRow + j}`, fill: s2UwLine(k), text: String((k - span.from) / 128), rule: { sqref, cfvo: ['0', '1'], colors: [s2UwLine(span.from), s2UwLine(span.to)] } }
+        const f = Number(t.text)
+        for (const c of [0, 2, 4, 6]) if (!Number.isInteger(f * s2fbD(t.rule.colors[0]!, t.rule.colors[1]!, c))) throw new Error(`${S2_PERCENT_ORDER_ID}: twin ${t.ref} product is not an IEEE integer`)
+        if (s2UpperSegmentColour('lower', t.rule.colors[0]!, t.rule.colors[1]!, f) !== t.fill) throw new Error(`${S2_PERCENT_ORDER_ID}: twin ${t.ref} does not show ${t.fill}`)
+        twins.push(t)
+      })
+    }
+  }
+  return { twins, lastCol: col - 1 }
+}
+
+/**
+ * The configurations, the twins and the literal positive controls; every prediction is a twin token (all fills lie on the P
+ * line). Throws on any cell outside its designed role: a value whose text is not its double's shortest form, a cell changing
+ * segment between readings, a decisive cell where its capability's readings agree, a kept / clear / control cell where they
+ * differ (or a kept cell painted today, a clear cell withheld today), and a capability two of whose readings coincide at
+ * every designated cell, or are told apart by fewer than 3 decisive cells (summed over its groups).
+ */
+export function s2PercentOrderLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }>; twins: S2PercentOrderTwin[]; positiveControlCol: string } {
+  const fx = S2_PERCENT_ORDER
+  const cells = s2PercentOrderCells()
+  for (const c of cells) {
+    const rs = s2PercentOrderReadingsOf(c.block.cap)
+    const preds = rs.map(r => s2PercentOrderReadingPrediction(c, r))
+    const segs = rs.map(r => s2PercentOrderSegment(c, s2PercentOrderWorldOf(c.block.cap, r)))
+    if (String(c.value) !== c.text) throw new Error(`${S2_PERCENT_ORDER_ID}: ${c.ref} text ${c.text} is not its double's shortest form`)
+    if (new Set(segs.map(s => s.upper)).size > 1) throw new Error(`${S2_PERCENT_ORDER_ID}: ${c.ref} changes segment between the readings`)
+    const interior = segs.every(s => s.interior), exterior = segs.every(s => !s.interior)
+    const agree = new Set(preds).size === 1
+    const withheld = s2PercentOrderWithheldToday(c)
+    const ok = c.role === 'decisive' ? interior && !agree
+      : c.role === 'kept' ? interior && agree && withheld
+        : c.role === 'clear' ? interior && agree && !withheld
+          : exterior && agree
+    if (!ok) throw new Error(`${S2_PERCENT_ORDER_ID}: ${c.ref} (${c.text}) is not a ${c.role} cell (${preds.join(' / ')})`)
+  }
+  for (const [ref, text] of Object.entries(S2_PERCENT_ORDER_CELLS)) if (String(Number(text)) !== text) throw new Error(`${S2_PERCENT_ORDER_ID}: ${ref} text ${text} is not its double's shortest form`)
+  // Every pair of a capability's readings is told apart by at least 3 decisive cells.
+  for (const cap of [S2_PERCENT_ORDER_CAP, S2_PERCENTILE_ORDER_CAP, S2_FORMULA_BOUNDS_V2_CAP] as const) {
+    const rs = s2PercentOrderReadingsOf(cap)
+    const mine = cells.filter(c => c.block.cap === cap && c.role === 'decisive')
+    for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
+      const n = mine.filter(c => s2PercentOrderReadingPrediction(c, rs[i]!) !== s2PercentOrderReadingPrediction(c, rs[j]!)).length
+      if (n < 3) throw new Error(`${S2_PERCENT_ORDER_ID}: ${cap} readings ${rs[i]} and ${rs[j]} differ at ${n} decisive cells, fewer than 3`)
+    }
+  }
+  const fills = [...new Set(cells.flatMap(c => s2PercentOrderReadingsOf(c.block.cap).map(r => s2PercentOrderReadingPrediction(c, r))))].sort()
+  const lineSteps = fills.map(s2nsLineStep)
+  if (lineSteps.some(k => k === undefined)) throw new Error(`${S2_PERCENT_ORDER_ID}: a predicted fill is off the P line`)
+  const steps = [...new Set(lineSteps as number[])].sort((a, b) => a - b)
+  const dataCols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  const { twins, lastCol } = s2poTwins(steps, s2llColIndex(dataCols.at(-1)!) + 1)
+  const twinOf = new Map(twins.map(t => [t.fill, t.ref]))
+  const positiveControlCol = s2llCol(lastCol + 1)
+  if (s2llColIndex(positiveControlCol) >= s2llColIndex(fx.boundCol)) throw new Error(`${S2_PERCENT_ORDER_ID}: the layout reaches the bound column ${fx.boundCol}`)
+  const positiveControls = fx.literalControls.map((token, i) => ({ ref: `${positiveControlCol}${fx.firstRow + i}`, token }))
+  const configurations: S5Configuration[] = S2PO_CONFIGURATIONS.map(cfg => {
+    const members = cells.filter(c => c.configuration === cfg.id)
+    const hypotheses = Object.fromEntries(s2PercentOrderReadingsOf(cfg.cap).map(h => [h, Object.fromEntries(members.map(c => [c.ref, `twin:${twinOf.get(s2PercentOrderReadingPrediction(c, h))!}`]))]))
+    const twinRefs = [...new Set(Object.values(hypotheses).flatMap(h => Object.values(h)))].map(t => t.slice('twin:'.length)).sort()
+    return {
+      id: cfg.id, capabilityId: cfg.cap, observable: 'fill' as const, refs: members.map(c => c.ref), hypotheses,
+      ...(cfg.role ? { role: cfg.role, note: cfg.note } : {}),
+      ...(twinRefs.length > 0 ? { twinExpect: Object.fromEntries(twinRefs.map(t => [t, 'visual' as const])) } : {}),
+      ...(cfg.role ? { positiveControls: Object.fromEntries(positiveControls.map(p => [p.ref, p.token])) } : {}),
+    }
+  })
+  return { configurations, positiveControls, twins, positiveControlCol }
+}
+
+/** The data columns and the control of each: the column's first designated cell's value, unformatted, in the control row. */
+export function s2PercentOrderColumnControls(): Array<{ col: string; ref: string; text: string }> {
+  const cells = s2PercentOrderCells()
+  const cols = [...new Set(cells.map(c => /^[A-Z]+/.exec(c.ref)![0]))]
+  return cols.map(col => ({ col, ref: `${col}${S2_PERCENT_ORDER.controlRow}`, text: cells.find(c => /^[A-Z]+/.exec(c.ref)![0] === col)!.text }))
+}
+
+/** The colour rules (one per block; formula cfvo as `f`), then the twins' (one per twin rule), in priority order; positive controls follow, unmarked. */
+export function s2PercentOrderMarkers(): CfPartMarker[] {
+  const { twins } = s2PercentOrderLayout()
+  const rules = [...new Map(twins.map(t => [t.rule.sqref, t.rule])).values()]
+  const blocks = s2PercentOrderBlocks().map(b => ({
+    cap: b.cap, sqref: s2llSqref(b.col, S2_PERCENT_ORDER.firstRow, S2_PERCENT_ORDER.firstRow + b.values.length - 1),
+    cfvo: b.cfvo.map(c => ({ ...c })), colors: [...b.colors], formulas: b.cfvo.filter(c => c.type === 'formula' && c.f !== undefined).map(c => c.f!),
+  }))
+  return [
+    ...blocks,
+    ...rules.map(r => ({ cap: S2_PERCENT_ORDER_TWIN, sqref: r.sqref, cfvo: r.cfvo.map(val => ({ type: 'num', val })), colors: [...r.colors], formulas: [] as string[] })),
+  ].map((m, i) => ({ ...s2UpperWholeMarker(m.cap, m.sqref, m.cfvo, m.colors, i + 1), formulas: m.formulas }))
+}
+
+/** The capture range: through the positive-control column and the control row (the bound column AH stays outside it). */
+export const s2PercentOrderRange = (): string => `A1:${s2PercentOrderLayout().positiveControlCol}${S2_PERCENT_ORDER.controlRow}`
+
+function stage2PercentOrderCase(): CfOracleCase {
+  const fx = S2_PERCENT_ORDER
+  const { configurations, positiveControls, twins } = s2PercentOrderLayout()
+  const all = s2PercentOrderCells()
+  const colControl = new Map(s2PercentOrderColumnControls().map(c => [c.col, c.ref]))
+  const colOf = (ref: string): string => /^[A-Z]+/.exec(ref)![0]
+  const twinControl = `${colOf(twins[0]!.ref)}${fx.controlRow}`
+  const pcControl = `${colOf(positiveControls[0]!.ref)}${fx.controlRow}`
+  const designated: CfCellExpectation[] = all.map(c => ({ ref: c.ref, controlRef: colControl.get(colOf(c.ref))!, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const twinCells: CfCellExpectation[] = twins.map(t => ({ ref: t.ref, controlRef: twinControl, matched: true, scaleApplied: true, fillSource: 'unverified' as const }))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: pcControl, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const firstDesignated = (col: string): string => designated.find(d => colOf(d.ref) === col)!.ref
+  const controls: CfCellExpectation[] = [
+    ...[...colControl].map(([col, ref]) => ({ ref, controlRef: firstDesignated(col), matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: twinControl, controlRef: twins[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+    { ref: pcControl, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...twinCells, ...positives, ...controls]
+  const count = (cap: string, role: S2PercentOrderRole): number => all.filter(c => c.block.cap === cap && c.role === role).length
+  const groups = (cap: string): number => s2PercentOrderBlocks().filter(b => b.cap === cap).length
+  return {
+    id: S2_PERCENT_ORDER_ID,
+    stage: 2,
+    question:
+      `The percent-order follow-up (brief cf-percent-order; registrable): does Excel compute a colour-scale percent threshold lerp-first, lo + (p/100)·(hi − lo) (production), or multiply-first, lo + ((hi − lo)·p)/100 (the post-capture hypothesis of stage2-scale-formula-bounds E2..E6), and a PERCENTILE.INC rank 1 + (p/100)·(n − 1) or 1 + (p·(n − 1))/100? Three questions: scale:percent-order (${count(S2_PERCENT_ORDER_CAP, 'decisive')} decisive cells in ${groups(S2_PERCENT_ORDER_CAP)} groups of literal percent bounds: both bound positions, both colour orders, both signs of the threshold difference, negative minima), scale:percentile-order (${count(S2_PERCENTILE_ORDER_CAP, 'decisive')} in ${groups(S2_PERCENTILE_ORDER_CAP)} groups, both signs), and scale:formula-bounds-v2 (${count(S2_FORMULA_BOUNDS_V2_CAP, 'decisive')} in ${groups(S2_FORMULA_BOUNDS_V2_CAP)} groups: as-literal and fifteen-digit under each order, three formula-percent groups that cut the four readings differently, and the guard-boundary, 3-colour lower and upper formula-bound shapes of stage2-scale-formula-bounds). Decisive cells sit where the threshold difference moves a guard-boundary product across a whole number (raw floor one step apart). ${all.filter(c => c.role === 'kept').length} kept, ${all.filter(c => c.role === 'clear').length} clear cells and ${all.filter(c => c.role === 'control').length} controls. The formula results are literal cells of column AH (no cell formula). A P-line twin line shows every predicted fill; two literal cellIs positive controls check the readback.`,
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_PERCENT_ORDER_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_PERCENT_ORDER_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: s2PercentOrderRange(),
+    requiredAppearances: ['screen'],
+    markers: s2PercentOrderMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_PERCENT_ORDER_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_PERCENT_ORDER_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -6333,6 +6747,8 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   stage2UpperSegmentCase(),
   // 16. stage2-scale-formula-bounds (the formula-bounds follow-up, appended last: earlier inputs stay byte-identical)
   stage2FormulaBoundsCase(),
+  // 17. stage2-scale-percent-order (the percent-order follow-up; appended last so earlier inputs stay byte-identical)
+  stage2PercentOrderCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -6513,6 +6929,12 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Pre-registered by stage2-scale-formula-bounds (its own question: the formula-bounded near-top sub-shape), awaiting its capture; painted only with the same reading as scale:formula-bounds.',
   'scale:formula-bounds-twin':
     'The twins of stage2-scale-formula-bounds (a P-line twin line, num 0 / 1 over 128 steps, value k/128; endpoint twins, 3-colour num 0 / 1 / 2 at values 0, 1 and 2; IEEE-integer products): comparison references, never a question themselves.',
+  // The percent-order follow-up (stage2-scale-percent-order): its three questions matched in its capture (ecf00906:
+  // scale:percent-order multiply-first, scale:percentile-order lerp-first, scale:formula-bounds-v2 as-literal+multiply-first) and
+  // are registered (CF_PERCENT_ORDER_PRODUCTION_READINGS, CF_FORMULA_BOUNDS_V2_PRODUCTION_READINGS), so their entries are
+  // removed; the twin line stays a comparison.
+  'scale:percent-order-twin':
+    'The twin line of stage2-scale-percent-order (num 0 / 1 over 128 P-line steps, value k/128, IEEE-integer products): comparison references, never a question themselves.',
 }
 
 /**
@@ -10319,6 +10741,156 @@ const withEmptyTwins = (fx: S5Fixture): S5Fixture => ({
   }),
 })
 
+/**
+ * The percent-order follow-up (brief cf-percent-order): stage5-icon-percent-order, the icon-set side. Does Excel compute an
+ * icon set's percent threshold lerp-first (production) or multiply-first, and its PERCENTILE.INC rank so (each its own id,
+ * icon:percent-order and icon:percentile-order)? A cell decides when its value equals the smaller of the two orders'
+ * thresholds: the reading whose threshold it reaches puts it one bucket higher (v >= t). Percent: both signs of the
+ * difference (the probe is multiply-first's double, or lerp-first's). Percentile: only one rank in reach differs at an
+ * integer (n = 26, p = 56: lerp-first 15.000000000000002, multiply-first exactly 15), so its probes are the 15th order
+ * statistic itself and only one sign exists (lerp-first's threshold above). A tolerance control (values one ulp below a
+ * threshold both orders agree on) refuses both readings if Excel compares with a tolerance. Every predicted class is
+ * shown by a constant-class literal twin (num thresholds outside the twin's values) holding the same values; icons are
+ * observed as Stage 5 crops (the centred glyph key).
+ */
+export const S5_ICON_PO_ID = 'stage5-icon-percent-order'
+export const S5_ICON_PERCENT_ORDER_CAP = 'icon:percent-order'
+export const S5_ICON_PERCENTILE_ORDER_CAP = 'icon:percentile-order'
+export const S5_ICON_PO_TWIN = 'icon:percent-order-twin'
+export const S5_ICON_PO_READINGS = ['lerp-first', 'multiply-first'] as const
+export type S5IconPoRole = 'decisive' | 'control'
+export interface S5IconPoBlock {
+  id: string
+  col: string
+  cap: typeof S5_ICON_PERCENT_ORDER_CAP | typeof S5_ICON_PERCENTILE_ORDER_CAP
+  /** The cfvo after the leading `percent 0` floor (3Arrows: two thresholds). */
+  type: 'percent' | 'percentile'
+  p: readonly [number, number]
+  /** Every value of the rule's scope, top to bottom. */
+  values: readonly number[]
+  /** The designated cells (row offsets into `values`) and their roles. */
+  designated: ReadonlyArray<{ at: number; role: S5IconPoRole }>
+  role?: 'negative-control'
+}
+const S5_ICON_PO_FIRST_ROW = 2
+const s5poAt = (role: S5IconPoRole, ...ats: number[]): Array<{ at: number; role: S5IconPoRole }> => ats.map(at => ({ at, role }))
+/** The next double below `x` (x > 0). */
+const s5poDown = (x: number): number => { const b = new Float64Array([x]); const u = new BigInt64Array(b.buffer); u[0] = u[0]! - 1n; return b[0]! }
+/** The two percent thresholds of `p` over [lo, hi] whose orders differ with lerp-first below (the probe is lerp-first's double). */
+function s5poLerpBelow(lo: number, hi: number, count: number): number[] {
+  const out: number[] = []
+  for (let p = 1; p < 100 && out.length < count; p++) if (s2PercentOrderPercent(lo, hi, p, 'lerp-first') < s2PercentOrderPercent(lo, hi, p, 'multiply-first')) out.push(p)
+  return out
+}
+
+export function s5IconPoBlocks(): S5IconPoBlock[] {
+  const lo = -90, hi = 120
+  const pct = (p: number, o: S2PercentOrderReading): number => s2PercentOrderPercent(lo, hi, p, o)
+  // Lerp-first above: p 55 and 81 (multiply-first 25.5 and 80.1); the probe is multiply-first's double.
+  const up: [number, number] = [55, 81]
+  const upProbes = up.map(p => pct(p, 'multiply-first'))
+  // Lerp-first below: the first two such p over [-90, 120]; the probe is lerp-first's double.
+  const down = s5poLerpBelow(lo, hi, 2) as [number, number]
+  const downProbes = down.map(p => pct(p, 'lerp-first'))
+  // The percentile block: 26 values, the 15th order statistic 10 (five cells), the 16th 20.
+  const pl = [-50, -40, -30, -20, -10, 0, 1, 2, 3, 4, 10, 10, 10, 10, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
+  return [
+    { id: 'ipc-up', col: 'B', cap: S5_ICON_PERCENT_ORDER_CAP, type: 'percent', p: up,
+      values: [lo, upProbes[0]!, upProbes[0]!, upProbes[1]!, upProbes[1]!, -50, 50, 100, hi],
+      designated: [...s5poAt('decisive', 1, 2, 3, 4), ...s5poAt('control', 5, 6, 7)] },
+    { id: 'ipc-down', col: 'C', cap: S5_ICON_PERCENT_ORDER_CAP, type: 'percent', p: down,
+      values: [lo, downProbes[0]!, downProbes[0]!, downProbes[1]!, downProbes[1]!, -50, Math.round((downProbes[0]! + downProbes[1]!) / 2), 119, hi],
+      designated: [...s5poAt('decisive', 1, 2, 3, 4), ...s5poAt('control', 5, 6, 7)] },
+    { id: 'ipl-up', col: 'D', cap: S5_ICON_PERCENTILE_ORDER_CAP, type: 'percentile', p: [56, 90],
+      values: pl,
+      designated: [...s5poAt('decisive', 10, 11, 12, 13, 14), ...s5poAt('control', 0, 9, 15, 25)] },
+    // The tolerance control: percent 50 and 75 over [-90, 120] are 15 and 67.5 under both orders; values at and one ulp below.
+    { id: 'ipc-tol', col: 'E', cap: S5_ICON_PERCENT_ORDER_CAP, type: 'percent', p: [50, 75], role: 'negative-control',
+      values: [lo, 15, s5poDown(15), 67.5, s5poDown(67.5), hi],
+      designated: s5poAt('control', 1, 2, 3, 4) },
+    // The percentile tolerance control: n = 7, percentile 50 is the 4th order statistic (10) under both orders (rank 4); a
+    // value one ulp below it.
+    { id: 'ipl-tol', col: 'F', cap: S5_ICON_PERCENTILE_ORDER_CAP, type: 'percentile', p: [50, 90], role: 'negative-control',
+      values: [-50, 0, s5poDown(10), 10, 20, 30, 40],
+      designated: s5poAt('control', 1, 2, 3, 6) },
+  ]
+}
+
+/** A block's thresholds under a reading (t0 the floor: the scope minimum), restated independently of production. */
+export function s5IconPoThresholds(b: S5IconPoBlock, reading: S2PercentOrderReading): number[] {
+  const sorted = [...b.values].sort((x, y) => x - y)
+  const at = (p: number): number => (b.type === 'percent' ? s2PercentOrderPercent(sorted[0]!, sorted[sorted.length - 1]!, p, reading) : s2PercentOrderPercentile(sorted, p, reading))
+  return [sorted[0]!, at(b.p[0]), at(b.p[1])]
+}
+/** The bucket a reading predicts (S4-D: the largest i >= 1 with v >= t_i, else 0). */
+export function s5IconPoBucket(b: S5IconPoBlock, v: number, reading: S2PercentOrderReading): number {
+  const t = s5IconPoThresholds(b, reading)
+  let k = 0
+  for (let i = 1; i < t.length; i++) if (v >= t[i]!) k = i
+  return k
+}
+
+function iconPercentOrderFixture(): S5Fixture {
+  const blocks = s5IconPoBlocks()
+  const cells: Record<string, S5Value> = {}
+  for (const b of blocks) Object.assign(cells, colValues(b.col, b.values, S5_ICON_PO_FIRST_ROW))
+  const refOf = (b: S5IconPoBlock, at: number): string => `${b.col}${S5_ICON_PO_FIRST_ROW + at}`
+  // Layout checks: every value round-trips; decisive cells differ between the readings, controls agree; the percentile block's
+  // order statistics are as designed; each block's thresholds ascend under both readings.
+  for (const b of blocks) {
+    for (const v of b.values) if (Number(String(v)) !== v) throw new Error(`${S5_ICON_PO_ID}: ${b.id} value ${v} does not round-trip`)
+    for (const r of S5_ICON_PO_READINGS) { const t = s5IconPoThresholds(b, r); if (!(t[0]! < t[1]! && t[1]! < t[2]!)) throw new Error(`${S5_ICON_PO_ID}: ${b.id} thresholds do not ascend under ${r}`) }
+    for (const d of b.designated) {
+      const v = b.values[d.at]!
+      const [l, m] = S5_ICON_PO_READINGS.map(r => s5IconPoBucket(b, v, r))
+      if ((d.role === 'decisive') !== (l !== m)) throw new Error(`${S5_ICON_PO_ID}: ${refOf(b, d.at)} (${v}) is not a ${d.role} cell (${l} / ${m})`)
+    }
+  }
+  // The twins: per block and predicted class, a column segment holding the designated values that class is predicted for, under
+  // a constant-class 3Arrows rule (percent 0, then num thresholds below or above every twin value).
+  const TWIN_FIRST_COL = colIndex('G')
+  const twinSlots = new Map<string, string>()
+  const twinSpecs: Array<{ sqref: string; cfvo: S5Cfvo[] }> = []
+  const twinOf = (b: S5IconPoBlock, at: number, k: number): string => twinSlots.get(`${b.id}:${k}:${at}`)!
+  // Twin blocks two to a column (bands at rows 2 and 15), keeping the sheet narrow enough for one text-scope batch.
+  const TWIN_BANDS = [S5_ICON_PO_FIRST_ROW, S5_ICON_PO_FIRST_ROW + 13] as const
+  let slot = 0
+  for (const b of blocks) for (const k of [0, 1, 2]) {
+    // A twin block holds every designated value of its block (a scope of one cell would be the degenerate single-cell shape).
+    if (!b.designated.some(d => S5_ICON_PO_READINGS.some(r => s5IconPoBucket(b, b.values[d.at]!, r) === k))) continue
+    const members = b.designated
+    if (members.length < 2 || members.length > 12) throw new Error(`${S5_ICON_PO_ID}: ${b.id} twin block of ${members.length} cells`)
+    const col = colLetter(TWIN_FIRST_COL + Math.floor(slot / TWIN_BANDS.length))
+    const r0 = TWIN_BANDS[slot % TWIN_BANDS.length]!
+    slot++
+    const vs = members.map(d => b.values[d.at]!)
+    members.forEach((d, j) => { twinSlots.set(`${b.id}:${k}:${d.at}`, `${col}${r0 + j}`); cells[`${col}${r0 + j}`] = b.values[d.at]! })
+    const below = Math.floor(Math.min(...vs)) - 2, above = Math.ceil(Math.max(...vs)) + 2
+    const t = k === 2 ? [below, below + 1] : k === 1 ? [below, above] : [above, above + 1]
+    twinSpecs.push({ sqref: `${col}${r0}:${col}${r0 + members.length - 1}`, cfvo: [{ type: 'percent', val: '0' }, { type: 'num', val: String(t[0]) }, { type: 'num', val: String(t[1]) }] })
+  }
+  const configurations: S5Configuration[] = blocks.map(b => {
+    const refs = b.designated.map(d => refOf(b, d.at))
+    const hyps = Object.fromEntries(S5_ICON_PO_READINGS.map(r => [r, (_ref: string, i: number) => `twin:${twinOf(b, b.designated[i]!.at, s5IconPoBucket(b, b.values[b.designated[i]!.at]!, r))}`]))
+    const cfg = s5Cfg(b.id, b.cap, refs, hyps, { observable: 'crop', ...(b.role ? { note: 'Negative control (tolerance): values at and one ulp below thresholds both orders agree on; a tolerant comparison would refuse both readings, never evidence' } : {}) })
+    const twins = [...new Set(Object.values(cfg.hypotheses).flatMap(h => Object.values(h)))].map(t => t.slice('twin:'.length))
+    return { ...cfg, ...(b.role ? { role: b.role } : {}), twinExpect: Object.fromEntries(twins.map(t => [t, 'visual' as const])) }
+  })
+  let p = 1
+  const rules: S5Rule[] = [
+    ...blocks.map(b => s5Icon(b.cap, `${b.col}${S5_ICON_PO_FIRST_ROW}:${b.col}${S5_ICON_PO_FIRST_ROW + b.values.length - 1}`, p++, [{ type: 'percent', val: '0' }, { type: b.type, val: String(b.p[0]) }, { type: b.type, val: String(b.p[1]) }])),
+    ...twinSpecs.map(t => s5Icon(S5_ICON_PO_TWIN, t.sqref, p++, t.cfvo)),
+  ]
+  return s5rect({
+    id: S5_ICON_PO_ID,
+    question:
+      'The percent-order follow-up (brief cf-percent-order; registrable), the icon-set side: is an icon set\'s percent threshold lerp-first, lo + (p/100)·(hi − lo) (production), or multiply-first, lo + ((hi − lo)·p)/100, and its PERCENTILE.INC rank 1 + (p/100)·(n − 1) or 1 + (p·(n − 1))/100? 3Arrows rules [percent 0, p1, p2] whose decisive cells hold the smaller of the two orders\' thresholds (v >= t: one bucket apart): percent with lerp-first above (B) and below (C), percentile with lerp-first above (D; n = 26, p = 56, the 15th order statistic five times); controls in every bucket, and a tolerance negative control (E: values at and one ulp below thresholds both orders agree on). Constant-class literal twins hold the same values.',
+    cells,
+    rules,
+    configurations,
+  })
+}
+
 export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   authoredFixture(),
   truthinessFixture(),
@@ -10351,6 +10923,8 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   cfvoRelativeA1Fixture(),
   // Appended last (the cfvo-nonnumeric confirmation case); it alone holds the per-kind ids formula:cfvo-nonnumeric-<kind>.
   cfvoNonNumericV2Fixture(),
+  // Appended last (the percent-order follow-up): the icon-set side of stage2-scale-percent-order.
+  iconPercentOrderFixture(),
 ] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
@@ -10372,6 +10946,8 @@ export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'stage5-x14-scale': ['stage5-x14-scale'],
   'stage5-active-present': ['stage5-active-present-scale', 'stage5-active-present-bar', 'stage5-active-present-icon'],
   'stage5-unresolved-shapes': S5_UNRESOLVED.map(u => `stage5-unresolved-shapes-${u.id}`),
+  // The percent-order follow-up: the icon-set side of stage2-scale-percent-order.
+  'stage5-icon-percent-order': ['stage5-icon-percent-order'],
 }
 
 /**
@@ -10556,6 +11132,7 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
   'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
   'formula:cfvo-relative-a1-twin': 'Literal twin rules of stage5-cfvo-relative-a1 (num/num scales, icon sets and bars, one per predicted rendering): comparison references for the anchor readings, never a question themselves.',
+  'icon:percent-order-twin': 'Constant-class literal twin rules of stage5-icon-percent-order: comparison references for the order readings, never a question themselves.',
   'formula:cfvo-nonnumeric-v2-twin': 'Literal twin rules of stage5-cfvo-nonnumeric-v2 (num 0 in each bound position, and min/max): comparison references for the per-kind non-numeric readings, never a question themselves.',
   'formula:cfvo-scope-v2-twin': 'Literal twin rules of stage5-cfvo-scope-v2 (num/num scales and icon sets, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
   'formula:x14-scale-twin': 'The base literal twin of stage5-x14-scale: a comparison reference, never a question itself.',

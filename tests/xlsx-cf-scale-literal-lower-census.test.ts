@@ -8,8 +8,14 @@
  * This checks the census, not Excel. The census as run before stage2-scale-literal-lower was captured is pinned first
  * (recipe §12.1); with that capture (a3f85309) included it is pinned at the end (recipe §12.7): still exact.
  */
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import { countBy, literalLowerCensusOf, productionLowerColour, type LiteralLowerRow } from '../scripts/cf-refs/literal-lower-census'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 const HEAVY = 300_000
 let census: Awaited<ReturnType<typeof literalLowerCensusOf>>

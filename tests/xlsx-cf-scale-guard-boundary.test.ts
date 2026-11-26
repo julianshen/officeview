@@ -14,7 +14,8 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { asBeforePercentOrder, asRegistered } from './helpers/cf-percent-order-asof'
 import * as colorScale from '../src/xlsx/cf/colorScale'
 import { guardBoundaryProduct, interpolateScaleColor, scaleColorAt } from '../src/xlsx/cf/colorScale'
 import { OfficePackage } from '../src/core/zip'
@@ -31,6 +32,11 @@ import { caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
 import { independentGuardBoundary, JUSTIFY_TRUNCATION_GUARD } from '../scripts/cf-refs/upper-whole-justify'
 import type { XlsxSheet } from '../src/xlsx/types'
 import { recordedBeforeUpperSegmentRegistration } from './helpers/cf-upper-segment-recorded'
+
+// As of its capture: before the percent-order registration (§14.z.24), percent thresholds lerp-first and no
+// scale:formula-bounds-v2 reading (tests/helpers/cf-percent-order-asof.ts).
+beforeAll(asBeforePercentOrder)
+afterAll(asRegistered)
 
 // These tests record production as of their own captures, before the upper-segment registration (2ee3735a).
 recordedBeforeUpperSegmentRegistration()
@@ -212,7 +218,7 @@ const RAW_FLOOR_CASE = 'stage2-scale-raw-floor'
 describe('the reach: 14 cells in stage2-scale-upper-window and the 67 evidence cells of stage2-scale-raw-floor, none anywhere else', () => {
   it('through production\'s own segment evaluations, and the Stage 2 and Stage 5 justifications agree case by case without the evidence (as recorded at ce3f701d, before the literal-lower registration); registered, nothing is justified', async () => {
     // Recorded as of ce3f701d: stage2-scale-formula-bounds (d2660d46, formula-bounded; its guard-boundary cells stay withheld) is later.
-    const LATER = ['stage2-scale-formula-bounds']
+    const LATER = ['stage2-scale-formula-bounds', 'stage2-scale-percent-order']
     const cells = (await collectSegmentCells(manifest, REPO_ROOT, { include: 'all' })).cells.filter(x => !LATER.includes(x.caseId))
     const literalWithheld = (s: (typeof cells)[number]['segment']): boolean => s.colours === 3 && s.loKind === 'num' && s.hiKind === 'num' && !Number.isInteger(s.fraction * 1048576)
     const inShape = cells.filter(x => (x.segment.colours === 2 || x.segment.segment === 0) && !literalWithheld(x.segment) && guardBoundaryProduct(x.segment.c0, x.segment.c1, x.segment.value, x.segment.lo, x.segment.hi, x.segment.fraction))
