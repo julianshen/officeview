@@ -1453,7 +1453,7 @@ item 3's sort and filter half (keys use base coverage); the rest of item
 #### As built (4c)
 
 Stage 4c was built on `feature/streaming-s4c` (fb624989..eca7be34, then
-the key-view fix e6a90dcf/66c086f9 and the prep split 83d6500f/9f0fef6b, with
+the key-view fix e6a90dcf/66c086f9 and the prep split 83d6500f/9f0fef6b/9985539c, with
 docs commits between), to the plan
 `docs/superpowers/plans/2026-11-26-streaming-s4c.md`, its plan calls P1–P16
 and the rulings in its ledger
@@ -1666,6 +1666,16 @@ worker slot, and inside the same `'sheet'` request (no extra rate charge).
   'too-large'}`, with a `view-refused` `sheet_ops` row where the op writes
   one. The client rebuilds it as the local `resource-limit` refusal with
   "This sheet is too large to sort or filter in this viewing mode."
+- **Fix round 1 (9985539c).** Tile and sheet-text jobs (find, copy,
+  a11y, fit) under a non-identity view run the same prep first, so a cold
+  port after a worker recycle is built under the prep deadline. Their
+  refusal is `view-refused {reason: 'too-large'}`, or per tile `{col,
+  row, code: 'view-refused', reason: 'too-large'}` in `tiles-done`.
+- **The verdict is remembered** per `(docRef, policy, sheetIndex,
+  clock)`, the port the prep builds, while the document is registered.
+  Later jobs on that port are refused at once, so a re-fetch retires no
+  second worker. The view is not in the key: the prep does not depend on
+  it, and the re-fetch derives a different view.
 - A cancel or a closed socket during the prep runs no op (P8: the op is
   `cancelled` and commits nothing).
 - Before this, the first job on a cold port built the port inside the 2 s
