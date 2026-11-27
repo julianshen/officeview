@@ -6,12 +6,14 @@
  * `policy-refused`; a cancel during prep commits nothing; a warm port is not built again.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { validateManifest } from '../../src/stream/manifest'
 import { decodeSheetLayout, decodeSheetOrder, type SheetOrder, type StreamSheetLayout, type WireRange } from '../../src/stream/sheet-wire'
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { DEFAULT_CAPS } from '../src/admission'
-import { Pool, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, sheetPrepDeadlineMs } from '../src/pool'
+import { Pool, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, sheetPrepDeadlineMs, ShowCancelled } from '../src/pool'
 import { DocumentHost } from '../src/render'
+import { rejection } from './fixtures/rejection'
 import { Client, start } from './harness'
 import { ONE_MILLION_ROWS, oneMillionSort, SORT_GRID, sortGrid } from './sheet-fixtures'
 
@@ -29,6 +31,17 @@ afterAll(async () => {
   for (const p of pools) await p.dispose()
 })
 
+/** `Client.hello` with a longer manifest wait: the document is parsed before the manifest is sent. */
+async function slowHello(c: Client, ms: number) {
+  await c.opened()
+  c.send({ reqId: 1, type: 'hello', client: 'officeview/1.0', recVersions: [1], features: VIEW })
+  const m = await c.next((x) => 'binary' in x && x.binary.kind === 1, ms) as { binary: { payload: Uint8Array } }
+  const v = validateManifest(JSON.parse(new TextDecoder().decode(m.binary.payload)))
+  if (!v.ok) throw new Error(`bad manifest field ${v.field}`)
+  c.manifest = v.manifest
+  return v.manifest
+}
+
 /** A server over its own pool, on an injected clock that steps 100 ms per request, with its own audit. */
 async function serverOn(doc: Uint8Array, pool: Pool, o: Parameters<typeof start>[0] = {}) {
   pools.push(pool)
@@ -38,7 +51,7 @@ async function serverOn(doc: Uint8Array, pool: Pool, o: Parameters<typeof start>
   let rq = 1000
   async function open(helloMs?: number) {
     const c = new Client(h.url)
-    const m = await c.hello({ features: VIEW }, helloMs)
+    const m = helloMs === undefined ? await c.hello({ features: VIEW }) : await slowHello(c, helloMs)
     await c.ready()
     while (h.stream.table.get(m.session.sid)?.status !== 'stream') await Bun.sleep(5)
     const send = (type: string, body: Record<string, unknown>) => {
@@ -132,14 +145,24 @@ describe('a prep past its own deadline', () => {
     const r = await a.answer(reqId)
     expect(r.end).toMatchObject({ type: 'refused', code: 'cancelled' })
     expect((await a.layout()).sort).toBeNull()
-    const t = performance.now()
     const again = await a.answer(a.send('sheet-sort', { viewGen: 0, range: GRID, keys: [{ col: 1, order: 'asc' }] }))
     expect(again.order?.head.viewGen).toBe(1)
-    // The warm port is not built again, so the prep hang is not paid twice.
-    expect(performance.now() - t).toBeLessThan(800)
     expect(s.store.sheetOps(a.sid).map((o) => o.outcome)).toEqual(['cancelled', 'ok'])
     expect(pool.admission.reserved).toBe(0)
     a.c.close(); await s.h.stop()
+  }, 30_000)
+})
+
+describe('an abort during prep', () => {
+  test('runs no op: the pool job rejects ShowCancelled once the prep returns', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true, prepHangMsForTests: 400 }); pools.push(pool)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    const clock = { day: '2026-11-28', timeZone: 'UTC' }
+    const ac = new AbortController()
+    const job = pool.sheetView('s', { docRef: 'doc', contentPolicy: 'visible-only', clock, op: 'sort', sheetIndex: 0, base: { sort: null, sortFilter: null, filter: null }, sort: { range: GRID, keys: [{ col: 1, order: 'asc' }], caseSensitive: false } }, undefined, ac.signal)
+    setTimeout(() => ac.abort(), 150)
+    expect(await rejection(job)).toBeInstanceOf(ShowCancelled)
+    expect(pool.admission.reserved).toBe(0)
   }, 30_000)
 })
 

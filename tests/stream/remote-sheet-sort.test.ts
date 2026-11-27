@@ -290,6 +290,8 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     expect([sort.code, sort.refusal]).toEqual(['view-refused', expected])
     const values = await at(ops(doc).values({ sheetId: '0', viewGen: 0, range: RANGE, col: 1 }), 'filter-values')
     expect([values.code, values.refusal]).toEqual(['view-refused', expected])
+    // A value list's error is shown by its message (FilterDropdown): the local text, not the code.
+    expect(values.message).toBe(VIEW_REFUSAL_MESSAGES['too-large'])
     const detect = await at(ops(doc).detect('0', 0, 'sort', sel), 'range-detect')
     expect([detect.code, detect.refusal]).toEqual(['view-refused', expected])
     expect(VIEW_REFUSAL_MESSAGES['too-large']).toBe('This sheet is too large to sort or filter in this viewing mode.')

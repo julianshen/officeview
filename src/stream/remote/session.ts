@@ -1462,12 +1462,14 @@ export class StreamSession {
   }
 
   /** A Stage 4c refusal: its code when it is one (SORT_REFUSALS), with the local refusal of a `view-refused` (P13);
-   * a `view-refused` off the P13 contract, or any other code, is `policy-refused`. */
+   * a `view-refused` off the P13 contract, or any other code, is `policy-refused`. A local refusal that carries a
+   * message is the error's message, so a caller that shows the error (the value-list dropdown) shows the local text. */
   private sortRefusal(m: Record<string, unknown>): StreamSessionError {
     const code: SortRefusalCode = SORT_REFUSALS.has(m.code as SortRefusalCode) ? m.code as SortRefusalCode : 'policy-refused'
     if (code !== 'view-refused') return new StreamSessionError(code)
     const refusal = viewRefusal(m)
-    return refusal ? new StreamSessionError('view-refused', `view-refused: ${refusal.reason}`, { refusal }) : new StreamSessionError('policy-refused', 'malformed view-refused')
+    if (!refusal) return new StreamSessionError('policy-refused', 'malformed view-refused')
+    return new StreamSessionError('view-refused', 'message' in refusal ? refusal.message : `view-refused: ${refusal.reason}`, { refusal })
   }
   /** One `sheet-order` part (P7). Fail closed on arrival: over 64 KiB, a `seq` that is not the next, past 160 parts.
    * On `last: true` the parts decode as one answer (`decodeSheetOrder`), which must name the sheet asked and, for a

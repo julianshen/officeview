@@ -120,11 +120,10 @@ export class Client {
       await new Promise<void>((r) => { this.waiters.push(r); setTimeout(r, 50) })
     }
   }
-  /** `ms`: how long the manifest may take (the document is parsed before it is sent). */
-  async hello(extra: object = {}, ms?: number) {
+  async hello(extra: object = {}) {
     await this.opened()
     this.send({ reqId: 1, type: 'hello', client: 'officeview/1.0', recVersions: [1], ...extra })
-    const m = await this.next((m) => 'binary' in m && m.binary.kind === 1, ms)
+    const m = await this.next((m) => 'binary' in m && m.binary.kind === 1)
     const v = validateManifest(JSON.parse(new TextDecoder().decode((m as { binary: { payload: Uint8Array } }).binary.payload)))
     if (!v.ok) throw new Error(`bad manifest field ${v.field}`)
     this.manifest = v.manifest
