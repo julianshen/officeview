@@ -484,6 +484,23 @@ export class DocumentHost {
     return derived
   }
 
+  /**
+   * Stage 4c Task 14a: prepares sheet `sheetIndex`'s sort data under `clock`: its snapshot, key view and `sheet-view`
+   * port, the entry every later job of `(sheetIndex, clock)` reads. `built` is false when the port was already there
+   * (a warm port: nothing is built). `hangMs` (test hook): a cold build waits this long first.
+   */
+  async sheetViewPrep(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', sheetIndex: number, hangMs?: number): Promise<{ built: boolean }> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if ((doc.contentPolicyId === 'full@1') !== (contentPolicy === 'full')) throw new RenderRefusal('bad-job', 'sheet-view: content policy')
+    const portKey = `${sheetIndex}|${clock.day}|${clock.timeZone}`
+    const built = !doc.viewPorts?.has(portKey)
+    const e = this.viewPortEntry(doc, docKey, portKey, sheetIndex, clock, contentPolicy, hangMs)
+    e.uses++
+    try { await e.port } finally { if (--e.uses === 0 && e.evicted) void closeViewPort(e) }
+    return { built }
+  }
+
   /** One `sheet-view` job; `seen` gets each derived view the job reads from or puts in the cache. */
   private async viewJob(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', job: SheetViewJob, seen?: (d: DerivedView) => void): Promise<SheetViewReply> {
     const doc = this.docs.get(docKey)
@@ -518,12 +535,13 @@ export class DocumentHost {
   }
 
   /** The cached `sheet-view` port of `(sheetIndex, clock)`, built on a miss (a failed build is not kept). */
-  private viewPortEntry(doc: OpenDoc, docKey: string, key: string, sheetIndex: number, clock: SheetClock, policy: 'visible-only' | 'full'): SheetViewEntry {
+  private viewPortEntry(doc: OpenDoc, docKey: string, key: string, sheetIndex: number, clock: SheetClock, policy: 'visible-only' | 'full', hangMs?: number): SheetViewEntry {
     const ports = doc.viewPorts ??= new Map()
     const hit = ports.get(key)
     if (hit) { ports.delete(key); ports.set(key, hit); return hit }
     const budget = doc.textBudget ??= boundedBudget(TEXT_VIEW_FORMAT_BYTES)
     const entry: SheetViewEntry = { uses: 0, evicted: false, port: this.sheetSnapshot(docKey, sheetIndex, clock).then(async (snap) => {
+      if (hangMs) await new Promise<void>((r) => setTimeout(r, hangMs))
       const saved = doc.savedParse
       if (!saved || this.docs.get(docKey) !== doc) throw new RenderRefusal('unknown-doc')
       const workbook = this.servableWorkbook(doc, saved)

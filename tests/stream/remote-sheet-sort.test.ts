@@ -282,6 +282,20 @@ describe('RemoteSheets.sortOps (S4 §6.6, P1)', () => {
     doc.close()
   })
 
+  it('view-refused too-large (Task 14a) is the local resource-limit refusal with the too-large text', async () => {
+    const { doc, sock } = await opened()
+    const at = (p: Promise<unknown>, type: string) => settle().then(() => { sock.text({ reqId: sock.of(type).at(-1)!.reqId, type: 'refused', code: 'view-refused', reason: 'too-large' }); return errorOf(p) })
+    const expected = { reason: 'resource-limit', message: VIEW_REFUSAL_MESSAGES['too-large'] }
+    const sort = await at(ops(doc).sort('0', 0, { range: RANGE, keys: [{ col: 1, order: 'asc' }], caseSensitive: false }), 'sheet-sort')
+    expect([sort.code, sort.refusal]).toEqual(['view-refused', expected])
+    const values = await at(ops(doc).values({ sheetId: '0', viewGen: 0, range: RANGE, col: 1 }), 'filter-values')
+    expect([values.code, values.refusal]).toEqual(['view-refused', expected])
+    const detect = await at(ops(doc).detect('0', 0, 'sort', sel), 'range-detect')
+    expect([detect.code, detect.refusal]).toEqual(['view-refused', expected])
+    expect(VIEW_REFUSAL_MESSAGES['too-large']).toBe('This sheet is too large to sort or filter in this viewing mode.')
+    doc.close()
+  })
+
   it('hostile answers', async () => {
     const { s, doc, sock } = await opened()
     const notPermutation = encodeSheetOrder(orderOf(1, 0, 39)).map((p, i) => i === 1 ? { ...p, band: { r0: 0, r1: 1, from: 0, data: 'AAAAAAAAAAA=' } } : p)

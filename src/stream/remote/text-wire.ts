@@ -164,6 +164,8 @@ export type SortRefusalCode = TextRefusalCode | 'stale-filter-values' | 'filter-
  * The local strings a `view-refused` refusal is rebuilt with (P13: the server drops every `message`). `pivot` is the
  * local engine's own text (`PIVOT_SHEET_CHANGE_MESSAGE`, src/xlsx/view/operationGuard.ts, pinned by a test: no runtime
  * import from `src/xlsx/**` here); the others are fixed texts for reasons whose local message names the local cause.
+ * `too-large` (Task 14a) is the server's own reason: the sheet's sort data could not be prepared inside its deadline. It
+ * is rebuilt as the local `resource-limit` refusal with this text.
  */
 export const VIEW_REFUSAL_MESSAGES = Object.freeze({
   pivot: "We can't make this change for the selected cells because it will affect a PivotTable. Use the field list to change the report. If you are trying to insert or delete cells, move the PivotTable and try again.",
@@ -173,6 +175,7 @@ export const VIEW_REFUSAL_MESSAGES = Object.freeze({
   'resource-limit': 'View exceeds the session memory budget.',
   unsupported: 'This operation is not supported.',
   'source-error': 'The source could not be read; retry.',
+  'too-large': 'This sheet is too large to sort or filter in this viewing mode.',
 })
 const RECT_REASONS = new Set(['merge', 'fixed-array', 'dynamic-spill', 'outside-column-data', 'pivot'])
 const MESSAGE_REASONS = new Set(['ambiguous-selection', 'invalid-range', 'invalid-rule', 'resource-limit', 'unsupported'])
@@ -204,6 +207,7 @@ export function viewRefusal(m: Record<string, unknown>): OperationRefusal | unde
   if (extra([])) return undefined
   if (reason === 'drawing-impact') return { reason, drawingId: '' }
   if (reason === 'source-error') return { reason, code: 'page-error', retryable: false, message: VIEW_REFUSAL_MESSAGES['source-error'] }
+  if (reason === 'too-large') return { reason: 'resource-limit', message: VIEW_REFUSAL_MESSAGES['too-large'] }
   if (MESSAGE_REASONS.has(reason)) {
     const r = reason as keyof typeof VIEW_REFUSAL_MESSAGES & ('ambiguous-selection' | 'invalid-range' | 'invalid-rule' | 'resource-limit' | 'unsupported')
     return { reason: r, message: VIEW_REFUSAL_MESSAGES[r] }

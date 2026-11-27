@@ -27,7 +27,7 @@ import type { SheetClock } from './sheet/clock'
 import type { RenderedTile, TileJob } from './sheet/tile'
 import type { SheetTextJob, SheetTextReply } from './sheet/text-ops'
 import type { SheetViewJob, SheetViewReply } from './sheet/view-ops'
-import { canonicalView, orderBytes, type CanonicalView } from './sheet/view-spec'
+import { canonicalView, isIdentityView, orderBytes, type CanonicalView } from './sheet/view-spec'
 import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
@@ -39,6 +39,9 @@ export class RenderFailed extends Error { constructor(m: string, readonly refusa
 class MediaWarmTimeout extends Error { constructor() { super('media warm-up deadline exceeded'); this.name = 'MediaWarmTimeout' } }
 /** A job whose socket closed before it reached a worker: nothing was run (PR #78 rounds 4–5: show, unit, notes, text). */
 export class ShowCancelled extends RenderFailed { constructor() { super('cancelled: the requesting socket closed'); this.name = 'ShowCancelled' } }
+/** Stage 4c Task 14a: a sheet's sort data (its key view and `sheet-view` port) could not be prepared inside the prep
+ * deadline (`sheetPrepDeadlineMs`), or its build failed. The socket answers `view-refused {reason: 'too-large'}`. */
+export class SheetPrepRefused extends Error { constructor(readonly cause: 'timeout' | 'failed') { super(`sheet prep ${cause === 'timeout' ? 'deadline exceeded' : 'failed'}`); this.name = 'SheetPrepRefused' } }
 /** A text op whose units do not all fit the worker's served-index cache at once (Task 5 maps it to copy-too-large). */
 export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
 
@@ -88,6 +91,22 @@ export function sheetViewNext(job: SheetViewJob): CanonicalView {
     case 'detect': return { sort: null, sortFilter: null, filter: null }
   }
 }
+/**
+ * Stage 4c Task 14a (owner ruling 2026-11-28): the prep job (snapshot, key view, `sheet-view` port) has its own
+ * deadline, `renderDeadlineMs + PREP_MS_PER_MIB` per MiB of the document's admitted bytes, at most
+ * `PREP_DEADLINE_CAP_MS`. Measured on `oneMillionSort` (7.6 MiB admitted, 1,048,576 rows), its snapshot already
+ * built: a cold prep took 0.55–0.95 s under `'full'` and 1.6–2.05 s under `'visible-only'`, loaded runs included; a
+ * cold snapshot adds 0.35–0.6 s. Its deadline is 2,000 + 7.6 × 1,000 ≈ 9.6 s, 3.7× the slowest prep with a cold
+ * snapshot. The cap is the parse's own default deadline (`openDeadlineMs`).
+ */
+export const PREP_MS_PER_MIB = 1000
+export const PREP_DEADLINE_CAP_MS = 30_000
+/** The prep deadline of a document of `bytes` admitted bytes (`cap`: `PREP_DEADLINE_CAP_MS` unless a test injects one). */
+export function sheetPrepDeadlineMs(bytes: number, renderDeadlineMs: number, cap = PREP_DEADLINE_CAP_MS): number {
+  return Math.min(cap, renderDeadlineMs + Math.ceil(PREP_MS_PER_MIB * bytes / (1024 * 1024)))
+}
+/** Whether a sheet-view job reads the sheet's port (every op but an identity-view extent). */
+const readsPort = (job: SheetViewJob) => job.op !== 'extent' || !isIdentityView(canonicalView(job.view))
 /** A sheet-view job's admission charge: `orderBytes(next view) + 16 MiB`. */
 export const sheetViewJobBytes = (job: SheetViewJob) => orderBytes(sheetViewNext(job)) + SHEET_VIEW_JOB_BYTES
 /** Stage 4c (Task 6 fix round 1): a tile or sheet-text job under a sort or filter view may re-derive that view's order in
@@ -95,7 +114,7 @@ export const sheetViewJobBytes = (job: SheetViewJob) => orderBytes(sheetViewNext
  * 0 for no view or the identity view. */
 const viewOrderBytes = (view: CanonicalView | undefined) => view ? orderBytes(view) : 0
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number; /** TEST-ONLY (honoured with `testHooks`): the prep deadline's cap, default `PREP_DEADLINE_CAP_MS`. */ prepDeadlineCapMsForTests?: number; /** TEST-ONLY (honoured with `testHooks`): each cold port build waits this long first. */ prepHangMsForTests?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -148,6 +167,8 @@ export class Pool {
   private readonly mediaWedge?: 'after-part'
   private readonly mediaDeadlineMs: number
   private readonly startOptions: StartOptions
+  private readonly prepCapMs: number
+  private readonly prepHangMs?: number
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
    * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
@@ -200,6 +221,8 @@ export class Pool {
     this.mediaHoldMs = this.testHooks ? opts.mediaHoldMs : undefined
     this.mediaWedge = this.testHooks ? opts.mediaWedge : undefined
     this.mediaDeadlineMs = (this.testHooks ? opts.mediaDeadlineMs : undefined) ?? MEDIA_JOB_DEADLINE_MS
+    this.prepCapMs = (this.testHooks ? opts.prepDeadlineCapMsForTests : undefined) ?? PREP_DEADLINE_CAP_MS
+    this.prepHangMs = this.testHooks ? opts.prepHangMsForTests : undefined
     this.startOptions = this.testHooks ? { ...(opts.workerFactoryForTests ? { create: opts.workerFactoryForTests } : {}), ...(opts.workerLoadBoundMsForTests ? { boundMs: opts.workerLoadBoundMsForTests } : {}) } : {}
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, probes: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
@@ -441,7 +464,10 @@ export class Pool {
   }
 
   /** Stage 4c: one `sheet-view` job, with the same affinity, admission, deadline and recycle paths as `sheetText`.
-   * `bytesEstimate` defaults to `sheetViewJobBytes`. */
+   * `bytesEstimate` defaults to `sheetViewJobBytes`. Task 14a: a job that reads the sheet's port runs as two worker
+   * jobs under the one admission and slot hold: the prep (`sheet-view-prep`: snapshot, key view, port; a warm port
+   * answers at once) under `sheetPrepDeadlineMs` of the document's admitted bytes, then the op under the render
+   * deadline. A prep past its deadline, or a failed prep, throws `SheetPrepRefused`; an abort during prep runs no op. */
   async sheetView(sessionId: string, job: PoolSheetViewJob, bytesEstimate?: number, signal?: AbortSignal): Promise<SheetViewReply> {
     const { docRef, contentPolicy, clock, ...view } = job
     const admitted = await this.admit(sessionId, bytesEstimate ?? sheetViewJobBytes(view as SheetViewJob), signal)
@@ -451,12 +477,28 @@ export class Pool {
         if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
+        if (readsPort(view as SheetViewJob)) {
+          await this.sheetPrep(slot, admitted, docRef, { type: 'sheet-view-prep', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, sheetIndex: view.sheetIndex, ...(this.prepHangMs ? { hangMs: this.prepHangMs } : {}) })
+          if (signal?.aborted) throw new ShowCancelled()
+        }
         const r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetViewReply
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** Task 14a: the prep job under its own deadline. A timeout (the worker is retired, as for any job) or a failure the
+   * worker reports is `SheetPrepRefused`; a worker refusal code (`unknown-doc`, `bad-job`) stays `RenderFailed`. */
+  private async sheetPrep(slot: Slot, admitted: Job, docRef: string, msg: WorkerRequest): Promise<void> {
+    try {
+      await this.runJob(slot, admitted, msg, sheetPrepDeadlineMs(this.sources.get(docRef)?.length ?? 0, this.admission.caps.renderDeadlineMs, this.prepCapMs))
+    } catch (e) {
+      if (e instanceof RenderTimeout) throw new SheetPrepRefused('timeout')
+      if (e instanceof RenderFailed && e.refusal === undefined && !this.disposed) throw new SheetPrepRefused('failed')
+      throw e
     }
   }
 

@@ -33,7 +33,7 @@ import { loadPack, requiredFacesOf } from './fonts'
 import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
-import { AdmissionRefused, RenderFailed, RenderTimeout, sheetViewNext, type Pool } from './pool'
+import { AdmissionRefused, RenderFailed, RenderTimeout, SheetPrepRefused, sheetViewNext, type Pool } from './pool'
 import type { SheetTextReply } from './sheet/text-ops'
 import { showBuildGrant, showMorphGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
@@ -94,6 +94,9 @@ const SHOW_PLAN_LIMITS_STEPS = 64
 const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, XLSX_TILE: 5, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8, MEDIA_CHUNK: 9 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
+/** Task 14a: what a sheet whose sort data could not be prepared (`SheetPrepRefused`) answers, as
+ * `refused {code: 'view-refused', reason: 'too-large'}`. */
+const PREP_REFUSAL = Object.freeze({ reason: 'too-large' })
 /** R6: the ops an XLSX tiles session refuses `unsupported-op`. */
 const TILES_REFUSED: ReadonlySet<string> = new Set(['unit', 'search', 'select', 'copy', 'a11y'])
 /** Stage 4b (P1): the ops served only to a `sheet-view@1` session; every other session refuses them `unsupported-op`. */
@@ -1198,7 +1201,8 @@ export function createStreamServer(o: StreamServerOptions) {
    * - the fingerprint (else close `layout-changed`) and the document ledger, then the sheet's identity layout;
    * - `hidden-target` when the listed column or the range's `c0` or `c1` is a collapsed column of the authored layout;
    * - the pool `values` job over the key view, under the sheet's current view (its committed values rule marks the
-   *   `selected` entries). The view is read after the last await before the job, and the `viewGen` is checked again on
+   *   `selected` entries); a sheet whose sort data could not be prepared answers `view-refused {reason: 'too-large'}`
+   *   (Task 14a). The view is read after the last await before the job, and the `viewGen` is checked again on
    *   the job's return (a cursor page holds no busy flag);
    * - `ListLedger.issue` (a first page), the `sheet_ops` row (a first page), then `filter-values-result`. `total` is the
    *   list's entry count (the id space every page's ids lie in, a search's included). A page is cut by entries to
@@ -1227,7 +1231,11 @@ export function createStreamServer(o: StreamServerOptions) {
     let r: SheetViewReply
     try {
       r = await o.pool.sheetView(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'values', sheetIndex, view, range: at.range, col: at.col, ...(at.search ? { search: at.search } : {}), offset: at.offset }, undefined, ws.data.gone.signal)
-    } catch (e) { return alive() ? deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    } catch (e) {
+      if (!alive()) return
+      if (e instanceof SheetPrepRefused) return row && !sheetOpRow(sid, { ...row, outcome: 'view-refused' }) ? refuse(ws, reqId, 'policy-refused') : send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL })
+      return deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
     if (!alive()) return
     if (viewGen !== sd.views.viewGen(sheetIndex)) return deny('stale-view')
     // Fail closed: only a values answer over a list of the cursor's size, with ids inside it, travels.
@@ -1269,7 +1277,8 @@ export function createStreamServer(o: StreamServerOptions) {
    * row; the `'sheet'` rate, then `sheetBusy` (`rate-limited`); the fingerprint (else close `layout-changed`) and the
    * document ledger; the pool `detect` job over the key view (Task 1: under `visible-only` it stops at withheld lines);
    * the `sheet_ops` row; then `range-detect-result {range, source, header, overrideIgnored}`, or a local refusal as
-   * `refused {code: 'view-refused', reason, range?, count?, at?}` (P13). Detection reads the identity view, so the
+   * `refused {code: 'view-refused', reason, range?, count?, at?}` (P13); a sheet whose sort data could not be prepared
+   * is `view-refused {reason: 'too-large'}` (Task 14a). Detection reads the identity view, so the
    * request's `viewGen` is recorded but not checked. Every outcome past the shape check has its row (`rules` `[]`;
    * `range` the detected range, else the refusal's range, else the selection's bounding rect).
    */
@@ -1292,7 +1301,11 @@ export function createStreamServer(o: StreamServerOptions) {
       let r: SheetViewReply
       try {
         r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'detect', sheetIndex: args.sheetIndex, kind: args.kind, selection: args.selection, ...(args.override ? { override: args.override } : {}) }, undefined, ws.data.gone.signal)
-      } catch (e) { return alive() ? deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      } catch (e) {
+        if (!alive()) return
+        if (e instanceof SheetPrepRefused) return rowOk(fallback, 'view-refused') ? send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }) : refuse(ws, reqId, 'policy-refused')
+        return deny(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+      }
       if (!alive()) return
       if (r.op !== 'detect') return deny('policy-refused')
       if ('refused' in r) {
@@ -1343,7 +1356,8 @@ export function createStreamServer(o: StreamServerOptions) {
    * Every refusal after step 2 writes its `sheet_ops` row with its code (a failed write refuses `policy-refused`). The
    * row's rules are the request's rule kinds until they resolve, then the kinds that ran. A cancel or a failed pool
    * job (a refused or failed replay included) commits nothing: `cancelled`, else `rate-limited` for admission, else
-   * `policy-refused`.
+   * `view-refused {reason: 'too-large'}` when the sheet's sort data could not be prepared (`SheetPrepRefused`, Task
+   * 14a; the row's outcome `view-refused`), else `policy-refused`.
    */
   async function viewOp(ws: WS, msg: Record<string, unknown>, kind: 'sort' | 'filter', op: ViewOp) {
     const a = await textOp(ws, msg)
@@ -1398,7 +1412,11 @@ export function createStreamServer(o: StreamServerOptions) {
       let r: SheetViewReply
       try {
         r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, ...job }, undefined, AbortSignal.any([ws.data.gone.signal, op.abort.signal]))
-      } catch (e) { return alive() ? deny(op.cancelled ? 'cancelled' : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      } catch (e) {
+        if (!alive()) return
+        if (!op.cancelled && e instanceof SheetPrepRefused) return row('view-refused') ? send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }) : refuse(ws, reqId, 'policy-refused')
+        return deny(op.cancelled ? 'cancelled' : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+      }
       // The commit point: nothing below awaits, so no cancel, resize or other op can interleave.
       if (!alive()) return
       if (op.cancelled) return deny('cancelled')
@@ -1439,7 +1457,8 @@ export function createStreamServer(o: StreamServerOptions) {
    * Stage 4c (P7): `sheet-order {reqId, token, sheetId}` on a `sheetView` session: the token; `orderArgs`, else
    * `policy-refused`; the `'unit'` rate, as `sheet-layout`; the fingerprint (else close `layout-changed`) and the
    * document ledger; then a `derive` job of the sheet's current view (read with its viewGen in one tick), answered by
-   * its `sheet-order` parts with that viewGen, or `stale-view` when the view moved meanwhile.
+   * its `sheet-order` parts with that viewGen, or `stale-view` when the view moved meanwhile; a sheet whose sort data
+   * could not be prepared is `view-refused {reason: 'too-large'}` (Task 14a).
    */
   async function onSheetOrder(ws: WS, msg: Record<string, unknown>) {
     const a = await textOp(ws, msg)
@@ -1457,7 +1476,11 @@ export function createStreamServer(o: StreamServerOptions) {
     let r: SheetViewReply
     try {
       r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'derive', sheetIndex: i, view }, undefined, ws.data.gone.signal)
-    } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    } catch (e) {
+      if (!alive()) return
+      if (e instanceof SheetPrepRefused) return send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL })
+      return refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
     if (!alive()) return
     if (viewGen !== sd.views.viewGen(i)) return refuse(ws, reqId, 'stale-view')
     if (r.op !== 'view' || !('order' in r) || canonicalViewHash(r.view) !== canonicalViewHash(view)) return refuse(ws, reqId, 'policy-refused')
