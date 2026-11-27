@@ -4402,9 +4402,9 @@
       "clockRequirement": {
         "dateSystem": "1900",
         "requiredTimeZone": "Asia/Taipei",
-        "anchorLocalDate": "2026-11-06",
-        "anchorSerial": 46332,
-        "staleSavedTodaySerial": 46327,
+        "anchorLocalDate": "2026-11-28",
+        "anchorSerial": 46354,
+        "staleSavedTodaySerial": 46349,
         "staleCacheCellRef": "F2",
         "localTodayCellRef": "B3",
         "utcTodayCellRef": "B2"
@@ -4484,7 +4484,7 @@
           "operator": "equal",
           "priority": 5,
           "formulas": [
-            "46332"
+            "46354"
           ],
           "dxf": {
             "fillRgb": "FFC6EFCE",
@@ -4500,7 +4500,7 @@
           "operator": "equal",
           "priority": 6,
           "formulas": [
-            "46333"
+            "46355"
           ],
           "dxf": {
             "fillRgb": "FFC6EFCE",
@@ -4516,7 +4516,7 @@
           "operator": "equal",
           "priority": 7,
           "formulas": [
-            "46333"
+            "46355"
           ],
           "dxf": {
             "fillRgb": "FFFFEB9C",
@@ -4532,7 +4532,7 @@
           "operator": "equal",
           "priority": 8,
           "formulas": [
-            "46332"
+            "46354"
           ],
           "dxf": {
             "fillRgb": "FFFFEB9C",
@@ -4548,7 +4548,7 @@
           "operator": "greaterThan",
           "priority": 9,
           "formulas": [
-            "46332"
+            "46354"
           ],
           "dxf": {
             "fillRgb": "FFFFC7CE",
@@ -4565,7 +4565,7 @@
           "operator": "lessThan",
           "priority": 10,
           "formulas": [
-            "46333"
+            "46355"
           ],
           "dxf": {
             "fillRgb": "FFFFC7CE",
@@ -4672,8 +4672,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "5adf510e9b3ebd3a8e75f219301bf9398eb9d114a386bb71e4555f72d06cc02b",
-        "savedSha256": "5adf510e9b3ebd3a8e75f219301bf9398eb9d114a386bb71e4555f72d06cc02b",
+        "inputSha256": "bf45d982a9cdb563065a0139e38034cac8d63b8d92543384ee2f19183141e809",
+        "savedSha256": "e03c0b3c65d71d73aadcf645d371793caa7e9f56a15e5761e4837d387dbe4b89",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B3",
@@ -4965,7 +4965,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-27T18:36:32.248Z",
+        "excelVersion": "16.115",
+        "inputSha256": "bf45d982a9cdb563065a0139e38034cac8d63b8d92543384ee2f19183141e809",
+        "savedSha256": "e03c0b3c65d71d73aadcf645d371793caa7e9f56a15e5761e4837d387dbe4b89",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage2-scale-interpolation",
