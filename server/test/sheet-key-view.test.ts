@@ -299,7 +299,9 @@ describe('sheetKeyView (S4 §6.2, §6.12 item 7; plan P5)', () => {
 
 describe('the full key view reads the snapshot', () => {
   test("'full' builds no text view: the projected sheet, with the collapsed columns of the snapshot's geometry", async () => {
-    const d = await open(await sortGrid(), 'full')
+    // sortWithheld carries a CF rule (B22 `cellIs > 90`), so a text view's CF scope would reserve format budget.
+    const d = await open(await sortWithheld(), 'full')
+    expect(d.saved.sheets[0]!.conditionalFormatting?.rules.length).toBeGreaterThan(0)
     const spy = spyOn(textView, 'sheetTextView')
     const budget = trackingBudget()
     let reserved = 0
@@ -312,7 +314,7 @@ describe('the full key view reads the snapshot', () => {
       expect(view.blankAll).toBe(false)
       expect(view.withheld).toBe(0)
       expect(view.collapsedCols).toEqual([{ start: SORT_GRID.zeroWidthCol, end: SORT_GRID.zeroWidthCol }])
-      if (snap.geometry.kind !== 'ready') throw new Error('sortGrid geometry not ready')
+      if (snap.geometry.kind !== 'ready') throw new Error('sortWithheld geometry not ready')
       expect(view.collapsedCols).toEqual(snap.geometry.metrics.cols.overrides.filter((s) => s.sizeCss === 0).map((s) => ({ start: s.start, end: s.end })))
     } finally { spy.mockRestore() }
   }, 30_000)
