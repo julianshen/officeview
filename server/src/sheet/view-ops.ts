@@ -8,6 +8,9 @@
  * - A derived view is a pure function of `(key view, sort, sortFilter, filter)` (P2). `derive` replays
  *   filter(`sortFilter`), sort(`sort`), filter(`filter`) from the identity view; a refused or failed replay step
  *   throws (fail closed, P3).
+ * - Range detection (owner 2026-11-27): under `'visible-only'` the authored collapsed rows and columns are
+ *   see-through (`RangeDetectionRequest.seeThrough`): they neither end nor extend a range, and a selection whose only
+ *   gaps they are is one rectangle. Their key-view cells are blank, so nothing of their contents is read.
  * - C1 (parent §12): under `'visible-only'`, `publish` keeps a filter's body row visible iff it matches and is not an
  *   authored collapsed row (`collapsedRows`, the snapshot geometry's zero-size row segments). Under `'full'` the local
  *   mask stands.
@@ -95,6 +98,11 @@ const typedOf = (t: WireTyped): TypedCondition => ({ ...t } as TypedCondition)
 export function collapsedRowsOf(geometry: SheetGeometryResult): Runs | undefined {
   if (geometry.kind !== 'ready') return undefined
   return geometry.metrics.rows.overrides.filter((s) => s.sizeCss === 0).map((s) => ({ start: s.start, end: s.end }))
+}
+/** The zero-size column runs of `geometry` (authored `width="0"` or hidden columns). */
+function collapsedColsOf(geometry: SheetGeometryResult): Runs | undefined {
+  if (geometry.kind !== 'ready') return undefined
+  return geometry.metrics.cols.overrides.filter((s) => s.sizeCss === 0).map((s) => ({ start: s.start, end: s.end }))
 }
 
 /** P13. `incomplete` cannot occur on a resident key view: it fails the job. */
@@ -188,7 +196,8 @@ export interface PortInputs {
 export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPort> {
   const { sheetIndex, policy, clock, doc } = inputs
   const collapsed = collapsedRowsOf(inputs.geometry)
-  if (!collapsed) throw new SheetViewFailed('sheet geometry unavailable')
+  const collapsedCols = collapsedColsOf(inputs.geometry)
+  if (!collapsed || !collapsedCols) throw new SheetViewFailed('sheet geometry unavailable')
   const sheet = doc.sheets[sheetIndex]!
   const docId = `sheet-view|${sheetIndex}|${clock.day}|${clock.timeZone}`
   const source: WorkbookSource = createObjectWorkbookSource(doc, docId)
@@ -232,7 +241,9 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   const resources: ViewerControlResources = createViewerControlResources('D', undefined, ledger)
   let controls: ViewerControls
   try {
-    controls = await viewerControls({ doc, resources, source, sheetId, snapshot, view: () => state, publish, context, ledger }, new AbortController().signal)
+    // Owner 2026-11-27: under 'visible-only' detection steps over the author-hidden lines the key view withholds.
+    const seeThrough = policy === 'visible-only' ? { seeThrough: { rows: collapsed, cols: collapsedCols } } : {}
+    controls = await viewerControls({ doc, resources, source, sheetId, snapshot, view: () => state, publish, context, ledger, ...seeThrough }, new AbortController().signal)
   } catch (e) { resources.dispose(); await source.release(); throw e }
   const client = controls.client
   const identity: DerivedView = derived(IDENTITY, state.order, compact(state.visibility), null, null)
