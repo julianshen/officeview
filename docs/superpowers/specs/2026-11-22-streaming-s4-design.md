@@ -1452,8 +1452,9 @@ item 3's sort and filter half (keys use base coverage); the rest of item
 
 #### As built (4c)
 
-Stage 4c was built on `feature/streaming-s4c` (fb624989..eca7be34 and the
-validation commit after it), to the plan
+Stage 4c was built on `feature/streaming-s4c` (fb624989..eca7be34, then
+the key-view fix e6a90dcf/66c086f9 and the prep split 83d6500f, with
+docs commits between), to the plan
 `docs/superpowers/plans/2026-11-26-streaming-s4c.md`, its plan calls P1–P16
 and the rulings in its ledger
 (`.superpowers/sdd/2026-11-26-streaming-s4c/progress.md`, pre-flight
@@ -1643,6 +1644,34 @@ row (Task 13). A failed write refuses the op `policy-refused`.
 **P13, engine refusals.** A local `OperationRefusal` is sent as `refused
 {code: 'view-refused', reason, range?, count?, at?}`; the client rebuilds
 local strings from `reason`.
+
+**The prep deadline (Task 14a; owner, 2026-11-28).** Preparing a sheet's
+sort data is its own pool job. Before a `sheet-view` job that reads the
+sheet's port (sort, filter, derive, value list, detection, and an extent
+under a non-identity view), `Pool.sheetView` posts `sheet-view-prep`: the
+snapshot, the key view and the `viewerControls` port of `(sheetIndex,
+clock)`. Both jobs run under the one admission charge and one hold of the
+worker slot, and inside the same `'sheet'` request (no extra rate charge).
+- The prep's deadline is `renderDeadlineMs + PREP_MS_PER_MIB × admitted
+  MiB`, at most `PREP_DEADLINE_CAP_MS` (`server/src/pool.ts`:
+  `PREP_MS_PER_MIB` = 1,000 ms, `PREP_DEADLINE_CAP_MS` = 30,000 ms, the
+  parse's own default deadline). The admitted MiB are the document's
+  bytes as the document ledger admitted them. `oneMillionSort` (7.6 MiB,
+  1,048,576 rows) gets about 9.6 s; its prep was measured at 0.55–0.95 s
+  under `'full'` and 1.6–2.05 s under `visible-only`.
+- The op then runs under the unchanged 2 s render deadline. A warm port
+  answers the prep at once and builds nothing.
+- A prep past its deadline (its worker is retired, as for any job) or a
+  failed prep answers `refused {code: 'view-refused', reason:
+  'too-large'}`, with a `view-refused` `sheet_ops` row where the op writes
+  one. The client rebuilds it as the local `resource-limit` refusal with
+  "This sheet is too large to sort or filter in this viewing mode."
+- A cancel or a closed socket during the prep runs no op (P8: the op is
+  `cancelled` and commits nothing).
+- Before this, the first job on a cold port built the port inside the 2 s
+  render deadline. A cold first sort of a million rows timed out and was
+  answered `policy-refused`. Under `'full'`, e6a90dcf had first removed
+  the text view the key view built and discarded.
 
 **P14, the pivot refusal.** On every stream, in every mode, after the
 `'message'` charge and before any token check: every `pivot*` and

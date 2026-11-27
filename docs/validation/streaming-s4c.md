@@ -1,12 +1,18 @@
 # Server streaming — Stage 4c validation (server sort and filter, value lists, range detection, the pivot refusal and the withholding tests)
 
-Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4c; "As built (4c)" under §11.2). Plan: `docs/superpowers/plans/2026-11-26-streaming-s4c.md` (plan calls P1–P16; pre-flight findings F1–F5, the inserted Task 11a and the ledger rulings in `.superpowers/sdd/2026-11-26-streaming-s4c/`). Branch `feature/streaming-s4c`, off main fb624989 (4a and 4b merged). **Code head eca7be34.** Every gate below was measured there on 2026-11-28, one at a time, on macOS, darwin-arm64, Bun 1.4.5, with no other job of this task running. The docs commits after eca7be34 change only this file and the two spec files (no code, no test).
+Spec: `docs/superpowers/specs/2026-11-22-streaming-s4-design.md` (§9 4c; "As built (4c)" under §11.2). Plan: `docs/superpowers/plans/2026-11-26-streaming-s4c.md` (plan calls P1–P16; pre-flight findings F1–F5, the inserted Task 11a and the ledger rulings in `.superpowers/sdd/2026-11-26-streaming-s4c/`). Branch `feature/streaming-s4c`, off main fb624989 (4a and 4b merged). **Code head 83d6500f.** The gates were first measured at eca7be34 on 2026-11-28, one at a time, on macOS, darwin-arm64, Bun 1.4.5, with no other job of this task running. Three code commits followed:
+- e6a90dcf and 66c086f9: the `'full'` key view builds no text view, and its regression test;
+- 83d6500f (Task 14a): a sheet's sort data is prepared by its own pool job under its own deadline.
+
+The server suite, the client stream suites, both typechecks, lint and the size gate were re-run at 83d6500f. The rest were not; §Gates says which is which for each row. The other commits after eca7be34 are docs only: this file, the two spec files and `server/README.md` (6d76d3cb, c4050d92: the Stage 4c bullet).
 
 ## Status
 
-Every 4c gate is green at eca7be34 except these. The first is unexplained; the others are pre-existing or environmental. None was worked around.
-- **One server case failed in the full run, and passes alone:** `server/test/sheet-sort-filter.test.ts` "a million-row sort" (in `describe('rates, cancel, admission and audit (P8, P11, P12)')`). Its first sort was answered `refused {code: 'policy-refused'}`; the test took 15.1 s. The only load reading during the suite, about 8 minutes in with the suite running, was 7.93 / 15.95 / 19.10 (1 / 5 / 15 min). Alone, the file passed 15 of 15 three times in a row (11.0–11.5 s each). Because this was the first full run to include Task 13's files, and `sheet-sort-audit` ran just before it in the log, the two files were also run together: 35 of 35 three times in a row (about 18 s each). The test is 4c's (Task 8). Earlier full runs on this branch passed it (at f9872fc5, 8e1f0d80 and 7513a97d). Tasks 5, 7 and 8 each first surfaced a real engine leak as an intermittent refusal of a large sort or list, so this failure is not assumed to be load alone. **Root cause not found.** The sort handler in `server/src/ws.ts` answers `policy-refused` on several paths: the document ledger refusing a `touch`, the pool's `sheetView` job throwing anything but `AdmissionRefused`, a reply of the wrong kind or view, an order that fails to encode, and a failed audit write. Which one fired was not traced. It is listed as an unexplained failure, not fixed; no timeout or limit was changed.
-- **The eager size gate** (index closure) is red, as it was at the base fb624989. 4c ends at 426,561 B against Task 3's 426,556 B at the base, Δ +5 B (§Size gate).
+Every 4c gate is green except these. All are pre-existing or environmental. None was worked around.
+- **Fixed: "a million-row sort" refused in the full run at eca7be34.** The case is `server/test/sheet-sort-filter.test.ts` "a million-row sort". In the full server run at eca7be34 its first sort was answered `refused {code: 'policy-refused'}`. The cause was found afterwards (`.superpowers/sdd/2026-11-26-streaming-s4c/dbg-sort-refusal-report.md`). The first `sheet-view` job on a cold port did three things inside the 2 s render deadline (`renderDeadlineMs`, `Pool.runJob`): build the key view, open the `viewerControls` port, and sort. At 1,048,576 rows that took 1.4–1.85 s alone and more than 2 s under load. `RenderTimeout` was thrown, the worker was retired with the port, and `viewOp`'s pool catch answered `policy-refused`. Two fixes followed:
+  - **e6a90dcf and 66c086f9.** Under `'full'`, `sheetKeyView` built a whole text view only to read the zero-width columns from it. It now reads them from the snapshot's geometry and builds no text view. This saved about 610 ms; the first job dropped to about 1.25 s. Regression test: `server/test/sheet-key-view.test.ts` `describe('the full key view reads the snapshot')`.
+  - **83d6500f (Task 14a, owner ruling 2026-11-28).** Preparing the sort data is now its own pool job, `sheet-view-prep` (§Prep deadline). Under `visible-only` the prep alone is about 2 s, so a cold first sort could never have fit the 2 s deadline. It now commits: `server/test/sheet-view-prep.test.ts` "commits". The full server suite at 83d6500f passes this case and every other case.
+- **The eager size gate** (index closure) is red, as it was at the base fb624989. 4c ends at 426,561 B against Task 3's 426,556 B at the base, Δ +5 B, the same at eca7be34 and at 83d6500f (§Size gate).
 - **One vitest case fails, as at the base:** `tests/slideshow-screens.test.ts` "the drag hint works on a popup (other-realm) document and stays dismissed" (Node has no `localStorage` in that realm). 4c does not change the test or `src/slideshow`: `git diff --stat fb624989 -- tests/slideshow-screens.test.ts src/slideshow` is empty.
 - **The `stream` browser project still sits at the per-IP session limit.** In one of the two runs, `tests/browser/stream-viewer.spec.ts:53` "error: an unknown document ends in the typed auth-failed error" failed. The trace shows its HELLO refused with `Unexpected response code: 429` (the per-IP gate, `server/src/rate.ts`, 30 new sessions per minute). This is the same case 4b saw at 91fb7237. The `stream` project's spec files are byte-identical to the base, and 4c's specs run in their own `stream-4c` project.
 
@@ -45,31 +51,53 @@ Further 4c evidence by plan call:
 | P15, P16 client | `tests/xlsx-stream-controls.test.tsx` (9 tests: "sort from the column menu", "filter by values", "typed conditions greyed", "pacing", "author-hidden notice", "no local value index", …); `tests/stream/remote-sheet-view.test.tsx` "4c stream mounts the filter buttons"; browser `tests/browser/stream-sheet-4c.spec.ts` "sort descending moves the tiles", "number filters are greyed under protection" |
 | Range detection, see-through (owner, Task 11a) | `server/test/sheet-detect-see-through.test.ts` (11 tests in 4 describes, incl. "content-withheld cells still end a region (Task 1 ruling stands for them)", "rows: text, number and empty hidden rows (inside and directly under the data) answer identically"); `tests/xlsx-viewer-range-see-through.test.ts` (7 tests); `server/test/sheet-view-ops.test.ts` "range detection over servable occupancy"; `server/test/sheet-filter-values.test.ts` "range-detect" |
 | Clearing and the refetched view (Task 9 rulings) | `server/test/sheet-sort-filter.test.ts` "sort then clear: the identity order, the filter kept, a sheet_ops row; the head carries caseSensitive and the filter range"; `tests/stream/sheet-wire.test.ts` `describe('sort clear (Task 9 fix round 1)')`; `tests/xlsx-stream-sort.test.ts` `describe('Task 9 fix round 1: clears and a refetched view')` |
+| Prep deadline (Task 14a) | `server/test/sheet-view-prep.test.ts`. The tests:<br>• "is the render deadline plus PREP_MS_PER_MIB per admitted MiB, capped";<br>• "commits": a `visible-only` cold first sort of `oneMillionSort` commits at `viewGen` 1. RED before the fix: `refused {code: 'policy-refused'}` after 3.1 s;<br>• "answers view-refused too-large for a sort, a value list and a detection; nothing commits": the injected cap is 100 ms and the cold build is held 1 s. Each op gets `view-refused`, `reason: 'too-large'`, with a `view-refused` row. `sheetBusy` is cleared, the layout's sort stays `null` and admission returns to 0;<br>• "a cancel during prep commits nothing; the next sort runs on the warm port";<br>• "builds the port once; a warm port is not built again".<br>Client: `tests/stream/remote-sheet-sort.test.ts` "view-refused too-large (Task 14a) is the local resource-limit refusal with the too-large text" |
 | Engine leak fixes (Tasks 5, 7, 8) | `tests/xlsx-viewer-guard-page-settle.test.ts` "a full-column sort guard over 1,048,576 rows stays within the main-thread ledger"; `server/test/sheet-view-values-memory.test.ts` (above); `server/test/sheet-view-sort-memory.test.ts` "14 sequential million-row sorts, no forced GC" |
 
 ## Gates
 
-All measured at eca7be34 on 2026-11-28, one at a time, in this order. No other job of this task ran beside any of them. The load (1 / 5 / 15 min) read 7.93 / 15.95 / 19.10 about 8 minutes into the server suite, with the suite running. It was 5.76 at the start of vitest, 8.22 at its end, about 6–7 during the browser runs and 5.9 at the start of `tile-p95`. The docs commits after eca7be34 touch only `docs/validation/streaming-s4c.md` and the two spec files, so they change no code or test that a gate measured.
+First measured at eca7be34 on 2026-11-28, one at a time, in this order. No other job of this task ran beside any of them. The load (1 / 5 / 15 min) read 7.93 / 15.95 / 19.10 about 8 minutes into the server suite, with the suite running. It was 5.76 at the start of vitest, 8.22 at its end, about 6–7 during the browser runs and 5.9 at the start of `tile-p95`. The rows marked **re-run at 83d6500f** were measured again at the code head on 2026-11-28, after the three code commits, one at a time: the server suite at a load of 3.41 at its start and 3.14 at its end. The other rows stand as measured at eca7be34. The code commits since then change `server/src` (pool, render, worker, ws, `sheet/key-view.ts`), `server/test`, `src/stream/remote/text-wire.ts` and `tests/stream/remote-sheet-sort.test.ts` (append only). The browser, compatibility and T8 rows were not re-run.
 
-| Gate | Command | Result at eca7be34 |
+| Gate | Command | Result |
 |---|---|---|
-| server | `cd server && bun test` | 1,655 pass, **1 fail**, 1,656 tests in 118 files, 982 s. The fail is "a million-row sort" (see Status). Alone, `bun test test/sheet-sort-filter.test.ts`: 15 pass, 0 fail, three runs in a row |
-| client | `bun scripts/fetch-corpus.ts` (70 verified), then `bunx vitest run` | 795 of 796 files; 16,173 pass, **1 fail**, 65 skipped, 1 todo (16,240), 1,096 s. The fail is `tests/slideshow-screens.test.ts` (pre-existing) |
-| browser, stream | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream` (projects `stream`, `stream-4b`, `stream-4c`) | run 1: **55 passed**, 1 skipped, 3.7 min. Run 2: 54 passed, **1 failed** (`stream-viewer.spec.ts:53`, HTTP 429, see Status), 1 skipped, 3.8 min. All three `stream-4c` cases passed in both runs. The skip is the existing no-codec media case. A first attempt at run 2 exited 134 before Playwright printed anything; it was re-run unchanged, and the run above is that re-run. The abort was not diagnosed |
-| browser, viewer (unmodified) | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer` | **67 passed**, 2.5 min |
-| typecheck | `npx tsc --noEmit -p .` | clean (exit 0) |
-| typecheck, server | `npm run -s typecheck:server` | clean (exit 0) |
-| lint | `npm run -s lint` | clean (exit 0) |
-| eager gate | `bun run gates:core` | core closure ok (299 B), engine modules ok, core purity ok; index closure FAIL as at the base (§Size gate) |
-| compatibility | `bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d --base4b fb624989 --tmp <scratchpad>/cm` | **11 PASS**, exit 0; `git worktree list` byte-identical before and after (diffed) |
-| T8 (not gated) | `bun scripts/stream-s4/tile-p95.ts` | GREEN, exit 0 (§T8 p95) |
-| append-only | `git diff --numstat fb624989 -- tests/stream` | 0 deletions: `manifest.test.ts` +39, `remote-sheet-sort.test.ts` +332 (new), `remote-sheet-view.test.tsx` +37, `sheet-wire.test.ts` +304. `tests/browser/stream-sheet.spec.ts` and `stream-sheet-4b.spec.ts` are byte-identical to fb624989 |
+| server | `cd server && bun test` | **Re-run at 83d6500f:** 1,662 pass, 0 fail, 119 files, 916 s. At eca7be34: 1,655 pass, 1 fail ("a million-row sort", fixed since, see Status), 118 files, 982 s. At c4050d92 (after e6a90dcf): 1,657 pass, 0 fail, 118 files, 925 s |
+| client, stream suites | `bunx vitest run tests/stream tests/xlsx-stream*` | **Re-run at 83d6500f:** 51 files, 1,239 pass, 0 fail, 2 skipped |
+| client | `bun scripts/fetch-corpus.ts` (70 verified), then `bunx vitest run` | At eca7be34 (not re-run): 795 of 796 files; 16,173 pass, **1 fail**, 65 skipped, 1 todo (16,240), 1,096 s. The fail is `tests/slideshow-screens.test.ts` (pre-existing) |
+| browser, stream | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npm run test:browser:stream` (projects `stream`, `stream-4b`, `stream-4c`) | At eca7be34 (not re-run): run 1: **55 passed**, 1 skipped, 3.7 min. Run 2: 54 passed, **1 failed** (`stream-viewer.spec.ts:53`, HTTP 429, see Status), 1 skipped, 3.8 min. All three `stream-4c` cases passed in both runs. The skip is the existing no-codec media case. A first attempt at run 2 exited 134 before Playwright printed anything; it was re-run unchanged, and the run above is that re-run. The abort was not diagnosed |
+| browser, viewer (unmodified) | `IV_HARNESS_PORT=4391 OV_STREAM_PORT=4281 npx playwright test --config playwright.viewer.config.ts --project=chromium tests/browser/interactive-viewer` | At eca7be34 (not re-run): **67 passed**, 2.5 min |
+| typecheck | `npx tsc --noEmit -p .` | clean (exit 0) at eca7be34; **re-run at 83d6500f:** clean |
+| typecheck, server | `npm run -s typecheck:server` | clean (exit 0) at eca7be34; **re-run at 83d6500f:** clean |
+| lint | `npm run -s lint` | clean (exit 0) at eca7be34; **re-run at 83d6500f:** clean |
+| eager gate | `bun run gates:core` | core closure ok (299 B), engine modules ok, core purity ok; index closure FAIL as at the base (§Size gate). **Re-run at 83d6500f:** the same, index closure 426,561 B |
+| compatibility | `bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d --base4b fb624989 --tmp <scratchpad>/cm` | At eca7be34 (not re-run): **11 PASS**, exit 0; `git worktree list` byte-identical before and after (diffed) |
+| T8 (not gated) | `bun scripts/stream-s4/tile-p95.ts` | At eca7be34 (not re-run): GREEN, exit 0 (§T8 p95) |
+| append-only | `git diff --numstat fb624989 -- tests/stream` | **Re-run at 83d6500f:** 0 deletions: `manifest.test.ts` +39, `remote-sheet-sort.test.ts` +346 (new; +332 at eca7be34, +14 from Task 14a), `remote-sheet-view.test.tsx` +37, `sheet-wire.test.ts` +304. `tests/browser/stream-sheet.spec.ts` and `stream-sheet-4b.spec.ts` are byte-identical to fb624989 |
 
 Outside `tests/stream`, one existing assertion was widened, as the owner permitted (Open item 1): `server/test/sheet-view-handshake.test.ts`, 1 line changed, the `sheetView` manifest's key set gains `sheetSort`.
 
+## Prep deadline (Task 14a)
+
+Owner ruling, 2026-11-28: preparing a sheet's sort data is split from the sort or filter, as two pool jobs. Before each `sheet-view` job that reads the sheet's port, `Pool.sheetView` posts `sheet-view-prep`, which builds the snapshot, the key view and the port. The jobs that read the port are sort, filter, derive, value lists, detection, and an extent under a non-identity view. Both jobs share one admission charge, one hold of the worker slot and one `'sheet'` request. A warm port answers the prep at once and builds nothing.
+- **The prep deadline** is `renderDeadlineMs + PREP_MS_PER_MIB × admitted MiB`, at most `PREP_DEADLINE_CAP_MS`. `PREP_MS_PER_MIB` is 1,000 ms. `PREP_DEADLINE_CAP_MS` is 30,000 ms, the parse's own default deadline. "Admitted MiB" means the document's bytes as the document ledger admitted them.
+- **The op keeps the 2 s render deadline.** `renderDeadlineMs` and every other limit are unchanged.
+- **A prep timeout or failure** answers `refused {code: 'view-refused', reason: 'too-large'}`, with a `view-refused` row where the op writes one. The client shows the local `resource-limit` refusal, "This sheet is too large to sort or filter in this viewing mode."
+- **A cancel during prep** runs no op.
+
+**Measurements behind the constants.** All are on `oneMillionSort`: 7.6 MiB admitted, 1,048,576 rows. Each run was a separate process with a one-worker pool, timing the worker's `sheet-view-prep` with the snapshot already built by `sheet-layout`.
+
+| Run | `'full'` prep | `visible-only` prep |
+|---|---|---|
+| quiet, 3 runs (load ≈ 4.7) | 546–553 ms | 1,901–2,052 ms |
+| beside the server sheet suites, 2 runs (load 5.2–5.6) | 654–954 ms | 1,585–1,977 ms |
+
+- A cold snapshot adds 338–587 ms; after a worker recycle the prep builds the snapshot too.
+- The sort after the prep took 720–978 ms (under the 2 s deadline).
+- In-process, the cold sort without the split took 1,304 ms under `'full'` and 2,901 ms under `visible-only`, and the pool's `visible-only` cold sort threw `RenderTimeout` at 2,597 ms.
+- The deadline for this document is 2,000 + 7.6 × 1,000 ≈ 9.6 s. That is 3.7× the slowest prep plus a cold snapshot (about 2.6 s), against the ≥ 2× the ruling asked for.
+
 ## Size gate (T11)
 
-`bun run gates:core` at eca7be34 (the 64 module-set lines naming `node_modules` files are omitted here. They are 32 pairs: each `+` entry is printed as an absolute path under the main checkout, because the worktree resolves `node_modules` from there, and matches a `−` entry of the same relative path. Diffing the two sets leaves `src/xlsx/rowFont.ts` as the only unpaired entry):
+`bun run gates:core` at eca7be34, and the same index closure (426,561 B) at 83d6500f (the 64 module-set lines naming `node_modules` files are omitted here. They are 32 pairs: each `+` entry is printed as an absolute path under the main checkout, because the worktree resolves `node_modules` from there, and matches a `−` entry of the same relative path. Diffing the two sets leaves `src/xlsx/rowFont.ts` as the only unpaired entry):
 
 ```
 ok   core closure 299 B over 1 chunk(s) ≤ 38720
@@ -123,7 +151,7 @@ Legs (a)–(g) are 4a's and 4b's, unchanged. (h)–(j) are 4c's (Task 12): (h) a
 ## Known flakes and environment notes
 
 Seen during 4c; listed, not fixed. The server and vitest cases passed when their files ran alone, except `slideshow-screens`, which fails alone too.
-- `server/test/sheet-sort-filter.test.ts` "a million-row sort": refused `policy-refused` in the full run at eca7be34; passes alone and beside `sheet-sort-audit` (Status). **New in 4c; unexplained; not assumed to be load.**
+- `server/test/sheet-sort-filter.test.ts` "a million-row sort": refused `policy-refused` in the full run at eca7be34. It was not a flake: the cold port's build ran inside the 2 s render deadline. Fixed by e6a90dcf and 83d6500f (Status); it passes in the full run at 83d6500f.
 - `server/test/client-text.test.ts` "a newer select settles the older one": timed out (60 s) in the full run at 8a1750e9; 30/30 alone three times. The file and its code are untouched by 4c.
 - `tests/xlsx-viewer-worker-overflow.test.ts` `it.each(…)('SPEC guard %s preserves old rows and raw ownership')`, the `epoch-after-stage` case: failed in the full vitest runs at b46272c1 and 8e1f0d80 (4b-known, root cause not found in 4b either).
 - `tests/slideshow-screens.test.ts`, one case, fails under the current Node (no `localStorage` in that realm), as on main.
@@ -154,13 +182,15 @@ The full text is in the S4 design, §11.2 "As built (4c)", and the dated parent 
 - **Mutation proofs are unrecorded.** Task 13 ran 15 mutations by hand (all caught; M7e only once eca7be34 added the older-`viewGen` list case) and reverted them, and Tasks 5, 7, 8, 10 and 11a showed RED by mutation or by restoring base source. No artifact or committed negative test records them; the logs were in an ephemeral scratchpad. Three mutants were equivalent and are not tested: key-view blanking of zero-width columns (every op on such a column is refused first), the unknown-coverage early return (the text view is already blank), and either half of the pivot-and-slicer strip alone (each covers the other).
 - **Tests written after their code** (accepted by ledger rulings on RED shown by mutation or by restoring the base): Task 5's main `sheet-view-ops` file, Task 7's `value-lists.ts`, Task 8's view-refused test, Task 10's client tests, Task 11a's engine tests.
 - **No browser resume case.** `setOffline` does not close Chromium's socket, so a resume during a sort is tested with a fake socket (`tests/stream/remote-sheet-sort.test.ts` "resume: sort and filter reject session-rotated, values and detect are re-issued") and at the server (`server/test/sheet-sort-filter.test.ts` "resume during an in-flight sort"), not in a real browser.
-- **The million-row sort under load** is not explained (Status).
+- **The prep deadline's headroom is measured on one machine.** The constants come from macOS darwin-arm64 runs at loads of 4–6 (§Prep deadline), not from Linux CI. The admitted size is the compressed document, so a highly compressible sheet gets a smaller deadline than its row count would suggest. That fails closed, as `too-large`.
 - **T8 p95** was not re-gated for 4c (recorded only).
 
 ## Follow-ups and open items
 
-- **`server/README.md`** still describes 4b's sheet features only (`streamSheets`, line 784); it does not say a 4c server adds sort, filter and value lists. Not in this task's file list.
-- **Root cause:** "a million-row sort" refused in the full server run (new, unexplained); `xlsx-viewer-worker-overflow` `SPEC guard %s` with `epoch-after-stage` (from 4b).
+- **Root cause:** `xlsx-viewer-worker-overflow` `SPEC guard %s` with `epoch-after-stage` (from 4b). The million-row refusal is explained and fixed (Status); `server/README.md` has its Stage 4c bullet (6d76d3cb, c4050d92).
+- **Tile and sheet-text jobs under a view still build a cold port inside the 2 s deadline.** That happens after a worker recycle, when they re-derive the view (Task 14a split only `sheet-view` jobs).
+- **Prep timeouts are not remembered.** Each retry on a sheet too large to prepare retires the worker again and pays a re-parse.
+- **The `visible-only` million-row open takes about 19–23 s** (projection and parse) against the 30 s open deadline. The prep test opens it in a `beforeAll` of its own 30 s.
 - **A withholding-bearing corpus XLSX** (a drawing over text, a withheld key cell, a collapsed body row), for the 4b ink oracle and the 4c corpus parity alike.
 - **Column and row default styles** are not kept by the parser (above).
 - **A harness `POST /drop`** would let a browser spec prove resume (Task 11).
