@@ -116,13 +116,15 @@ function keyView(sheetIndex: number, sheet: XlsxSheet, blankAll: boolean, withhe
 /**
  * The key view of `snap` (P5): `sheetTextView(snap, projected, NO_SESSION_SIZES, o)` plus, under `'visible-only'`,
  * painted styles, blank zero-width columns and masked strings. It takes no session sizes. The text view's CF scope is
- * released before this returns: every style it resolves is resolved by then.
+ * released before this returns: every style it resolves is resolved by then. Under `'full'` it is the projected sheet
+ * with the zero-width columns of the snapshot's geometry (`buildSheetGeometry(projected)`, the same geometry the text
+ * view would build at `NO_SESSION_SIZES`); no text view is built.
  */
 export async function sheetKeyView(snap: SheetSnapshot, projected: XlsxSheet, o: { workbook: XlsxDocument; clock: SheetClock; budget: FormatBudget }): Promise<KeyView> {
+  if (snap.contentPolicy === 'full') return keyView(snap.sheetIndex, projected, false, 0, collapsedColsOf(snap.geometry) ?? [])
   const view = await sheetTextView(snap, projected, NO_SESSION_SIZES, o)
   try {
     const collapsed = collapsedColsOf(view.geometry)
-    if (snap.contentPolicy === 'full') return keyView(snap.sheetIndex, projected, false, 0, collapsed ?? [])
     if (view.blankAll) return keyView(snap.sheetIndex, view.sheet, true, view.withheld, collapsed ?? [])
     const { sheet, blanked } = paintKeys(view, collapsed)
     return keyView(snap.sheetIndex, sheet, collapsed === undefined, view.withheld + blanked, collapsed ?? [])
