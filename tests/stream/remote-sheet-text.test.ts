@@ -258,4 +258,28 @@ describe('RemoteSheets.view (S4 §6.7, P1)', () => {
     expect(await fit).toBe(20)
     doc.close()
   })
+
+  it('Task 14a fix round 1: view-refused too-large on a sheet text op is the local resource-limit refusal', async () => {
+    const { doc, sock } = await opened()
+    const refusal = { reason: 'resource-limit', message: 'This sheet is too large to sort or filter in this viewing mode.' }
+    const ops: Array<[string, () => Promise<unknown>]> = [
+      ['sheet-find', () => view(doc).find({ query: 'x', matchCase: false })],
+      ['sheet-copy', () => view(doc).copy('0', 1, sel)],
+      ['sheet-a11y', () => view(doc).a11y('0', 1, [[0, 1]], [0, 1])],
+      ['sheet-fit', () => view(doc).fit({ sheetId: '0', viewGen: 1, axis: 'col', index: 0, pane: PANE })],
+    ]
+    for (const [type, start] of ops) {
+      const p = errorOf(start())
+      await settle()
+      sock.text({ reqId: sock.of(type).at(-1)!.reqId, type: 'refused', code: 'view-refused', reason: 'too-large' })
+      const e = await p
+      expect([type, e.code, e.refusal, e.message]).toEqual([type, 'view-refused', refusal, refusal.message])
+    }
+    // Any other view-refused on a text op is off its contract: policy-refused.
+    const p = errorOf(view(doc).find({ query: 'x', matchCase: false }))
+    await settle()
+    sock.text({ reqId: sock.of('sheet-find').at(-1)!.reqId, type: 'refused', code: 'view-refused', reason: 'merge', range: { r0: 0, r1: 1, c0: 0, c1: 0 } })
+    expect((await p).code).toBe('policy-refused')
+    doc.close()
+  })
 })

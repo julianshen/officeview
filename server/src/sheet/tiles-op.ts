@@ -10,8 +10,9 @@ import { tileLimit } from './tile'
 export interface TileCoord { col: number; row: number }
 /** A validated `tiles {reqId, token, sheetId, viewGen, zoomStep, dpr, palette, tiles}` (without the token). */
 export interface TilesArgs { sheetId: string; sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; tiles: TileCoord[] }
-/** Per-tile refusal codes in `tiles-done.refused`. */
-export type TileRefusalCode = 'rate-limited' | 'policy-refused'
+/** Per-tile refusal codes in `tiles-done.refused`. `view-refused` (Task 14a fix round 1): the sheet's sort data could
+ * not be prepared; its entry carries `reason: 'too-large'`. */
+export type TileRefusalCode = 'rate-limited' | 'policy-refused' | 'view-refused'
 
 const SHEET_ID = /^(0|[1-9][0-9]{0,8})$/
 const u32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff

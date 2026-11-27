@@ -981,11 +981,15 @@ export function createStreamServer(o: StreamServerOptions) {
     const alive = () => textAlive(ws, s.sid, sd)()
     let extent: SheetExtent
     // A sheet whose layout cannot be built (over an R14 cap, a diagnostic geometry) has no grid to bound tiles on.
-    try { extent = await sheetExtent(s.sid, sd, args.sheetIndex, sizes, view) } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+    try { extent = await sheetExtent(s.sid, sd, args.sheetIndex, sizes, view) } catch (e) {
+      if (!alive()) return
+      if (e instanceof SheetPrepRefused) return send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL })
+      return refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
     if (!alive()) return
     if (!tilesInGrid(args, extent)) return refuse(ws, reqId, 'policy-refused')
     const done = (refused: Array<TileCoord & { code: TileRefusalCode }>, retryAfterMs: number) => {
-      if (alive()) send(ws, { reqId, type: 'tiles-done', refused, ...(retryAfterMs > 0 ? { retryAfterMs } : {}), ...(batch.stopped ? { cancelled: true } : {}) })
+      if (alive()) send(ws, { reqId, type: 'tiles-done', refused: refused.map((r) => r.code === 'view-refused' ? { ...r, ...PREP_REFUSAL } : r), ...(retryAfterMs > 0 ? { retryAfterMs } : {}), ...(batch.stopped ? { cancelled: true } : {}) })
     }
     if (batch.stopped) return done([], 0)
     const { admitted, retryAfterMs } = ws.data.rates.takeTiles(args.tiles.length, now())
@@ -1027,7 +1031,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const key = renderKey(tileKeyFields(sd.doc, mark, sd.clock, a, sizes, view, sd.policy.contentPolicy, t))
     let tile = renderCache.get(key) as RenderedTile | undefined
     if (!tile) {
-      try { tile = await o.pool.tile(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, mark, clock: sd.clock, sizes, ...viewField(view) }, TILE_BYTES_ESTIMATE, signal) } catch (e) { return !alive() ? undefined : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
+      try { tile = await o.pool.tile(sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, sheetIndex: a.sheetIndex, viewGen: a.viewGen, zoomStep: a.zoomStep, dpr: a.dpr, palette: a.palette, col: t.col, row: t.row, mark, clock: sd.clock, sizes, ...viewField(view) }, TILE_BYTES_ESTIMATE, signal) } catch (e) { return !alive() ? undefined : e instanceof AdmissionRefused ? 'rate-limited' : e instanceof SheetPrepRefused ? 'view-refused' : 'policy-refused' }
       // Fail closed: only the tile asked for (F24: its palette too) is cached or sent.
       if (tile.w !== TILE_PX || tile.h !== TILE_PX || tile.palette !== a.palette) return 'policy-refused'
       renderCache.put(key, tile, tile.png.length)
@@ -1149,7 +1153,11 @@ export function createStreamServer(o: StreamServerOptions) {
       let r: SheetTextReply
       try {
         r = await o.pool.sheetText(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, op: 'fit', sheetIndex: args.sheetIndex, axis: args.axis, index: args.index, pane: args.pane, ...(args.regions?.length ? { regions: args.regions } : {}), sizes, ...viewField(view) }, undefined, ws.data.gone.signal)
-      } catch (e) { return alive() ? refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      } catch (e) {
+        if (!alive()) return
+        if (e instanceof SheetPrepRefused) return send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL })
+        return refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+      }
       if (!alive()) return
       // Fail closed: only a fit answer with a finite size travels.
       if (r.op !== 'fit' || !Number.isFinite(r.size) || r.size < 0) return refuse(ws, reqId, 'policy-refused')
@@ -1524,7 +1532,11 @@ export function createStreamServer(o: StreamServerOptions) {
     const run: SearchRun = { reqId, sent: 0, stopped: false, settled: new Promise<void>((r) => { settle = r }), send: out, alive }
     sd.sheetFind = run
     const current = () => !run.stopped && sd.sheetFind === run && alive()
-    const fail = (e?: unknown) => { run.stopped = true; refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') }
+    const fail = (e?: unknown) => {
+      run.stopped = true
+      if (e instanceof SheetPrepRefused) return send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL })
+      refuse(ws, reqId, e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
     try {
       // One find in flight per sid: wait for the superseded run's pool job.
       if (prev) await prev.settled
@@ -1587,6 +1599,7 @@ export function createStreamServer(o: StreamServerOptions) {
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
       refuse: (code, nums) => refuse(ws, reqId, code, nums),
+      tooLarge: () => send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }),
     })
   }
 
@@ -1625,6 +1638,7 @@ export function createStreamServer(o: StreamServerOptions) {
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
       refuse: (code, nums) => refuse(ws, reqId, code, nums),
+      tooLarge: () => send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }),
     })
   }
 

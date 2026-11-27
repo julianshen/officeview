@@ -1446,6 +1446,8 @@ export class StreamSession {
       // A RENEW race (refused before the op ran): a search/select is retried once.
       if (m.code === 'session-rotated' && REISSUED.has(req.request.type) && !req.rotatedRetry) { req.rotatedRetry = true; return this.reissueText(req) }
       if (SHEET_SORT_TYPES.has(req.request.type)) return req.reject(this.sortRefusal(m))
+      // Task 14a fix round 1: a sheet text op under a view whose sort data could not be prepared.
+      if (m.code === 'view-refused' && m.reason === 'too-large' && SHEET_TEXT_TYPES.has(req.request.type)) return req.reject(this.sortRefusal(m))
       const code: TextRefusalCode = TEXT_REFUSALS.has(m.code as TextRefusalCode) ? m.code as TextRefusalCode : 'policy-refused'
       const limit = isCount(m.limit) ? m.limit : undefined, requested = isCount(m.requested) ? m.requested : undefined
       return req.reject(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }))

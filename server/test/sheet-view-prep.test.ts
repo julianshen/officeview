@@ -11,7 +11,7 @@ import { decodeSheetLayout, decodeSheetOrder, type SheetOrder, type StreamSheetL
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { DEFAULT_CAPS } from '../src/admission'
-import { Pool, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, sheetPrepDeadlineMs, ShowCancelled } from '../src/pool'
+import { Pool, TILE_BYTES_ESTIMATE, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, sheetPrepDeadlineMs, ShowCancelled } from '../src/pool'
 import { DocumentHost } from '../src/render'
 import { rejection } from './fixtures/rejection'
 import { Client, start } from './harness'
@@ -76,7 +76,11 @@ async function serverOn(doc: Uint8Array, pool: Pool, o: Parameters<typeof start>
       if (r.end) throw new Error(`layout refused: ${JSON.stringify(r.end)}`)
       return decodeSheetLayout(r.parts.map((p) => p.text)) as StreamSheetLayout
     }
-    return { c, sid: m.session.sid as string, send, answer, one, layout }
+    async function tiles(body: Record<string, unknown>) {
+      clock.t += 100
+      return c.tiles(++rq, body, { ms: 25_000 })
+    }
+    return { c, sid: m.session.sid as string, send, answer, one, layout, tiles }
   }
   return { h, store, open }
 }
@@ -114,6 +118,36 @@ describe('a cold first sort of a million rows under visible-only', () => {
   }, 30_000)
 })
 
+describe('a sorted million-row view under visible-only after a worker recycle (fix round 1)', () => {
+  const clock = { day: '2026-11-28', timeZone: 'UTC' }
+  const range = wire(0, ONE_MILLION_ROWS - 1, 0, 0, 0)
+  const view = { sort: { range, keys: [{ col: 0, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+  const tileJob = { docRef: 'doc', contentPolicy: 'visible-only' as const, sheetIndex: 0, viewGen: 1, zoomStep: 5, dpr: 1 as const, palette: 'light' as const, col: 0, row: 0, mark: { kind: 'off' as const }, clock, view }
+  let pool: Pool
+  // Each hook is a parse of the million rows (about 20 s); the test below has its own 30 s.
+  beforeAll(async () => {
+    pool = new Pool({ workers: 1, recyclePages: 1 }); pools.push(pool)
+    await pool.open('doc', await oneMillionSort(), 'visible-only', { sheetMode: 'tiles' })
+    await pool.sheetLayout('s', { docRef: 'doc', contentPolicy: 'visible-only', sheetIndex: 0, clock })
+  }, 30_000)
+  beforeAll(async () => {
+    const r = await pool.sheetView('s', { docRef: 'doc', contentPolicy: 'visible-only', clock, op: 'sort', sheetIndex: 0, base: { sort: null, sortFilter: null, filter: null }, sort: view.sort })
+    expect(r.op).toBe('view')
+    // The first tile paints on the warm port; the worker then recycles, and the layout job parses the document again.
+    expect((await pool.tile('s', tileJob, TILE_BYTES_ESTIMATE)).w).toBe(512)
+    expect(pool.stats().recycled).toBe(1)
+    await pool.sheetLayout('s', { docRef: 'doc', contentPolicy: 'visible-only', sheetIndex: 0, clock })
+  }, 30_000)
+
+  test('its later tiles paint: the cold port is prepared under the prep deadline', async () => {
+    const preps = pool.stats().sheetPreps
+    const t = await pool.tile('s', { ...tileJob, row: 1 }, TILE_BYTES_ESTIMATE)
+    expect([t.w, t.h]).toEqual([512, 512])
+    expect(pool.stats().sheetPreps).toBe(preps + 1)
+    expect(pool.stats().recycled).toBe(2)
+  }, 30_000)
+})
+
 describe('a prep past its own deadline', () => {
   test('answers view-refused too-large for a sort, a value list and a detection; nothing commits', async () => {
     const pool = new Pool({ workers: 1, testHooks: true, prepDeadlineCapMsForTests: 100, prepHangMsForTests: 1000 })
@@ -123,12 +157,19 @@ describe('a prep past its own deadline', () => {
     const sort = await a.answer(a.send('sheet-sort', { viewGen: 0, range: GRID, keys: [{ col: 1, order: 'asc' }] }))
     expect(sort.end).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
     expect(s.h.stream.sheetRatesOf(a.sid)!.sheetBusy).toBe(false)
+    // Fix round 1: the verdict is remembered, so the client's re-fetch (a derive) and every later op prep nothing.
+    expect(pool.stats().sheetPreps).toBe(1)
+    const refetch = await a.answer(a.send('sheet-order', {}))
+    expect(refetch.end).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
+    expect(pool.stats().sheetPreps).toBe(1)
+    expect(pool.stats().retired).toBe(1)
     const values = await a.one(a.send('filter-values', { viewGen: 0, range: GRID, col: 1 }))
     expect(values).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
     const detect = await a.one(a.send('range-detect', { viewGen: 0, kind: 'sort', selection: { active: [2, 1], anchor: [2, 1], ranges: [] } }))
     expect(detect).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
     expect(s.h.stream.sheetRatesOf(a.sid)!.sheetBusy).toBe(false)
     expect(s.store.sheetOps(a.sid).map((o) => [o.kind, o.outcome])).toEqual([['sort', 'view-refused'], ['filter-values', 'view-refused'], ['range-detect', 'view-refused']])
+    expect([pool.stats().sheetPreps, pool.stats().retired]).toEqual([1, 1])
     expect((await a.layout()).sort).toBeNull()
     expect(pool.admission.reserved).toBe(0)
     a.c.close(); await s.h.stop()
@@ -148,6 +189,35 @@ describe('a prep past its own deadline', () => {
     const again = await a.answer(a.send('sheet-sort', { viewGen: 0, range: GRID, keys: [{ col: 1, order: 'asc' }] }))
     expect(again.order?.head.viewGen).toBe(1)
     expect(s.store.sheetOps(a.sid).map((o) => o.outcome)).toEqual(['cancelled', 'ok'])
+    expect(pool.admission.reserved).toBe(0)
+    a.c.close(); await s.h.stop()
+  }, 30_000)
+})
+
+describe('tiles and text under a view prep a cold port (fix round 1)', () => {
+  test('after a recycle, find, copy, a11y and tiles under the view answer too-large from one prep', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true, recyclePages: 1, prepDeadlineCapMsForTests: 100 })
+    const s = await serverOn(await sortGrid(), pool, { policy: { copy: 'full', textA11y: true } })
+    const a = await s.open()
+    await a.layout()
+    expect((await a.answer(a.send('sheet-sort', { viewGen: 0, range: GRID, keys: [{ col: 1, order: 'asc' }] }))).order?.head.viewGen).toBe(1)
+    // A tile on the warm port paints; then the worker recycles (one page), and every cold port build is held 1 s.
+    const tile = { sheetId: '0', viewGen: 1, zoomStep: 5, dpr: 1, palette: 'light' }
+    expect((await a.tiles({ ...tile, tiles: [{ col: 0, row: 0 }] })).tiles).toHaveLength(1)
+    expect(pool.stats().recycled).toBe(1)
+    pool.prepHangForTests(1000)
+    const preps = pool.stats().sheetPreps
+    const find = await a.one(a.send('sheet-find', { query: 'apple' }))
+    expect(find).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
+    expect(pool.stats().sheetPreps).toBe(preps + 1)
+    const sel = { active: [1, 1], anchor: [1, 1], ranges: [{ rows: [[1, 2]], cols: [[1, 1]] }] }
+    expect(await a.one(a.send('sheet-copy', { viewGen: 1, selection: sel }))).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
+    expect(await a.one(a.send('sheet-a11y', { viewGen: 1, rows: [[1, 2]], cols: [1, 1] }))).toEqual({ reqId: expect.any(Number), type: 'refused', code: 'view-refused', reason: 'too-large' })
+    // A tile not in the render cache (row 1), so it reaches the pool.
+    const tiles = await a.tiles({ ...tile, tiles: [{ col: 0, row: 1 }] })
+    expect(tiles.tiles).toHaveLength(0)
+    expect(tiles.end).toMatchObject({ type: 'tiles-done', refused: [{ col: 0, row: 1, code: 'view-refused', reason: 'too-large' }] })
+    expect(pool.stats().sheetPreps).toBe(preps + 1)
     expect(pool.admission.reserved).toBe(0)
     a.c.close(); await s.h.stop()
   }, 30_000)
