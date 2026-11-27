@@ -372,3 +372,53 @@ describe('the committed clock cases under every injected registration (the same 
     }, 300_000)
   }
 })
+
+/* ------------------------------------------------------------------ */
+/* Excel's saved workbook (the capture-night rebuild).                  */
+/* ------------------------------------------------------------------ */
+
+describe('production on Excel\'s saved workbook: shared ca="1" followers are tainted and withheld exactly as their masters', () => {
+  it('every TODAY()/NOW() cell is tainted; the load day paints instant 1; 00:05 the next day withholds the clock and TODAY() cells, J paints', async () => {
+    const { readFileSync } = await import('node:fs')
+    const root = resolve(__dirname, '..')
+    const manifest = JSON.parse(readFileSync(resolve(root, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as { cases: Array<{ id: string; saved: string; clockRequirement?: { anchorLocalDate: string } }> }
+    const entry = manifest.cases.find(x => x.id === MIDNIGHT_CASE_ID)!
+    const D = entry.clockRequirement!.anchorLocalDate
+    const bytes = new Uint8Array(readFileSync(resolve(root, entry.saved)))
+    const doc = await parseXlsx(await OfficePackage.load(bytes), { evaluation: { now: () => at(D, '23:50'), timeZone: ZONE } })
+    const sheet = doc.sheets[0]!
+    const formulaCells = sheet.rows.flatMap(r => r.cells).filter(x => x.formula !== undefined || x.sharedFormula !== undefined)
+    // Excel's resave turned some TODAY() cells into shared groups: followers carry no formula text of their own.
+    expect(formulaCells.some(x => x.sharedFormula !== undefined), 'the resave holds shared formulas').toBe(true)
+    const { documentLoadClockOf } = await import('../src/xlsx/formula/loadClock')
+    const taint = documentLoadClockOf(doc)!.taint
+    expect(taint).not.toBe('all')
+    const tainted = new Set([...(taint as ReadonlyMap<string, ReadonlySet<number>>).get(sheet.name.toLowerCase()) ?? []].map(id => refOfRcLocal(Math.floor(id / 16384), id % 16384)))
+    const expected = [...MIDNIGHT_CELLS.filter(x => 'today' in x.value).flatMap(x => [x.ref, x.controlRef]), MIDNIGHT_SENTINELS.now, MIDNIGHT_SENTINELS.today].sort()
+    expect(formulaCells.map(x => x.ref).sort()).toEqual(expected)
+    expect([...tainted].sort()).toEqual(expected)
+    // The load-time evaluation names D at every TODAY() cell, masters and followers alike.
+    for (const x of formulaCells) if (x.ref !== MIDNIGHT_SENTINELS.now) {
+      const cell = MIDNIGHT_CELLS.find(m => m.ref === x.ref || m.controlRef === x.ref)
+      expect(x.value, x.ref).toBe(midnightSerial(D) + (cell && 'today' in cell.value ? cell.value.today : 0))
+    }
+    const scopeAt = async (instant: number) => {
+      const scope = await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 11, c0: 0, c1: 10 }], signal: new AbortController().signal, budget: { reserve() {}, release() {} }, documentSheets: doc.sheets, evaluation: cfDocumentEvaluationOf(doc), now: () => instant } as never)
+      try {
+        return Object.fromEntries(MIDNIGHT_CELLS.map(m => {
+          const mm = /^([A-Z])(\d+)$/.exec(m.ref)!, row = Number(mm[2]) - 1, col = mm[1]!.charCodeAt(0) - 65
+          if (scope!.describe(row, col)?.key === 'cf-unavailable') return [m.ref, 'withheld']
+          const fill = scope!.effectiveStyle(row, col, undefined)?.fillColor?.replace('#', '').toUpperCase()
+          return [m.ref, fill ? TOKEN_OF[fill.length === 6 ? `FF${fill}` : fill] ?? 'none' : 'none']
+        }))
+      } finally { scope?.dispose() }
+    }
+    expect(await scopeAt(at(D, '23:55'))).toEqual(midnightPredictions(MIDNIGHT_INSTANT1))
+    const after = await scopeAt(at(next(D), '00:05'))
+    for (const m of MIDNIGHT_CELLS) {
+      const want = m.group === 'free' ? midnightPredictions(MIDNIGHT_INSTANT1)[m.ref] : 'withheld'
+      expect(after[m.ref], m.ref).toBe(want)
+    }
+  })
+})
+function refOfRcLocal(row: number, col: number): string { return `${String.fromCharCode(65 + col)}${row + 1}` }

@@ -59,7 +59,7 @@ import {
   verifyOnlyCaseOrder,
 } from '../scripts/cf-refs/capture'
 import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
-import { CF_MANIFEST_PATH, EXCEL_AUTHORED_ICONSETS_PATH, diffAuthoredIconTemplates, generateAllStage1, generateCaseArchive } from '../scripts/cf-refs/generate'
+import { CF_MANIFEST_PATH, EXCEL_AUTHORED_ICONSETS_PATH, diffAuthoredIconTemplates, generateAllStage1, generateCaseArchive, keepCommittedArchive } from '../scripts/cf-refs/generate'
 import {
   type CfObservedBar,
   type CfObservedIcon,
@@ -5490,7 +5490,17 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const later = ['stage4-icon-glyph-key-centred', 'stage3-bar-bounds-num', 'stage2-scale-scope-disjoint', 'stage2-scale-num-segment', 'stage2-scale-upper-whole', 'stage2-scale-upper-window', 'stage2-scale-raw-floor', 'stage3-bar-all-equal', 'stage2-scale-literal-lower', 'stage2-scale-upper-segment', 'stage2-scale-formula-bounds', 'stage2-scale-percent-order', 'stage1-clock-across-midnight']
     for (const c of CF_CASES.filter(x => x.stage < 5 && !later.includes(x.id))) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
     expect(all.digest('hex')).toBe('c1daae80753c0dea2a10f782ac118a221f2df7fe1de83156e1a4bc08bcd89b36')
-    for (const id of later) expect(sha256(await generateCaseArchive(id)), id).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, `tests/fixtures/xlsx-cf/inputs/${id}.xlsx`)))))
+    // A clock case regenerates at the night its manifest entry records (the generator's contract: generateAllStage1 uses
+    // the manifest's anchorLocalDate); every other case at the default anchor, as before.
+    const anchorOf = (id: string): string | undefined => manifest.cases.find(x => x.id === id)?.clockRequirement?.anchorLocalDate
+    for (const id of later) {
+      const committed = new Uint8Array(readFileSync(resolve(REPO_ROOT, `tests/fixtures/xlsx-cf/inputs/${id}.xlsx`)))
+      const generated = await generateCaseArchive(id, anchorOf(id))
+      // A clock case is rebuilt on its capture day by build.ts (under bun, whose deflate differs from node's): the
+      // generator keeps the committed archive when every inflated part is identical (keepCommittedArchive), so that is
+      // the check for it; every other case keeps the byte-for-byte comparison.
+      expect(sha256(anchorOf(id) !== undefined ? keepCommittedArchive(committed, generated) : generated), id).toBe(sha256(committed))
+    }
 
     // The brief's matrix, row by row (CF_STAGE5_GROUPS maps a row to its workbooks).
     const required: Record<string, string[]> = {
