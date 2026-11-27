@@ -161,6 +161,8 @@ export class DocumentLedger {
     this.lru.unpin(k)
     this.lru.delete(k)
   }
+  /** Whether derived view `key` has a holder (final review R2: its worker may keep it only then). */
+  isHeld(key: string): boolean { return this.holders.has(`view\u0000${key}`) }
   get size() { return this.lru.size }
   get evictions() { return this.lru.evictions }
 }

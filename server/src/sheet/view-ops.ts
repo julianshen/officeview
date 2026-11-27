@@ -37,7 +37,7 @@ import { CompactRowVisibility, createRowVisibility, visibilityFromHidden } from 
 import type { WorkbookSource } from '../../../src/worker/viewerSession'
 import type { SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import { clockEpochMs, type SheetClock } from './clock'
-import { canonicalView, isIdentityView, type CanonicalView, type ResolvedFilter, type ResolvedRule } from './view-spec'
+import { canonicalView, canonicalViewHash, isIdentityView, type CanonicalView, type ResolvedFilter, type ResolvedRule } from './view-spec'
 import type { WireSizes } from './view-state'
 
 export type SheetViewJob =
@@ -87,6 +87,11 @@ export interface SheetViewPort {
   job(job: SheetViewJob, cache: DerivedCache): Promise<SheetViewReply>
   /** The bytes the port's main ledger charges now (its engine's working set between jobs). */
   ledgerBytes(): number
+  /** Final review R2: in the port's queue, resets its current state to the identity view when that state is the
+   * derived view `viewHash` (its last holder is gone), so the port retains none of its order or mask. */
+  forget(viewHash: string): Promise<void>
+  /** The canonical hash of the view the port's current state holds (side-effect free). */
+  current(): string
   dispose(): Promise<void>
 }
 
@@ -223,6 +228,9 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   const context = () => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: clock.timeZone, nowMs: clockEpochMs(clock) })
   let state: SheetView = { sheetId, revision: 0, order: createIdentityOrder(), baseHidden, visibility: visibilityFromHidden(baseHidden), sort: null, filter: null, selection: emptyGridSelection() }
   let viewGen = 0
+  /** The canonical hash of the view `state` holds, kept with every change of it (`UNNAMED` between a publish and its
+   * capture, as after a replay step that failed). */
+  let currentHash = canonicalViewHash(IDENTITY)
   const owner = (): CacheIdentity => ({ docId, sheetId, valueGen: store.stamp.valueGen, fontGen: 0, viewGen })
   const snapshot = (): ControlSnapshot => ({ owner: owner(), filter: state.filter, sort: state.sort, records: { visible: 0, total: 0, completeness: 'complete' } })
   /** C1: clears every collapsed body row of `filter` (a display slot through `order`). */
@@ -248,6 +256,8 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
     if (policy === 'visible-only' && next.filter) visibility = c1(visibility, next.order, next.filter)
     state = { ...state, order: next.order, visibility, filter: next.filter, sort: next.sort, revision: state.revision + 1 }
     viewGen++
+    // Not yet named: `capture` names it once the op or replay step that published it ends.
+    currentHash = UNNAMED
     return snapshot()
   }
   // One main ledger per port, with no per-port document charge: the server charges documents and held views to its
@@ -270,8 +280,12 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   const setBase = (d: DerivedView) => {
     state = { ...state, order: d.order, visibility: d.visibility, sort: d.sort, filter: d.filter, revision: state.revision + 1 }
     viewGen++
+    currentHash = canonicalViewHash(d.view)
   }
-  const capture = (view: CanonicalView): DerivedView => derived(view, state.order, compact(state.visibility), state.sort, state.filter)
+  const capture = (view: CanonicalView): DerivedView => {
+    currentHash = canonicalViewHash(view)
+    return derived(view, state.order, compact(state.visibility), state.sort, state.filter)
+  }
 
   /** A fresh draft over `(range, col)`, closed by the caller. */
   const draftOf = (range: WireRange, col: number, signal: AbortSignal) => client.values(owner(), filterRangeOf(range), col, null, signal)
@@ -339,7 +353,8 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
     if (r.kind === 'refused') return { op: 'view', refused: wireRefusal(r.refusal) }
     if (r.kind !== 'committed' && r.kind !== 'unchanged') throw new SheetViewFailed(r.kind)
     const d = capture(next)
-    cache.put(d)
+    // R2: the identity view is the port's own (`identity`), never a cached derived view.
+    if (!isIdentityView(d.view)) cache.put(d)
     return { op: 'view', view: d.view, order: d.reply }
   }
 
@@ -415,6 +430,10 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
       })
     },
     ledgerBytes: () => ledger.bytes,
+    forget(viewHash) {
+      return port.run(async () => { if (!disposed && (currentHash === viewHash || currentHash === UNNAMED)) setBase(identity) })
+    },
+    current: () => currentHash,
     dispose() {
       return port.run(async () => {
         if (disposed) return
@@ -429,6 +448,7 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
 }
 
 const IDENTITY: CanonicalView = Object.freeze({ sort: null, sortFilter: null, filter: null })
+const UNNAMED = ''
 
 /** The union row span of the view's ranges, or null for the identity view. */
 function spanOf(v: CanonicalView): { r0: number; r1: number } | null {

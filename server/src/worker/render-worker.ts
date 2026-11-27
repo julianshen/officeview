@@ -56,6 +56,11 @@ export type WorkerRequest =
   /** Stage 4c Task 14a: prepare sheet `sheetIndex`'s sort data (snapshot, key view, `sheet-view` port) under the
    * session clock; a warm port answers at once. `hangMs` (test hook): a cold build waits this long first. */
   | { type: 'sheet-view-prep'; id: number; docKey: string; clock: SheetClock; contentPolicy: 'visible-only' | 'full'; sheetIndex: number; hangMs?: number }
+  /** Stage 4c final review R2: drop what the document retains for derived view `viewHash` of `(sheetIndex, clock)`
+   * (its last server holder is gone). */
+  | { type: 'sheet-view-release'; id: number; docKey: string; clock: SheetClock; sheetIndex: number; viewHash: string }
+  /** TEST-ONLY (the pool sends it only with `testHooks`): what the document retains for derived views. */
+  | { type: 'sheet-view-retained'; id: number; docKey: string }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -119,6 +124,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     // A derived view's order is cached here: its buffers are copied, never transferred.
     else if (m.type === 'sheet-view') result = await host.sheetView(m.docKey, m.clock, m.contentPolicy, m.job)
     else if (m.type === 'sheet-view-prep') result = await host.sheetViewPrep(m.docKey, m.clock, m.contentPolicy, m.sheetIndex, m.hangMs)
+    else if (m.type === 'sheet-view-release') { await host.releaseView(m.docKey, m.sheetIndex, m.clock, m.viewHash); result = null }
+    else if (m.type === 'sheet-view-retained') result = await host.retainedViewsForTests(m.docKey)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }

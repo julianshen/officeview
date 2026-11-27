@@ -501,6 +501,50 @@ export class DocumentHost {
     return { built }
   }
 
+  /**
+   * Final review R2: drops everything the entry retains for the derived view `viewHash` of `(sheetIndex, clock)`, once
+   * no server holder charges it: its `derivedViews` entry, the sized geometries and text views built over it, and the
+   * port's current state when that is the view (reset to the identity view inside the port's queue). Unknown entries
+   * and an unbuilt port are a no-op.
+   */
+  async releaseView(docKey: string, sheetIndex: number, clock: SheetClock, viewHash: string): Promise<void> {
+    const doc = this.docs.get(docKey)
+    if (!doc || viewHash === IDENTITY_HASH) return
+    const portKey = `${sheetIndex}|${clock.day}|${clock.timeZone}`
+    doc.derivedViews?.delete(`${portKey}|${viewHash}`)
+    const ours = (key: string) => key.startsWith(`${portKey}|`) && key.endsWith(`|${viewHash}`)
+    for (const key of [...doc.sizedGeometries?.keys() ?? []]) if (ours(key)) doc.sizedGeometries!.delete(key)
+    for (const [key, e] of [...doc.textViews?.entries() ?? []]) if (ours(key)) { doc.textViews!.delete(key); evictTextView(e) }
+    const entry = doc.viewPorts?.get(portKey)
+    if (!entry) return
+    // A failed build retains nothing.
+    await entry.port.then(({ port }) => port.forget(viewHash), () => undefined)
+  }
+
+  /** TEST-ONLY, side-effect free: what the entry retains for non-identity derived views (counts, and the distinct
+   * typed-array bytes of the cached derived views' orders, masks and replies). */
+  async retainedViewsForTests(docKey: string): Promise<{ derived: number; bytes: number; geometries: number; texts: number; ports: number }> {
+    const doc = this.docs.get(docKey)
+    if (!doc) return { derived: 0, bytes: 0, geometries: 0, texts: 0, ports: 0 }
+    const buffers = new Set<ArrayBufferLike>()
+    for (const d of doc.derivedViews?.values() ?? []) {
+      for (const b of d.order.bands) { buffers.add(b.sourceAtOffset.buffer); buffers.add(b.displayOffsetOfSource.buffer) }
+      buffers.add(d.visibility.words.buffer)
+      if (d.reply.mask) buffers.add(d.reply.mask.words.buffer)
+      for (const b of d.reply.bands) buffers.add(b.sourceAtOffset.buffer)
+    }
+    let bytes = 0
+    for (const b of buffers) bytes += b.byteLength
+    const derivedKey = (key: string) => !key.endsWith(`|${IDENTITY_HASH}`)
+    return {
+      derived: doc.derivedViews?.size ?? 0, bytes,
+      geometries: [...doc.sizedGeometries?.keys() ?? []].filter(derivedKey).length,
+      texts: [...doc.textViews?.keys() ?? []].filter(derivedKey).length,
+      // Ports whose current state is a derived view (not the identity view).
+      ports: (await Promise.all([...doc.viewPorts?.values() ?? []].map((e) => e.port.then(({ port }) => port.current() !== IDENTITY_HASH, () => false)))).filter(Boolean).length,
+    }
+  }
+
   /** One `sheet-view` job; `seen` gets each derived view the job reads from or puts in the cache. */
   private async viewJob(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', job: SheetViewJob, seen?: (d: DerivedView) => void): Promise<SheetViewReply> {
     const doc = this.docs.get(docKey)

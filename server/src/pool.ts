@@ -27,7 +27,7 @@ import type { SheetClock } from './sheet/clock'
 import type { RenderedTile, TileJob } from './sheet/tile'
 import type { SheetTextJob, SheetTextReply } from './sheet/text-ops'
 import type { SheetViewJob, SheetViewReply } from './sheet/view-ops'
-import { canonicalView, isIdentityView, orderBytes, type CanonicalView } from './sheet/view-spec'
+import { canonicalView, canonicalViewHash, isIdentityView, orderBytes, type CanonicalView } from './sheet/view-spec'
 import type { StreamSheetLayout } from '../../src/stream/sheet-wire'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
@@ -79,6 +79,8 @@ export type PoolSheetTextJob = { docRef: string; contentPolicy: 'visible-only' |
  * never loads the text engines). */
 export const SHEET_TEXT_JOB_BYTES = LAYOUT_JOB_BYTES + 16 * 1024 * 1024
 /** Stage 4c: a `sheet-view` job on the docRef's worker: one sort, filter, derive, value-list or range-detect op. */
+/** Stage 4c final review R2: whether the server holds derived view `viewHash` (see `Pool.retainViewsBy`). */
+export type ViewHeld = (docRef: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock, viewHash: string) => boolean
 export type PoolSheetViewJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; clock: SheetClock } & SheetViewJob
 /** The fixed part of a sheet-view job's admission charge (the key view, the port and the engine's working set). */
 export const SHEET_VIEW_JOB_BYTES = 16 * 1024 * 1024
@@ -112,6 +114,8 @@ const readsPort = (job: SheetViewJob) => job.op !== 'extent' || viewReadsPort(jo
 /** The port a prep builds, as its verdict is remembered. */
 const prepKey = (docRef: string, policy: string, sheetIndex: number, clock: SheetClock) => `${docRef}|${policy}|${sheetIndex}|${clock.day}|${clock.timeZone}`
 /** A sheet-view job's admission charge: `orderBytes(next view) + 16 MiB`. */
+/** R2: the derived views a `sheet-view` job may leave in its worker's cache. */
+const sheetViewCached = (job: SheetViewJob): Array<CanonicalView | undefined> => job.op === 'sort' || job.op === 'filter' ? [job.base, sheetViewNext(job)] : job.op === 'detect' ? [] : [job.view]
 export const sheetViewJobBytes = (job: SheetViewJob) => orderBytes(sheetViewNext(job)) + SHEET_VIEW_JOB_BYTES
 /** Stage 4c (Task 6 fix round 1): a tile or sheet-text job under a sort or filter view may re-derive that view's order in
  * the worker (a derived-view cache miss, not knowable here), so it is charged `orderBytes(view)` on top of its estimate;
@@ -472,7 +476,10 @@ export class Pool {
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
         if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, clock, signal)
-        const r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob })
+        let r: unknown
+        // R2: a view the server stopped holding while this job waited is not left cached by it.
+        try { r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob }) }
+        finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, clock, [job.view]) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetTextReply
       })
@@ -500,7 +507,11 @@ export class Pool {
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
         if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, view.sheetIndex, clock, signal)
-        const r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob })
+        let r: unknown
+        // R2: what the job may leave cached (its base and next view, or its view) is released unless still held; a
+        // sort or filter's next view is held by the caller from before the job until its commit ends.
+        try { r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob }) }
+        finally { await this.evictUnheld(slot, docRef, contentPolicy, view.sheetIndex, clock, sheetViewCached(view as SheetViewJob)) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetViewReply
       })
@@ -529,6 +540,56 @@ export class Pool {
     }
     if (signal?.aborted) throw new ShowCancelled()
   }
+  /**
+   * Stage 4c final review R2: whether the server still holds (charges) derived view `viewHash` of sheet `sheetIndex`
+   * of `docRef` under `policy` and `clock` (`DocumentLedger.hold`), by any socket server bound to this pool
+   * (`retainViewsBy`); with none bound, a worker's derived-view cache keeps its LRU behaviour alone.
+   */
+  private readonly viewHolders = new Set<ViewHeld>()
+  /** Fix R2: derived-view releases posted to workers. */
+  private viewReleases = 0
+  /** Binds the server's view holders (R2): from now on a derived view no holder charges is not left in a worker. */
+  retainViewsBy(held: ViewHeld): void { this.viewHolders.add(held) }
+  /**
+   * R2: the last holder of derived view `view` is gone: queued on the document's worker (FIFO behind the jobs already
+   * waiting there), the worker drops everything it retains for that view, unless the view is held again by then. A
+   * document not open there, a closed worker or a disposed pool retains nothing, and is a no-op.
+   */
+  async releaseView(docRef: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock, view: CanonicalView): Promise<void> {
+    const i = this.affinity.get(docRef)
+    if (this.disposed || i === undefined || isIdentityView(canonicalView(view))) return
+    const slot = this.slots[i]!
+    if (!slot.docs.has(`${docRef}|${policy}`)) return
+    await this.exclusive(slot, () => this.evictUnheld(slot, docRef, policy, sheetIndex, clock, [view])).catch(() => undefined)
+  }
+  /** Inside `slot`'s exclusive turn: posts a release for each of `views` (other than the identity view) the server
+   * holds no more. Never throws: a worker that died or was replaced retains nothing of the document. */
+  private async evictUnheld(slot: Slot, docRef: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock | undefined, views: ReadonlyArray<CanonicalView | null | undefined>): Promise<void> {
+    const docKey = slot.docs.get(`${docRef}|${policy}`)
+    if (!this.viewHolders.size || !clock || !docKey || slot.closed || this.disposed) return
+    const held = (viewHash: string) => [...this.viewHolders].some((h) => h(docRef, policy, sheetIndex, clock, viewHash))
+    const hashes = new Set<string>()
+    for (const v of views) if (v && !isIdentityView(canonicalView(v))) hashes.add(canonicalViewHash(v))
+    for (const viewHash of hashes) {
+      if (held(viewHash) || slot.closed) continue
+      this.viewReleases++
+      await this.post(slot, { type: 'sheet-view-release', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, sheetIndex, viewHash })
+    }
+  }
+  /** TEST-ONLY (honoured with `testHooks`): what `docRef`'s worker retains for derived views of the document. */
+  async retainedViewsForTests(docRef: string, policy: 'visible-only' | 'full'): Promise<{ derived: number; bytes: number; geometries: number; texts: number; ports: number } | undefined> {
+    const i = this.affinity.get(docRef)
+    if (!this.testHooks || i === undefined) return undefined
+    const slot = this.slots[i]!
+    return this.exclusive(slot, async () => {
+      const docKey = slot.docs.get(`${docRef}|${policy}`)
+      if (!docKey) return { derived: 0, bytes: 0, geometries: 0, texts: 0, ports: 0 }
+      const r = await this.post(slot, { type: 'sheet-view-retained', id: this.nextId++, docKey })
+      if (r === 'timeout' || !r.ok) throw new RenderFailed('retained views unavailable')
+      return r.result as { derived: number; bytes: number; geometries: number; texts: number; ports: number }
+    })
+  }
+
   /** Fix round 1: throws the remembered `SheetPrepRefused` of the port, if any (before any admission or worker).
    * Final review R3: every caller checks again once it holds the worker's exclusive slot, before reopening or
    * preparing, so a job that queued behind the refused prep does not run it again. */
@@ -559,7 +620,9 @@ export class Pool {
         if (signal?.aborted) throw new ShowCancelled()
         // Fix round 1: a tile under a view reads the port (its derived view); a cold one is prepared first.
         if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, job.clock!, signal)
-        const r = await this.runJob(slot, admitted, { type: 'tile', id: this.nextId++, docKey, job: tile, ...this.hooks(hangMs, crash) })
+        let r: unknown
+        try { r = await this.runJob(slot, admitted, { type: 'tile', id: this.nextId++, docKey, job: tile, ...this.hooks(hangMs, crash) }) }
+        finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, job.clock, [job.view]) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as RenderedTile
       })
@@ -981,7 +1044,7 @@ export class Pool {
       workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, probes: s.probes, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
       prep: { ...this.prep, bound: this.slots.length * SHOW_BUILD_BYTES },
-      retired: this.retired, recycled: this.recycled, encodes: this.encodes, sheetPreps: this.sheetPreps, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,
+      retired: this.retired, recycled: this.recycled, encodes: this.encodes, sheetPreps: this.sheetPreps, viewReleases: this.viewReleases, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,
       /** Fix round 2: probe runs spawned for workers and not yet exited (reaped), retired workers' included. */
       probesRunning: this.probesRunning(),
     }

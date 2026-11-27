@@ -354,6 +354,10 @@ export function createStreamServer(o: StreamServerOptions) {
   const forensicStats = { marked: 0, unmarked: 0, carriers: [] as number[], leased: 0 }
   const leaseFor = (sid: string) => { let l = leases.get(sid); if (!l) leases.set(sid, l = new ScratchLease(2, o.pool.admission.caps.perSessionQueue, (d) => { forensicStats.leased += d })); return l }
   const ledger = new DocumentLedger((docRef, policy) => o.pool.dropParsed(docRef, policy === 'full' ? 'full' : 'visible-only'), o.documentCacheBytes)
+  /** Final review R2: the key of a derived view's hold (`holdView`); sids with the same view share one charge. */
+  const viewHoldKey = (docRef: string, policy: string, sheetIndex: number, clock: SheetClock, viewHash: string) => `${docRef}|${policy}|${sheetIndex}|${clock.day}|${clock.timeZone}|${viewHash}`
+  // R2: a worker keeps a derived view only while a hold here charges it.
+  o.pool.retainViewsBy((docRef, policy, sheetIndex, clock, viewHash) => ledger.isHeld(viewHoldKey(docRef, policy, sheetIndex, clock, viewHash)))
   const pack = loadPack()
 
   const send = (ws: WS, msg: object) => { if (ws.data.phase !== 'closed') ws.send(JSON.stringify(msg)) }
@@ -1417,37 +1421,43 @@ export function createStreamServer(o: StreamServerOptions) {
       if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
       if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return deny('policy-refused')
       if (op.cancelled) return deny('cancelled')
-      let r: SheetViewReply
+      // R2: the next view is held from before the job (which leaves it cached in the worker) until this op ends, so
+      // the cached view is charged throughout, and released (and dropped there) when the op does not commit it.
+      const provisional = isIdentityView(next) ? undefined : holdView(sd, i, next)
+      if (provisional === null) return deny('view-state-limit')
       try {
-        r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, ...job }, undefined, AbortSignal.any([ws.data.gone.signal, op.abort.signal]))
-      } catch (e) {
+        let r: SheetViewReply
+        try {
+          r = await o.pool.sheetView(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, clock: sd.clock, ...job }, undefined, AbortSignal.any([ws.data.gone.signal, op.abort.signal]))
+        } catch (e) {
+          if (!alive()) return
+          if (!op.cancelled && e instanceof SheetPrepRefused) return row('view-refused') ? send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }) : refuse(ws, reqId, 'policy-refused')
+          return deny(op.cancelled ? 'cancelled' : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+        }
+        // The commit point: nothing below awaits, so no cancel, resize or other op can interleave.
         if (!alive()) return
-        if (!op.cancelled && e instanceof SheetPrepRefused) return row('view-refused') ? send(ws, { reqId, type: 'refused', code: 'view-refused', ...PREP_REFUSAL }) : refuse(ws, reqId, 'policy-refused')
-        return deny(op.cancelled ? 'cancelled' : e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
-      }
-      // The commit point: nothing below awaits, so no cancel, resize or other op can interleave.
-      if (!alive()) return
-      if (op.cancelled) return deny('cancelled')
-      if (viewGen !== sd.views.viewGen(i)) return deny('stale-view')
-      if (r.op !== 'view') return deny('policy-refused')
-      if ('refused' in r) {
-        if (!row('view-refused')) return refuse(ws, reqId, 'policy-refused')
-        return send(ws, { reqId, type: 'refused', code: 'view-refused', ...r.refused })
-      }
-      // Fail closed: only the view P3 says this op leaves is committed, and only an order that encodes is sent.
-      if (canonicalViewHash(r.view) !== canonicalViewHash(next)) return deny('policy-refused')
-      let parts: object[]
-      try { parts = orderParts(r.order, sheetId, viewGen) } catch { return deny('policy-refused') }
-      const gen = sd.views.commit(i, next, () => holdView(sd, i, next))
-      if (gen === 'view-state-limit') return deny('view-state-limit')
-      if (gen !== viewGen) for (const b of sd.tiles.batches.values()) if (b.sheetIndex === i) b.stopped = true
-      if (!row('ok')) return refuse(ws, reqId, 'policy-refused')
-      const viewKey = `${sheetId}|${gen}`
-      if (gen !== viewGen && !sd.tiles.views.has(viewKey)) {
-        try { audit.recordSheetView({ sid: s.sid, sheetId, viewGen: gen, spec: sheetViewSpec(next, sd.views.canonical(i)), clock: { day: sd.clock.day, timeZone: sd.clock.timeZone } }) } catch { return refuse(ws, reqId, 'policy-refused') }
-        sd.tiles.views.add(viewKey)
-      }
-      for (const p of restamp(parts, gen)) send(ws, { reqId, ...p })
+        if (op.cancelled) return deny('cancelled')
+        if (viewGen !== sd.views.viewGen(i)) return deny('stale-view')
+        if (r.op !== 'view') return deny('policy-refused')
+        if ('refused' in r) {
+          if (!row('view-refused')) return refuse(ws, reqId, 'policy-refused')
+          return send(ws, { reqId, type: 'refused', code: 'view-refused', ...r.refused })
+        }
+        // Fail closed: only the view P3 says this op leaves is committed, and only an order that encodes is sent.
+        if (canonicalViewHash(r.view) !== canonicalViewHash(next)) return deny('policy-refused')
+        let parts: object[]
+        try { parts = orderParts(r.order, sheetId, viewGen) } catch { return deny('policy-refused') }
+        const gen = sd.views.commit(i, next, () => holdView(sd, i, next))
+        if (gen === 'view-state-limit') return deny('view-state-limit')
+        if (gen !== viewGen) for (const b of sd.tiles.batches.values()) if (b.sheetIndex === i) b.stopped = true
+        if (!row('ok')) return refuse(ws, reqId, 'policy-refused')
+        const viewKey = `${sheetId}|${gen}`
+        if (gen !== viewGen && !sd.tiles.views.has(viewKey)) {
+          try { audit.recordSheetView({ sid: s.sid, sheetId, viewGen: gen, spec: sheetViewSpec(next, sd.views.canonical(i)), clock: { day: sd.clock.day, timeZone: sd.clock.timeZone } }) } catch { return refuse(ws, reqId, 'policy-refused') }
+          sd.tiles.views.add(viewKey)
+        }
+        for (const p of restamp(parts, gen)) send(ws, { reqId, ...p })
+      } finally { provisional?.() }
     } finally {
       if (owns(ws, s.sid)) rates.sheetBusy = false
     }
@@ -1457,8 +1467,17 @@ export function createStreamServer(o: StreamServerOptions) {
    * sheetIndex, clock, canonical hash)` so sids with the same view share one charge; its release, or null when the
    * ledger cannot fit it. */
   function holdView(sd: { doc: DocState; policy: EffectivePolicy; clock: SheetClock }, sheetIndex: number, view: CanonicalView): (() => void) | null {
-    const key = `${sd.doc.docRef}|${sd.policy.contentPolicy}|${sheetIndex}|${sd.clock.day}|${sd.clock.timeZone}|${canonicalViewHash(view)}`
-    return ledger.hold(key, orderBytes(view)) ? () => ledger.release(key) : null
+    const { docRef } = sd.doc, policy = sd.policy.contentPolicy, clock = sd.clock
+    const key = viewHoldKey(docRef, policy, sheetIndex, clock, canonicalViewHash(view))
+    if (!ledger.hold(key, orderBytes(view))) return null
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      ledger.release(key)
+      // R2: the last holder is gone, so its worker drops what it retains for the view (unless held again by then).
+      if (!ledger.isHeld(key)) void o.pool.releaseView(docRef, policy, sheetIndex, clock, view)
+    }
   }
 
   /**
