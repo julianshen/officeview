@@ -3,7 +3,7 @@ import type { CacheIdentity, ColumnRule, FilterRange, FilterSpec, OperationRefus
 import { reduceSortCommand } from '../../xlsx/view/sort'
 import { canonicalSearchKey, type ColumnClassification, type FilterContext } from '../../xlsx/view/filter'
 import { detectOperationRange, admitSortRange, type RangeDetection, type RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
-import { ValueSelectionDraft, ValueIndexError, VALUE_LABEL_LIMIT, type ValueSearchResult, type ValueColumnSource, type ValueEntryView, type ValueIndexCache, type ValueIndexIdentity, type ValueLabeler, type ValueSelectedCount, type ValueSelectionState } from '../../xlsx/view/valueIndex'
+import { ValueSelectionDraft, ValueIndexError, VALUE_LABEL_LIMIT, VALUE_PAGE_LIMIT, type ValueSearchResult, type ValueColumnSource, type ValueEntryView, type ValueIndexCache, type ValueIndexIdentity, type ValueLabeler, type ValueSelectedCount, type ValueSelectionState } from '../../xlsx/view/valueIndex'
 import type { ValueRunStore } from '../../xlsx/view/valueRuns'
 
 export interface ControlSnapshot {
@@ -36,6 +36,10 @@ export interface ValuesDraftPort {
   cancel(): void
   /** A stream draft whose list the server re-listed (`stale-filter-values`): the new list's first page, once. */
   relisted?(): DraftPage | null
+  /** The streaming server's display-text grouping (stream final review R1): up to VALUE_PAGE_LIMIT entries of the
+   * whole universe (or of `query`'s search) from ordinal (rank) `query.offset`, past the display limit. Charged like a
+   * read page; the caller settles it. Local drafts only. */
+  universe?(query: DraftQuery, signal: AbortSignal): Promise<{ entries: readonly ValueEntryView[]; total: number }>
 }
 export interface ControlsClient {
   owner(): CacheIdentity
@@ -174,7 +178,8 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
         } finally { account?.release() }
       }
       let currentQuery: DraftQuery = { text: '', offset: 0 }
-      const read = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<DraftPage> => {
+      /** Builds the index, prepares the draft and runs `query`'s search, as every read does before its page. */
+      const ensure = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<void> => {
         check(input)
         await index.build({ signal: input, onProgress: p => progress?.({ ...p, message: 'Loading all values' }) })
         check(input)
@@ -188,11 +193,18 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
           if (replaced && replaced !== search) dropSearch(replaced)
         }
         check(input)
+      }
+      const read = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<DraftPage> => {
+        await ensure(query, input, progress)
         currentQuery = query
         return page()
       }
       return {
         identity: domain.identity, read,
+        async universe(query, input) {
+          await ensure(query, input)
+          return index.universePage({ offset: query.offset, limit: VALUE_PAGE_LIMIT, search: canonicalSearchKey(query.text, options.context().locale) ? search : undefined, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}) })
+        },
         async change(action, query, input) {
           await read(query, input)
           if (action.kind === 'toggle') draft.toggle(action.ordinal, action.selected)

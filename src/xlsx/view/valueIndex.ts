@@ -928,6 +928,14 @@ export class ValueIndex implements LaneAccount {
     const end = Math.min(displayed, offset + limit), account = request.allocation?.reserve()
     account?.charge(160 + Math.max(0, end - offset) * (160 + VALUE_LABEL_LIMIT * 2))
     try {
+    const entries = this.entriesBetween(offset, end, search, label, account)
+    const result = { entries, total, displayed, truncated: total > VALUE_DISPLAY_LIMIT, completeness: this.completeness }
+    if (account) adoptAllocation(account, result)
+    return result
+    } finally { account?.release() }
+  }
+  /** The entries at ordinals (or, for a search, ranks) `[offset, end)`. */
+  private entriesBetween(offset: number, end: number, search: ValueSearchResult | undefined, label: ValueLabeler, account?: LaneAccount): ValueEntryView[] {
     const entries: ValueEntryView[] = []
     if (!search) for (let ordinal = offset; ordinal < end; ordinal++) entries.push(this.view(ordinal, label, account))
     else if (offset < end) {
@@ -945,9 +953,27 @@ export class ValueIndex implements LaneAccount {
         }
       }
     }
-    const result = { entries, total, displayed, truncated: total > VALUE_DISPLAY_LIMIT, completeness: this.completeness }
-    if (account) adoptAllocation(account, result)
-    return result
+    return entries
+  }
+  /** A bounded page of the whole universe (or of a search result), in ordinal order, past the display limit: the
+   * streaming server groups entries by display text over every value (stream final review R1), so its own list cap
+   * applies to the groups, never to the raw values. `limit` is at most VALUE_PAGE_LIMIT; `offset` is an ordinal (a rank
+   * in the result for a search). Charged and adopted as `page` is. */
+  universePage(request: ValuePageRequest): { entries: readonly ValueEntryView[]; total: number } {
+    this.assertLive()
+    const { offset, limit, search } = request
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(limit) || offset < 0 || limit < 0 || limit > VALUE_PAGE_LIMIT) {
+      throw new ValueIndexError('invalid-cursor', 'Invalid value page request')
+    }
+    if (search) this.ownsSearch(search)
+    const label = request.label ?? defaultLabel
+    const total = search ? search.count : this.count
+    const end = Math.min(total, offset + limit), account = request.allocation?.reserve()
+    account?.charge(160 + Math.max(0, end - offset) * (160 + VALUE_LABEL_LIMIT * 2))
+    try {
+      const result = { entries: this.entriesBetween(offset, end, search, label, account), total }
+      if (account) adoptAllocation(account, result)
+      return result
     } finally { account?.release() }
   }
   /** Searches every merged value with the S8.1 host-collated `contains`

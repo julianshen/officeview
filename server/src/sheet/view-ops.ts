@@ -15,9 +15,12 @@
  *   authored collapsed row (`collapsedRows`, the snapshot geometry's zero-size row segments). Under `'full'` the local
  *   mask stands.
  * - Value lists (P6) merge local entries by full display text, in local order; an entry's id is its position in the
- *   merged unsearched list. A values rule's positions expand back to local ordinals through the same merge, and a
- *   fresh draft builds the local `ValuesFilter`. No committed key run outlives its job: every draft is closed when its
- *   op ends.
+ *   merged unsearched list. Final review R1: the merge reads every local value (`ValuesDraftPort.universe`), so the
+ *   public cap (`VALUE_DISPLAY_LIMIT`) bounds the merged entries, never the raw values, and an entry stands for every
+ *   value painting its text. A values rule's positions expand back to every local ordinal of their entries through the
+ *   same merge (a value of an unlisted entry is selected iff the rule is `exclude`), and a fresh draft builds the local
+ *   `ValuesFilter`. A rule whose local draft needs more than `VALUES_RULE_FLIPS` toggles in both forms is refused
+ *   `resource-limit`. No committed key run outlives its job: every draft is closed when its op ends.
  */
 import type { CacheIdentity, ColumnRule, FilterRange, FilterSpec, GridSelection, OperationRefusal, RowOrder, SheetView, SortSpec, TypedCondition } from '../../../src/xlsx/view/contracts'
 import type { SourceRect } from '../../../src/xlsx/view/coordinates'
@@ -29,7 +32,7 @@ import { MainMemoryLedger } from '../../../src/xlsx/view/mainLedger'
 import { createIdentityOrder } from '../../../src/xlsx/view/order'
 import { emptyGridSelection } from '../../../src/xlsx/view/selection'
 import { createObjectWorkbookSource } from '../../../src/xlsx/view/source'
-import { VALUE_DISPLAY_LIMIT } from '../../../src/xlsx/view/valueIndex'
+import { VALUE_DISPLAY_LIMIT, type ValueEntryView } from '../../../src/xlsx/view/valueIndex'
 import { CompactRowVisibility, createRowVisibility, visibilityFromHidden } from '../../../src/xlsx/view/visibility'
 import type { WorkbookSource } from '../../../src/worker/viewerSession'
 import type { SheetGeometryResult } from '../../../src/xlsx/view/viewport'
@@ -125,50 +128,63 @@ function gridSelection(s: WireSelection): GridSelection {
   }
 }
 
-/** One merged entry: its full display text, local's label, the local ordinals it merges, and whether all are errors. */
-interface Merged { text: string; label: string; ordinals: number[]; error: boolean }
-interface MergedList { entries: Merged[]; idOf: Map<string, number>; truncated: boolean }
+/** One merged entry: its full display text, local's label, and whether all its values are errors. */
+interface Merged { text: string; label: string; error: boolean }
+/** `groupOf[ordinal]`: the merged id of every local value, -1 for a value whose text has no entry (past the cap). */
+interface MergedList { entries: Merged[]; idOf: Map<string, number>; truncated: boolean; groupOf: Int32Array }
 
 /** Ends the main-ledger lease of a draft page the job has consumed (its entries are copied into the merged list). */
 type Settle = (page: object) => void
 
-/** Every displayable local entry of `draft`, merged by full display text in local (first-occurrence) order. */
-async function mergedList(draft: ValuesDraftPort, signal: AbortSignal, settle: Settle): Promise<MergedList> {
-  const entries: Merged[] = [], idOf = new Map<string, number>()
-  let offset = 0, displayed = 0, truncated = false
+/**
+ * Final review R1: the most local toggles one values rule may take (each a draft patch). The rule takes the form
+ * (local base none or all) that flips fewer values; when both flip more, it is refused `resource-limit`. Equal to the
+ * cap on listed entries, the most toggles a rule took before values were grouped over the whole universe.
+ */
+export const VALUES_RULE_FLIPS = VALUE_DISPLAY_LIMIT
+/** A values rule over more toggles than `VALUES_RULE_FLIPS` in both forms. */
+class ValuesRuleTooLarge extends Error { constructor() { super('values rule past its toggle bound'); this.name = 'ValuesRuleTooLarge' } }
+
+/** Every page of the draft's whole universe (or of `query`'s search), in ordinal (rank) order, each settled once read. */
+async function eachUniverseEntry(draft: ValuesDraftPort, query: Omit<DraftQuery, 'offset'>, signal: AbortSignal, settle: Settle, visit: (e: ValueEntryView, total: number) => Promise<void> | void): Promise<void> {
+  if (!draft.universe) throw new SheetViewFailed('values draft has no universe')
+  let offset = 0, total = 0
   do {
-    const page = await draft.read({ text: '', offset }, signal)
-    displayed = page.displayed; truncated = page.truncated
-    for (const e of page.entries) {
-      const text = e.labelTruncated ? await draft.inspect(e.ordinal, signal) : e.label
-      let id = idOf.get(text)
-      if (id === undefined) { id = entries.length; idOf.set(text, id); entries.push({ text, label: e.label, ordinals: [], error: true }) }
-      const m = entries[id]!
-      m.ordinals.push(e.ordinal)
-      if (e.kind !== 'error') m.error = false
-    }
-    settle(page)
+    const page = await draft.universe({ ...query, offset }, signal)
+    if (offset > 0 && page.total !== total) { settle(page); throw new SheetViewFailed('values universe changed') }
+    total = page.total
+    try { for (const e of page.entries) await visit(e, total) } finally { settle(page) }
     if (page.entries.length === 0) break
     offset += page.entries.length
-  } while (offset < displayed)
-  return { entries, idOf, truncated }
+  } while (offset < total)
 }
 
-/** The merged ids `search` matches, ascending. */
+/** Every local value of `draft`, merged by full display text in local (first-occurrence) order; at most
+ * `VALUE_DISPLAY_LIMIT` entries, past which a new text is unlisted and the list is `truncated`. */
+async function mergedList(draft: ValuesDraftPort, signal: AbortSignal, settle: Settle): Promise<MergedList> {
+  const entries: Merged[] = [], idOf = new Map<string, number>()
+  let truncated = false, groupOf = new Int32Array(0)
+  await eachUniverseEntry(draft, { text: '' }, signal, settle, async (e, total) => {
+    if (groupOf.length !== total) groupOf = new Int32Array(total).fill(-1)
+    const text = e.labelTruncated ? await draft.inspect(e.ordinal, signal) : e.label
+    let id = idOf.get(text)
+    if (id === undefined) {
+      if (entries.length >= VALUE_DISPLAY_LIMIT) { truncated = true; return }
+      id = entries.length; idOf.set(text, id); entries.push({ text, label: e.label, error: true })
+    }
+    groupOf[e.ordinal] = id
+    if (e.kind !== 'error') entries[id]!.error = false
+  })
+  return { entries, idOf, truncated, groupOf }
+}
+
+/** The merged ids `search` matches (an entry with any matching value), ascending. */
 async function searchIds(draft: ValuesDraftPort, list: MergedList, search: { text: string; wildcards: boolean }, signal: AbortSignal, settle: Settle): Promise<number[]> {
   const ids = new Set<number>()
-  let offset = 0, displayed = 0
-  do {
-    const page = await draft.read({ text: search.text, wildcards: search.wildcards, offset }, signal)
-    displayed = page.displayed
-    for (const e of page.entries) {
-      const id = list.idOf.get(e.labelTruncated ? await draft.inspect(e.ordinal, signal) : e.label)
-      if (id !== undefined) ids.add(id)
-    }
-    settle(page)
-    if (page.entries.length === 0) break
-    offset += page.entries.length
-  } while (offset < displayed)
+  await eachUniverseEntry(draft, { text: search.text, wildcards: search.wildcards }, signal, settle, (e) => {
+    const id = list.groupOf[e.ordinal] ?? -1
+    if (id >= 0) ids.add(id)
+  })
   return [...ids].sort((a, b) => a - b)
 }
 
@@ -266,12 +282,18 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
     drafts.push(draft)
     const list = await mergedList(draft, signal, settle)
     const include = rule.mode === 'include'
-    settle(await draft.change({ kind: 'all', selected: !include, includeBlanks: false }, QUIET, signal))
-    for (const position of rule.positions) {
-      const entry = list.entries[position]
-      if (!entry) throw new SheetViewFailed('values position past its list')
-      for (const ordinal of entry.ordinals) settle(await draft.change({ kind: 'toggle', ordinal, selected: include }, QUIET, signal))
-    }
+    const chosen = new Set(rule.positions)
+    for (const position of chosen) if (!list.entries[position]) throw new SheetViewFailed('values position past its list')
+    // R1: every local value of a chosen entry, whatever its raw value; a value of an unlisted entry goes with the mode.
+    const selected = (ordinal: number) => { const id = list.groupOf[ordinal]!; return id < 0 ? !include : include === chosen.has(id) }
+    const n = list.groupOf.length
+    let on = 0
+    for (let o = 0; o < n; o++) if (selected(o)) on++
+    // The rule's own form first (local base: none for include, all for exclude), else the other, within the bound.
+    const base = (include ? on : n - on) <= VALUES_RULE_FLIPS ? !include : (include ? n - on : on) <= VALUES_RULE_FLIPS ? include : undefined
+    if (base === undefined) throw new ValuesRuleTooLarge()
+    settle(await draft.change({ kind: 'all', selected: base, includeBlanks: false }, QUIET, signal))
+    for (let o = 0; o < n; o++) if (selected(o) !== base) settle(await draft.change({ kind: 'toggle', ordinal: o, selected: !base }, QUIET, signal))
     settle(await draft.change({ kind: 'blanks', selected: rule.blanks }, QUIET, signal))
     return draft.candidate(signal)
   }
@@ -289,7 +311,10 @@ export async function openSheetViewPort(inputs: PortInputs): Promise<SheetViewPo
   const filterOp = async (f: ResolvedFilter | null, signal: AbortSignal): Promise<ControlResult> => {
     const drafts: ValuesDraftPort[] = []
     try { return await client.filter(owner(), f ? await localFilter(f, drafts, signal) : null, signal) }
-    finally { for (const d of drafts) d.cancel() }
+    catch (e) {
+      if (e instanceof ValuesRuleTooLarge) return { kind: 'refused', refusal: { reason: 'resource-limit', message: e.message } }
+      throw e
+    } finally { for (const d of drafts) d.cancel() }
   }
   const accepted = (r: ControlResult, step: string) => {
     if (r.kind === 'committed' || r.kind === 'unchanged') return
