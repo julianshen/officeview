@@ -7,7 +7,11 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { buildXlsx, type XlsxCellSpec, type XlsxSheetSpec } from '../../src/testdata/ooxml-builders'
-import { decodeDetection, decodeSheetOrder, decodeValuesPage, type SheetOrder, type WireDetection, type WireRange, type WireSelection } from '../../src/stream/sheet-wire'
+import { decodeDetection, decodeSheetLayout, decodeSheetOrder, decodeValuesPage, type SheetOrder, type StreamSheetLayout, type WireDetection, type WireRange, type WireSelection } from '../../src/stream/sheet-wire'
+import { MAX_ROWS } from '../../src/xlsx/view/coordinates'
+import { createIdentityOrder, createRowOrder } from '../../src/xlsx/view/order'
+import { streamSheetGeometry } from '../../src/xlsx/view/streamGeometry'
+import { CompactRowVisibility } from '../../src/xlsx/view/visibility'
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { DocumentHost } from '../src/render'
@@ -63,6 +67,18 @@ function shownSources(order: SheetOrder, r0: number, r1: number, authoredHidden:
   const out = new Set<number>()
   for (let d = r0; d <= r1; d++) { const s = shownAt(order, d, authoredHidden); if (s !== null) out.add(s) }
   return out
+}
+
+/** The display-slot row sizes a client draws for `order` over `layout` (as `StreamWorkbook` builds its view). */
+function clientRows(layout: StreamSheetLayout, order: SheetOrder) {
+  const rowOrder = order.bands.length ? createRowOrder(order.bands.map((b) => ({ r0: b.r0, r1: b.r1, sourceAtOffset: b.sourceAtOffset }))) : createIdentityOrder()
+  const words = new Uint32Array(MAX_ROWS / 32).fill(0xffffffff)
+  const set = (slot: number, on: boolean) => { words[slot >>> 5] = on ? (words[slot >>> 5]! | (1 << (slot & 31))) >>> 0 : (words[slot >>> 5]! & ~(1 << (slot & 31))) >>> 0 }
+  const authored = (row: number) => layout.collapsedRows.some((r) => r.start <= row && row <= r.end)
+  for (let slot = 0; slot < 64; slot++) set(slot, !authored(rowOrder.displayToSource(slot)))
+  const m = order.mask
+  if (m) for (let i = 0; i <= m.r1 - m.r0; i++) set(m.r0 + i, ((m.words[i >>> 5]! >>> (i & 31)) & 1) === 1)
+  return { order: rowOrder, rows: streamSheetGeometry(layout, { order: rowOrder, visibility: new CompactRowVisibility(MAX_ROWS, words) }).metrics.rows }
 }
 
 const AUTO_HIDDEN = new Set(FILTER_AUTO_HIDDEN.hidden.map((r) => r - 1))
@@ -277,6 +293,12 @@ async function serverOn(doc: Uint8Array) {
     list: async (viewGen: number, range: WireRange, col: number) => { const a = await one(send('filter-values', { viewGen, range, col })); if (a.type !== 'filter-values-result') throw new Error(JSON.stringify(a)); return decodeValuesPage(a) },
     sort: (viewGen: number, body: Record<string, unknown>) => ordered(send('sheet-sort', { viewGen, ...body })),
     filter: (viewGen: number, body: Record<string, unknown>) => ordered(send('sheet-filter', { viewGen, ...body })),
+    async layout(): Promise<StreamSheetLayout> {
+      clock.t += 100
+      const r = await c.sheetLayout(++rq, '0')
+      if (r.end) throw new Error(`layout refused: ${JSON.stringify(r.end)}`)
+      return decodeSheetLayout(r.parts.map((p) => p.text)) as StreamSheetLayout
+    },
     async stop() { c.close(); await h.stop() },
   }
 }
@@ -302,8 +324,12 @@ describe('see-through on the socket (visible-only)', () => {
     const kept = shownSources(filtered.order!, 1, 19, AUTO_HIDDEN)
     for (const r of [3, 6, 9, 14]) expect({ r, kept: kept.has(r) }).toEqual({ r, kept: false })
     expect(kept.size).toBe(19 - 4)
-    // The wire audit for these answers: no hidden row's text.
+    // Column A holds the hidden rows' text (`drop-4`, `drop-7`): its list is on the wire too.
+    const keys = (await s.list(2, d.range, 0)).items.map((i) => i.text)
+    expect(keys).toContain('keep-2')
+    // The wire audit for these answers: no hidden row's text, while a visible row's is captured.
     const all = s.texts.join('\n')
+    expect(all).toContain('keep-2')
     for (const r of FILTER_AUTO_HIDDEN.hidden) expect(all).not.toContain(`drop-${r}`)
     expect(all).not.toContain('drop')
     await s.stop()
@@ -318,8 +344,16 @@ describe('see-through on the socket (visible-only)', () => {
     // The `hidden="1"` row stays out of the mask. The `ht="0"` row is collapsed by its size, which travels with the
     // row (no filter, so no C1 on the mask), as locally.
     expect(shownSources(sorted.order!, 1, SORT_GRID.rows - 1, GRID_HIDDEN).has(SORT_GRID.hiddenRow)).toBe(false)
+    // As the client draws the sorted view: the `hidden="1"` row keeps a zero-height slot. The `ht="0"` row is not in
+    // `baseHidden`, so the sort moves it (blank keys sort last) into a slot of full height, where its withheld cells
+    // draw blank (Task 6); none of its text reaches the wire (below).
+    const { order, rows } = clientRows(await s.layout(), sorted.order!)
+    expect(rows.size(order.sourceToDisplay(SORT_GRID.hiddenRow))).toBe(0)
+    expect(order.sourceToDisplay(SORT_GRID.zeroHeightRow)).toBe(SORT_GRID.rows - 1)
     const page = await s.list(1, d.range, 0)
     const all = s.texts.join('\n') + JSON.stringify(page.items)
+    // Live capture: a visible row's text is there; the hidden rows' are not.
+    expect(all).toContain('"N2"')
     for (const r of GRID_HIDDEN) expect(all).not.toContain(`"N${r + 1}"`)
     await s.stop()
   }, 30_000)
