@@ -54,8 +54,13 @@ export interface MidnightCaptureDeps {
   /** Runs one script inside `tell application "Microsoft Excel"`. */
   excel(lines: string[]): string
   /** Opens the workbook, calling `beforeEach` before the `open` and before every poll of Excel while it opens (it throws to abort). */
+  /** The full paths (POSIX) of every workbook open in Excel. */
+  openWorkbookPaths(): string[]
+  /** Opens the workbook at `path` and returns its name once a workbook with exactly that full path is open; `beforeEach`
+   * runs before the `open` and before every poll (it throws to abort). */
   openWorkbook(path: string, beforeEach: (what: string) => void): string
-  closeWorkbook(name: string): void
+  /** Closes, without saving, the workbook whose full path is `path`, and nothing else (none open: nothing). */
+  closeWorkbook(path: string): void
   /** Screenshot of the main display to `path` (no interaction with any application). */
   screenshot(path: string): void
   readFile(path: string): Uint8Array
@@ -225,7 +230,8 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
   const shots = c.acrossMidnight.screenshotPaths
   const release = deps.keepAwake()
   let workbook: string | undefined
-  let openAttempted = false
+  let openSent = false
+  const target = resolve(REPO_ROOT, c.saved)
   try {
     await deps.sleepUntil(at.setup)
     // Fix round 1 (P2): idle and lock are checked before every Excel interaction of the setup: the open, each poll while
@@ -236,9 +242,13 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
       if (!(idle >= MIDNIGHT_MIN_IDLE_SECONDS)) throw new MidnightAbort(`setup: the user is active (idle ${idle}s < ${MIDNIGHT_MIN_IDLE_SECONDS}s) before ${what}`)
       if (localDateOf(deps.now(), zone) !== D) throw new MidnightAbort(`setup: the local date changed (before ${what})`)
     }
-    // The open may have been sent before an abort: the workbook is then closed by name too.
-    openAttempted = true
-    workbook = deps.openWorkbook(resolve(REPO_ROOT, c.saved), guard)
+    // Fix round 2: refuse when a workbook of the same name is already open (it could be addressed or closed instead of
+    // the fixture); only the workbook this run opened (by full path, once the open was sent) is ever closed.
+    guard('the open-workbook check')
+    const name = target.split('/').pop()!
+    const clash = deps.openWorkbookPaths().find(p => p.split('/').pop() === name)
+    if (clash !== undefined) throw new MidnightAbort(`setup: a workbook named ${name} is already open (${clash}); close it first`)
+    workbook = deps.openWorkbook(target, what => { guard(what); if (what === 'the open') openSent = true })
     guard('the setup script')
     deps.excel(midnightSetupScript(workbook, c.sheet))
     deps.log(`setup done at ${new Date(deps.now()).toISOString()}`)
@@ -266,10 +276,17 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
     }
     return { capture, sidecar }
   } finally {
-    const opened = workbook ?? (openAttempted ? c.saved.split('/').pop()! : undefined)
-    if (opened) { try { deps.closeWorkbook(opened) } catch (e) { deps.log(`close failed: ${String(e)}`) } }
+    if (openSent) { try { deps.closeWorkbook(target) } catch (e) { deps.log(`close failed: ${String(e)}`) } }
     release()
   }
+}
+
+/** AppleScript lines setting `p` to the POSIX full path of workbook `w` (Excel reports HFS or POSIX). */
+const POSIX_OF_W = ['set p to (full name of w as string)', 'if p does not start with "/" then set p to POSIX path of p']
+function readWorkbookPaths(): string[] {
+  const out = execFileSync('osascript', ['-e', 'tell application "Microsoft Excel"', '-e', 'set out to {}', '-e', 'repeat with w in workbooks',
+    ...POSIX_OF_W.flatMap(l => ['-e', l]), '-e', 'set end of out to p', '-e', 'end repeat', '-e', `set AppleScript's text item delimiters to "|||"`, '-e', 'return out as string', '-e', 'end tell'], { encoding: 'utf8', timeout: 30_000 }).trim()
+  return out === '' ? [] : out.split('|||')
 }
 
 /** The production dependencies (real clock, osascript, ioreg, screencapture, caffeinate). */
@@ -287,6 +304,7 @@ export function realMidnightDeps(): MidnightCaptureDeps {
     },
     displayLocked: () => isDisplayLocked(),
     excel: lines => execFileSync('osascript', ['-e', 'tell application "Microsoft Excel"', ...lines.flatMap(l => ['-e', l]), '-e', 'end tell'], { encoding: 'utf8', timeout: 120_000 }).trim(),
+    openWorkbookPaths: () => readWorkbookPaths(),
     openWorkbook: (path, beforeEach) => {
       const name = path.split('/').pop()!
       beforeEach('the open')
@@ -294,13 +312,15 @@ export function realMidnightDeps(): MidnightCaptureDeps {
       const deadline = Date.now() + 60_000
       for (;;) {
         beforeEach('a poll of Excel while it opens the workbook')
-        const names = execFileSync('osascript', ['-e', 'tell application "Microsoft Excel" to get name of every workbook'], { encoding: 'utf8' }).trim()
-        if (names.split(', ').includes(name)) return name
+        if (readWorkbookPaths().includes(path)) return name
         if (Date.now() > deadline) throw new MidnightAbort(`open ${name} timed out`)
         execFileSync('sleep', ['0.5'])
       }
     },
-    closeWorkbook: name => { execFileSync('osascript', ['-e', `tell application "Microsoft Excel" to close workbook "${q(name)}" saving no`], { timeout: 30_000 }) },
+    closeWorkbook: path => {
+      execFileSync('osascript', ['-e', 'tell application "Microsoft Excel"', '-e', 'repeat with w in workbooks', ...POSIX_OF_W.flatMap(l => ['-e', l]),
+        '-e', `if p is "${q(path)}" then`, '-e', 'close w saving no', '-e', 'exit repeat', '-e', 'end if', '-e', 'end repeat', '-e', 'end tell'], { timeout: 30_000 })
+    },
     screenshot: path => { mkdirSync(dirname(path), { recursive: true }); execFileSync('screencapture', ['-x', '-m', '-t', 'png', path], { timeout: 30_000 }) },
     readFile: path => new Uint8Array(readFileSync(path)),
     writeFile: (path, data) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data) },

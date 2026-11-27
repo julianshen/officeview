@@ -14,6 +14,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { deflateSync } from 'node:zlib'
+import { resolve } from 'node:path'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { prepareCfTextScope } from '../src/xlsx/cf/text'
@@ -205,11 +206,12 @@ function screenPng(tokens: Readonly<Record<string, MidnightToken>>, markers = tr
 }
 const ARGB_RGB16 = (argb: string) => `{${[0, 1, 2].map(i => parseInt(argb.slice(2 + 2 * i, 4 + 2 * i), 16) * 257).join(', ')}}`
 /** An Excel stand-in: answers the readout from the world of the current instant (`world()`), recording every script. */
-function fakeRun(options: { world: (now: number) => MidnightWorld; idle?: (now: number) => number; startAt?: number; overshootInstant2?: number; markers?: boolean }) {
+function fakeRun(options: { world: (now: number) => MidnightWorld; idle?: (now: number) => number; startAt?: number; overshootInstant2?: number; markers?: boolean; preexisting?: readonly string[] }) {
   const D = midnightSerial(NIGHT)
   let clock = options.startAt ?? at(NIGHT, '22:00')
   const scripts: Array<{ at: number; lines: string[] }> = [], shots: Array<{ at: number; path: string }> = [], files = new Map<string, Uint8Array>(), log: string[] = []
   let opened = 0, closed = 0, recalculated = false
+  const closedPaths: string[] = [], openPaths: string[] = [...(options.preexisting ?? [])]
   const deps: MidnightCaptureDeps = {
     now: () => clock,
     sleepUntil: async t => { if (t > clock) clock = t + (t === midnightSchedule(NIGHT, ZONE).instant2 ? options.overshootInstant2 ?? 0 : 0) },
@@ -225,15 +227,16 @@ function fakeRun(options: { world: (now: number) => MidnightWorld; idle?: (now: 
       const p = midnightPredictions(w)
       return [`nowBefore:::${now}:::`, ...MIDNIGHT_CELLS.map(c => `${c.ref}:::v:::${p[c.ref] === 'none' ? 'missing value' : ARGB_RGB16(MIDNIGHT_TOKEN_FILL[p[c.ref] as 'red'])}`), `${MIDNIGHT_SENTINELS.today}:::${D}:::`, `nowAfter:::${now}:::`].join('|||')
     },
-    openWorkbook: (_path, beforeEach) => { beforeEach('the open'); opened++; clock += 5_000; beforeEach('a poll of Excel while it opens the workbook'); clock += 5_000; return `${MIDNIGHT_CASE_ID}.xlsx` },
-    closeWorkbook: () => { closed++ },
+    openWorkbookPaths: () => [...openPaths],
+    openWorkbook: (path, beforeEach) => { beforeEach('the open'); opened++; openPaths.push(path); clock += 5_000; beforeEach('a poll of Excel while it opens the workbook'); clock += 5_000; return `${MIDNIGHT_CASE_ID}.xlsx` },
+    closeWorkbook: path => { closed++; closedPaths.push(path) },
     screenshot: path => { shots.push({ at: clock, path }); clock += 1_000; files.set(path, screenPng(midnightPredictions(recalculated ? MIDNIGHT_INSTANT3 : options.world(clock)), options.markers ?? true)) },
     readFile: path => files.get(path) ?? new Uint8Array(Buffer.from('saved-workbook')),
     writeFile: () => {},
     keepAwake: () => () => { log.push('released') },
     log: m => { log.push(m) },
   }
-  return { deps, scripts, shots, log, counts: () => ({ opened, closed }) }
+  return { deps, scripts, shots, log, closedPaths, counts: () => ({ opened, closed }) }
 }
 
 describe('the capture run (dry)', () => {
@@ -263,6 +266,8 @@ describe('the capture run (dry)', () => {
     expect(run.shots[2]!.at).toBeLessThan(run.scripts[2]!.at)
     expect(run.scripts[2]!.at).toBeGreaterThanOrEqual(midnight)
     expect(run.counts()).toEqual({ opened: 1, closed: 1 })
+    // Only the workbook this run opened, by its full path.
+    expect(run.closedPaths).toEqual([resolve(__dirname, '..', c.saved)])
     expect(run.log).toContain('released')
   })
   it('refuses to start on another night than the case was built for, or after the setup time; opens nothing', async () => {
@@ -291,6 +296,18 @@ describe('the capture run (dry)', () => {
     await expect(runMidnightCapture(c, late.deps)).rejects.toThrow(/setup: the user is active.*setup script/)
     expect(late.scripts.length).toBe(0)
     expect(late.counts()).toEqual({ opened: 1, closed: 1 })
+  })
+  it('refuses, opening and closing nothing, when a workbook of the same name is already open (fix round 2)', async () => {
+    const run = fakeRun({ world: () => MIDNIGHT_INSTANT1, preexisting: [`/Users/someone/Documents/${MIDNIGHT_CASE_ID}.xlsx`] })
+    await expect(runMidnightCapture(c, run.deps)).rejects.toThrow(/already open/)
+    expect(run.counts()).toEqual({ opened: 0, closed: 0 })
+    expect(run.scripts.length).toBe(0)
+  })
+  it('a guard failure before the open closes nothing (fix round 2)', async () => {
+    const setup = midnightSchedule(NIGHT, ZONE).setup
+    const run = fakeRun({ world: () => MIDNIGHT_INSTANT1, idle: now => (now >= setup ? 3 : 3600) })
+    await expect(runMidnightCapture(c, run.deps)).rejects.toThrow(/user is active/)
+    expect(run.counts()).toEqual({ opened: 0, closed: 0 })
   })
   it('aborts when instant 2 does not fall on exactly the next local day', async () => {
     const run = fakeRun({ world: () => MIDNIGHT_INSTANT1, overshootInstant2: 86_400_000 })
