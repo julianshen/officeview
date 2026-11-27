@@ -515,6 +515,87 @@ function a1RangeBounds(ref: string): { minRow: number; maxRow: number; minCol: n
   return { minRow: Math.min(a[0], b[0]), maxRow: Math.max(a[0], b[0]), minCol: Math.min(a[1], b[1]), maxCol: Math.max(a[1], b[1]) }
 }
 
+const CLOCK_TAINT_VOLATILE = new Set(['TODAY', 'NOW', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'INDIRECT', 'OFFSET', 'CELL', 'INFO'])
+/**
+ * The across-midnight follow-up: the cells one formula reads, as rectangles by lower-cased sheet name, or `'unknown'` when
+ * any reference cannot be expanded (fail closed). Resolved: cells, ranges, whole rows and columns, 3D runs over known
+ * sheets, unions and intersections (both sides), spill references (the anchor: a tainted owner taints its output, so its
+ * readers follow), defined names (their text, recursively, in their own scope), and table references (the whole table
+ * extent, headers and totals included; an unqualified reference resolves to the table holding the formula's cell).
+ * Unknown: a text that does not parse, an unknown sheet (external workbooks included), an unknown table or name, a name
+ * cycle, any node kind not listed.
+ */
+function clockTaintReferences(doc: XlsxDocument, text: string, sheetName: string, cell: Pick<XlsxCell, 'row' | 'col'>): FormulaReference[] | 'unknown' {
+  const sheetByLower = new Map(doc.sheets.map(s => [s.name.toLowerCase(), s]))
+  const { nameOf } = sheetIdentities(doc)
+  const out: FormulaReference[] = []
+  const nameStack = new Set<string>()
+  let unknown = false
+  const add = (sheet: string | undefined, current: string, minCol: number, minRow: number, maxCol: number, maxRow: number): void => {
+    const target = (sheet ?? current).toLowerCase()
+    if (!sheetByLower.has(target)) { unknown = true; return }
+    out.push({ sheet: target, minRow: Math.min(minRow, maxRow), minCol: Math.min(minCol, maxCol), maxRow: Math.max(minRow, maxRow), maxCol: Math.max(minCol, maxCol) })
+  }
+  const grid = (node: GridLike, current: string): void => {
+    switch (node.type) {
+      case 'cell': add(node.ref.sheet, current, node.ref.col, node.ref.row, node.ref.col, node.ref.row); return
+      case 'range': add(node.ref.sheet ?? node.ref.from.sheet, current, node.ref.from.col, node.ref.from.row, node.ref.to.col, node.ref.to.row); return
+      case 'wholeCol': add(node.ref.sheet, current, node.ref.from.index, 0, node.ref.to.index, 1_048_575); return
+      case 'wholeRow': add(node.ref.sheet, current, 0, node.ref.from.index, 16_383, node.ref.to.index); return
+    }
+  }
+  const visit = (node: AstNode, current: string): void => {
+    if (unknown) return
+    switch (node.type) {
+      case 'number': case 'string': case 'boolean': case 'arrayConst': case 'empty': return
+      case 'error': unknown = true; return
+      case 'cell': case 'range': case 'wholeCol': case 'wholeRow': grid(node, current); return
+      case 'spill': add(node.anchor.sheet, current, node.anchor.col, node.anchor.row, node.anchor.col, node.anchor.row); return
+      case 'ref3d': {
+        const from = doc.sheets.findIndex(s => s.name.toLowerCase() === node.sheets.fromSheet.toLowerCase())
+        const to = doc.sheets.findIndex(s => s.name.toLowerCase() === node.sheets.toSheet.toLowerCase())
+        if (from < 0 || to < 0) { unknown = true; return }
+        for (const s of doc.sheets.slice(Math.min(from, to), Math.max(from, to) + 1)) grid(node.target as GridLike, s.name)
+        return
+      }
+      case 'union': for (const r of node.refs) visit(r as AstNode, current); return
+      case 'intersect': visit(node.left as AstNode, current); visit(node.right as AstNode, current); return
+      case 'name': {
+        const localIndex = doc.sheets.findIndex(s => s.name.toLowerCase() === (node.ref.sheet ?? current).toLowerCase())
+        const match = (doc.definedNames ?? []).find(n => n.name.toLowerCase() === node.ref.name.toLowerCase() && n.localSheetIndex === localIndex)
+          ?? (doc.definedNames ?? []).find(n => n.name.toLowerCase() === node.ref.name.toLowerCase() && n.localSheetIndex === undefined)
+        const id = match ? `${match.localSheetIndex ?? 'w'}:${match.name.toLowerCase()}` : ''
+        if (!match || nameStack.has(id)) { unknown = true; return }
+        nameStack.add(id)
+        let parsed: AstNode
+        try { parsed = parseFormula(match.source.replace(/^=/, '')) } catch { unknown = true; return }
+        visit(parsed, node.ref.sheet ?? current)
+        nameStack.delete(id)
+        return
+      }
+      case 'table': {
+        const tables = doc.tables ?? []
+        const table = node.ref.table !== undefined
+          ? tables.find(t => t.name.toLowerCase() === node.ref.table!.toLowerCase() || t.displayName.toLowerCase() === node.ref.table!.toLowerCase())
+          : tables.find(t => nameOf.get(String(t.sheetId)) === current.toLowerCase() && cell.row >= t.extent.firstRow && cell.row < t.extent.firstRow + t.extent.rows && cell.col >= t.extent.firstCol && cell.col < t.extent.firstCol + t.extent.cols)
+        const tableSheet = table ? nameOf.get(String(table.sheetId)) ?? doc.sheets.find(s => s.sheetId === table.sheetId)?.name : undefined
+        if (!table || tableSheet === undefined) { unknown = true; return }
+        add(tableSheet, current, table.extent.firstCol, table.extent.firstRow, table.extent.firstCol + table.extent.cols - 1, table.extent.firstRow + table.extent.rows - 1)
+        return
+      }
+      case 'call': if (CLOCK_TAINT_VOLATILE.has(node.name.toUpperCase())) { unknown = true; return } for (const arg of node.args) visit(arg, current); return
+      case 'binary': visit(node.left, current); visit(node.right, current); return
+      case 'unary': case 'implicitIntersect': visit(node.expr, current); return
+      default: unknown = true; return
+    }
+  }
+  let ast: AstNode
+  try { ast = parseFormula(text.replace(/^=/, '')) } catch { return 'unknown' }
+  visit(ast, sheetName)
+  return unknown ? 'unknown' : out
+}
+type GridLike = Extract<AstNode, { type: 'cell' | 'range' | 'wholeCol' | 'wholeRow' }>
+
 /**
  * The across-midnight follow-up (brief cf-midnight): every cell whose value could move with the clock (`loadClock.ts`).
  * Seeds: a formula that calls a volatile function, names a defined name whose text (transitively) does, or whose text cannot
@@ -538,18 +619,38 @@ export function computeDocumentClockTaint(doc: XlsxDocument): DocumentClockTaint
   const nameMatchers = [...volatileNames].map(v => new RegExp(`(^|[^A-Za-z0-9_.!])${escapeRegExp(v)}($|[^A-Za-z0-9_.(])`, 'i'))
   const volatileText = (text: string): boolean => VOLATILE_CALL.test(text) || nameMatchers.some(m => m.test(text))
   const seeds: Array<{ sheet: string; row: number; col: number }> = []
+  // Every formula's references, resolved to rectangles by a fail-closed visitor (`clockTaintReferences`): a reference it
+  // cannot expand (an unknown sheet, an external workbook, an unknown or unqualified-outside table, an unknown defined
+  // name, a text it cannot parse, any node kind it does not know) makes the formula a seed.
+  const refsBySheet = new Map<string, IndexedReference[]>()
+  const positions = new Map<string, { sheet: string; row: number; col: number }>()
   for (const sheet of doc.sheets) {
-    const masters = new Map<number, string>()
-    for (const row of sheet.rows) for (const cell of row.cells) if (cell.sharedFormula?.si !== undefined && cell.formula) masters.set(cell.sharedFormula.si, cell.formula)
+    const masters = new Map<number, XlsxCell>()
+    for (const row of sheet.rows) for (const cell of row.cells) if (cell.sharedFormula?.si !== undefined && cell.formula) masters.set(cell.sharedFormula.si, cell)
     for (const row of sheet.rows) for (const cell of row.cells) {
-      const text = cell.formula ?? (cell.sharedFormula ? masters.get(cell.sharedFormula.si) : undefined)
-      if (text === undefined ? cell.sharedFormula !== undefined : volatileText(text)) seeds.push({ sheet: sheet.name.toLowerCase(), row: cell.row, col: cell.col })
+      if (cell.formula === undefined && cell.sharedFormula === undefined) continue
+      const at = { sheet: sheet.name.toLowerCase(), row: cell.row, col: cell.col }
+      const master = cell.sharedFormula ? masters.get(cell.sharedFormula.si) : undefined
+      let text = cell.formula
+      if (text === undefined && master?.formula !== undefined) {
+        try { text = translateSharedFormula(master.formula, cell.col - master.col, cell.row - master.row).formula } catch { text = undefined }
+      }
+      if (text === undefined) { seeds.push(at); continue }
+      if (volatileText(text)) seeds.push(at)
+      const key = makeCellKey(sheet.name, cell.col, cell.row)
+      positions.set(key, at)
+      const refs = clockTaintReferences(doc, text, sheet.name, cell)
+      if (refs === 'unknown') { if (!volatileText(text)) seeds.push(at); continue }
+      for (const ref of refs) {
+        const list = refsBySheet.get(ref.sheet)
+        if (list) list.push({ ref, key }); else refsBySheet.set(ref.sheet, [{ ref, key }])
+      }
     }
   }
   const out = new Map<string, Set<number>>()
   if (seeds.length === 0) return out
   if (workbookValuePolicy(doc) === 'cached') return 'all'
-  const index = referenceIndexFor(doc)
+  const index = { bySheet: new Map([...refsBySheet].map(([sheet, refs]) => [sheet, buildReferenceTree(refs)!] as const)), byKey: positions }
   const followers = new Map<string, Array<{ sheet: string; row: number; col: number }>>()
   const ownerCellKey = spillOwnerCellKeys(doc)
   for (const record of docSpillStates.get(doc)?.generated ?? []) {
@@ -579,9 +680,11 @@ export function computeDocumentClockTaint(doc: XlsxDocument): DocumentClockTaint
     for (const follower of followers.get(key) ?? []) add(follower)
     const array = arrays.get(key)
     if (array) for (let row = array.minRow; row <= array.maxRow; row++) for (let col = array.minCol; col <= array.maxCol; col++) add({ sheet: at.sheet, row, col })
-    for (const reader of queryReferences(index, at.sheet, { minRow: at.row, maxRow: at.row, minCol: at.col, maxCol: at.col })) {
+    const readers = new Set<string>()
+    queryReferenceTree(index.bySheet.get(at.sheet), { minRow: at.row, maxRow: at.row, minCol: at.col, maxCol: at.col }, readers)
+    for (const reader of readers) {
       const formula = index.byKey.get(reader)
-      if (formula) add({ sheet: formula.sheet, row: formula.row, col: formula.col })
+      if (formula) add(formula)
     }
   }
   return out

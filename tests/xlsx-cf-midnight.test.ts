@@ -230,3 +230,55 @@ describe('the asset and print paths read the wall clock (prepareSheetAssets, get
     } finally { vi.useRealTimers() }
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Fix round 1 (P1): every reference form either resolves or taints.   */
+/* ------------------------------------------------------------------ */
+
+describe('the clock taint follows every reference form, or fails closed (fix round 1, P1)', () => {
+  type C = { ref: string; value?: number | null; formula?: string }
+  const rc = (ref: string) => rcOf(ref)
+  const docOf = (sheets: Record<string, C[]>, extra: { tables?: unknown[]; definedNames?: unknown[] } = {}) => ({
+    sheets: Object.entries(sheets).map(([name, cells], i) => ({
+      name, sheetId: String(i + 1), cols: [], merges: [], mergeRanges: [],
+      rows: [...new Set(cells.map(c => rc(c.ref).row))].sort((a, b) => a - b).map(index => ({ index, cells: cells.filter(c => rc(c.ref).row === index).map(c => ({ ref: c.ref, ...rc(c.ref), styleIndex: 0, value: c.value ?? 0, ...(c.formula ? { formula: c.formula } : {}) })) })),
+    })),
+    workbookSheets: Object.keys(sheets).map((name, i) => ({ sheetId: String(i + 1), name })),
+    ...extra,
+  }) as never
+  const tainted = (doc: never, sheet = 'S'): string[] => {
+    const t = computeDocumentClockTaint(doc)
+    if (t === 'all') return ['all']
+    return [...(t.get(sheet.toLowerCase()) ?? [])].map(id => refOfRc(Math.floor(id / 16384), id % 16384)).sort()
+  }
+  const table = { id: '1', name: 'T1', displayName: 'T1', sheetId: '1', partPath: 'xl/tables/table1.xml', extent: { sheetId: '1', firstCol: 0, firstRow: 0, cols: 1, rows: 3 }, headerRowCount: 1, totalsRowCount: 0, columns: [{ id: '1', name: 'Date', index: 0 }] }
+  const base: C[] = [{ ref: 'A1', value: null }, { ref: 'A2', value: 5 }, { ref: 'A3', formula: 'TODAY()' }, { ref: 'A8', value: 2 }, { ref: 'B8', formula: 'A8*2' }]
+  it('a qualified table reference the parser cannot read (MAX(T1[Date])) taints its formula', () => {
+    expect(tainted(docOf({ S: [...base, { ref: 'B1', formula: 'MAX(T1[Date])' }] }, { tables: [table] }))).toEqual(['A3', 'B1'])
+  })
+  it('an unqualified table reference resolves to the table holding the cell; outside any table it taints', () => {
+    // B2 sits outside the table (A1:A3): no table to resolve, so it taints; a reader of B2 follows.
+    expect(tainted(docOf({ S: [...base, { ref: 'B2', formula: '[@Date]+1' }, { ref: 'C2', formula: 'B2+1' }] }, { tables: [table] }))).toEqual(['A3', 'B2', 'C2'])
+    // The same reference inside a table spanning A1:B3 reads the whole table, which holds A3.
+    const wide = { ...table, extent: { ...table.extent, cols: 2 } }
+    expect(tainted(docOf({ S: [...base, { ref: 'B2', formula: '[@Date]+1' }] }, { tables: [wide] }))).toEqual(['A3', 'B2'])
+  })
+  it('a defined name over a tainted cell taints its readers; an unknown name taints', () => {
+    expect(tainted(docOf({ S: [...base, { ref: 'B3', formula: 'R+1' }] }, { definedNames: [{ name: 'R', source: 'S!$A$3', baseProvenance: 'unknown' }] }))).toEqual(['A3', 'B3'])
+    expect(tainted(docOf({ S: [...base, { ref: 'B4', formula: 'Missing+1' }] }))).toEqual(['A3', 'B4'])
+  })
+  it('a 3D reference over the tainted sheet taints; one naming unknown sheets taints', () => {
+    expect(tainted(docOf({ S: base, U: [{ ref: 'B5', formula: 'SUM(S:U!A3)' }] }), 'U')).toEqual(['B5'])
+    expect(tainted(docOf({ S: [...base, { ref: 'B5', formula: 'SUM(P:Q!A3)' }] }))).toEqual(['A3', 'B5'])
+  })
+  it('an external workbook reference taints', () => {
+    expect(tainted(docOf({ S: [...base, { ref: 'B6', formula: "'[1]Other'!A1+1" }] }))).toEqual(['A3', 'B6'])
+  })
+  it('a spill reference to a tainted anchor taints; unions, intersections and unparsable text too; a clean reader stays clean', () => {
+    expect(tainted(docOf({ S: [...base, { ref: 'B7', formula: 'SUM(A3#)' }] }))).toEqual(['A3', 'B7'])
+    expect(tainted(docOf({ S: [...base, { ref: 'B9', formula: 'SUM((A2,A3))' }] }))).toEqual(['A3', 'B9'])
+    expect(tainted(docOf({ S: [...base, { ref: 'B9', formula: 'SUM(A1:A3 A3:B3)' }] }))).toEqual(['A3', 'B9'])
+    expect(tainted(docOf({ S: [...base, { ref: 'C9', formula: '(((' }] }))).toEqual(['A3', 'C9'])
+    expect(tainted(docOf({ S: base }))).toEqual(['A3'])
+  })
+})
