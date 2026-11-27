@@ -143,7 +143,8 @@ describe('production against the model (the rehearsal)', () => {
 /* The decision.                                                        */
 /* ------------------------------------------------------------------ */
 
-function plant(world: MidnightWorld, edit: (c: MidnightCapture['instants'][number] & object) => void = () => {}): MidnightCapture {
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+function plant(world: MidnightWorld, edit: (c: Mutable<NonNullable<MidnightCapture['instants'][number]>>) => void = () => {}): MidnightCapture {
   const obs = (w: MidnightWorld, date: string, now: string) => ({ localDateBefore: date, localDateAfter: date, displayFormat: midnightPredictions(w), screen: midnightPredictions(w), nowBefore: now, nowAfter: now, cellValues: {} })
   const recalc = world.cellDay === 1
   const i2 = obs(world, next(NIGHT), recalc ? '46359.0003' : '46358.99')

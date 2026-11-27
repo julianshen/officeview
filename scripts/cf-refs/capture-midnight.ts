@@ -30,7 +30,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CfManifest, CfOracleCase } from './cases'
 import {
-  MIDNIGHT_CELLS, MIDNIGHT_MARKER, MIDNIGHT_SENTINELS, MIDNIGHT_TOKEN_FILL, decideAcrossMidnight,
+  MIDNIGHT_CELLS, MIDNIGHT_SENTINELS, MIDNIGHT_TOKEN_FILL, decideAcrossMidnight,
   type MidnightCapture, type MidnightInstantObservation, type MidnightToken,
 } from './midnight-case'
 import { parseExcelColorToArgb } from './capture'
@@ -251,7 +251,7 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
     const sidecar = {
       caseId: c.id, anchorLocalDate: D, timeZone: zone, savedSha256: createHash('sha256').update(deps.readFile(resolve(REPO_ROOT, c.saved))).digest('hex'),
       instants: [i1, i2, ...(i3 ? [i3] : [])],
-      screenshots: Object.fromEntries(shots.filter((p, i) => i < 4 || i3).map(p => [p, sha(p)])),
+      screenshots: Object.fromEntries(shots.filter((_p, i) => i < 4 || i3).map(p => [p, sha(p)])),
       decision: decideAcrossMidnight(capture),
     }
     return { capture, sidecar }

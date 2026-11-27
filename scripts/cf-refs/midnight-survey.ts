@@ -91,7 +91,6 @@ const rangeRect = (a1: string): SourceRect => {
   return { firstRow: a.row, lastRow: b.row, firstCol: a.col, lastCol: b.col }
 }
 const inside = (r: SourceRect, row: number, col: number): boolean => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
-const overlaps = (a: SourceRect, b: SourceRect): boolean => a.firstRow <= b.lastRow && b.firstRow <= a.lastRow && a.firstCol <= b.lastCol && b.firstCol <= a.lastCol
 /** A rule's read set, over-approximated: its scope, and each formula atom spread over the scope's extent (relative axes shift). */
 function readRects(rule: CfRule): Array<{ sheet?: string; rect: SourceRect }> {
   const out: Array<{ sheet?: string; rect: SourceRect }> = rule.ranges.map(rect => ({ rect }))
