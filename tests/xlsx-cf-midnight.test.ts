@@ -282,3 +282,37 @@ describe('the clock taint follows every reference form, or fails closed (fix rou
     expect(tainted(docOf({ S: base }))).toEqual(['A3'])
   })
 })
+
+describe('relative defined names are read at the use site, as the evaluator reads them (fix round 2, P1)', () => {
+  type C = { ref: string; value?: number | null; formula?: string }
+  const docOf = (sheets: Record<string, C[]>, definedNames: unknown[]) => ({
+    sheets: Object.entries(sheets).map(([name, cells], i) => ({
+      name, sheetId: String(i + 1), cols: [], merges: [], mergeRanges: [],
+      rows: [...new Set(cells.map(c => rcOf(c.ref).row))].sort((a, b) => a - b).map(index => ({ index, cells: cells.filter(c => rcOf(c.ref).row === index).map(c => ({ ref: c.ref, ...rcOf(c.ref), styleIndex: 0, value: c.value ?? 0, ...(c.formula ? { formula: c.formula } : {}) })) })),
+    })),
+    workbookSheets: Object.keys(sheets).map((name, i) => ({ sheetId: String(i + 1), name })),
+    definedNames,
+  }) as never
+  const tainted = (doc: never, sheet = 'S'): string[] => {
+    const t = computeDocumentClockTaint(doc)
+    return t === 'all' ? ['all'] : [...(t.get(sheet.toLowerCase()) ?? [])].map(id => refOfRc(Math.floor(id / 16384), id % 16384)).sort()
+  }
+  const prev = (source: string, provenance = 'verified-file', base: unknown = { sheetId: '1', col: 1, row: 0 }) => ({ name: 'Prev', source, relativeBase: base, baseProvenance: provenance })
+  const cells: C[] = [{ ref: 'A1', value: 1 }, { ref: 'C5', formula: 'TODAY()' }, { ref: 'D5', formula: 'Prev+1' }, { ref: 'D6', formula: 'Prev+1' }]
+  it('Prev = A1 based at B1, used in D5, reads C5 (TODAY()): D5 is tainted; used in D6 it reads C6: clean', () => {
+    expect(tainted(docOf({ S: cells }, [prev('S!A1')]))).toEqual(['C5', 'D5'])
+  })
+  it('absolute and mixed references inside a name keep their pinned axes', () => {
+    // $A1 based at B1: the column stays A, the row moves: used in D5 it reads A5 (clean); C$5 reads column C+2 = E, row 5.
+    expect(tainted(docOf({ S: cells }, [prev('S!$A1')]))).toEqual(['C5'])
+    expect(tainted(docOf({ S: [...cells, { ref: 'D4', formula: 'Prev+1' }] }, [prev('S!A$5')]))).toEqual(['C5', 'D4', 'D5', 'D6'])
+    expect(tainted(docOf({ S: cells }, [prev('S!$C$5')]))).toEqual(['C5', 'D5', 'D6'])
+  })
+  it('a relative name with an unknown base, or none, fails closed', () => {
+    expect(tainted(docOf({ S: cells }, [prev('S!A1', 'unknown')]))).toEqual(['C5', 'D5', 'D6'])
+    expect(tainted(docOf({ S: cells }, [prev('S!A1', 'verified-file', null)]))).toEqual(['C5', 'D5', 'D6'])
+  })
+  it('a name used from another sheet reads its own sheet at the translated cell', () => {
+    expect(tainted(docOf({ S: [{ ref: 'C5', formula: 'TODAY()' }], U: [{ ref: 'D5', formula: 'Prev+1' }, { ref: 'D6', formula: 'Prev+1' }] }, [prev('S!A1')]), 'U')).toEqual(['D5'])
+  })
+})

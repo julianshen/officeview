@@ -1,6 +1,6 @@
 import { evaluateFormulaInternal, makeCellKey, formulaError, isFormulaError, isEvaluationError, isMatrixValue, publicFormulaValue, round15, scalarProjection, topLeftOfMatrix } from './evaluator'
 import { parseFormula } from './parser'
-import { translateSharedFormula } from './shared'
+import { translateAst, translateSharedFormula } from './shared'
 import type { AstNode, CellAddress, ElementValue, EvaluationContext, EvaluationValue, ModeFrameStore, ModeFrameStores, RefArea, ResolvedSemantics, SheetId } from './types'
 import { createReferenceServices, gridAreas } from './refs'
 import { SpillEngine, SpillSuspension, spillCellKey, type SpillBlockReason, type SpillIssue } from './spills'
@@ -569,6 +569,13 @@ function clockTaintReferences(doc: XlsxDocument, text: string, sheetName: string
         nameStack.add(id)
         let parsed: AstNode
         try { parsed = parseFormula(match.source.replace(/^=/, '')) } catch { unknown = true; return }
+        // Fix round 2: a relative name is read at the use site, translated from its base exactly as the evaluator does
+        // (evaluator.ts valueNameSource: translateAst by use site minus base); an unknown base fails closed.
+        if (clockTaintHasRelativeAtom(parsed)) {
+          const base = match.relativeBase
+          if (!base || match.baseProvenance === 'unknown') { unknown = true; return }
+          parsed = translateAst(parsed, cell.col - base.col, cell.row - base.row)
+        }
         visit(parsed, node.ref.sheet ?? current)
         nameStack.delete(id)
         return
@@ -595,6 +602,22 @@ function clockTaintReferences(doc: XlsxDocument, text: string, sheetName: string
   return unknown ? 'unknown' : out
 }
 type GridLike = Extract<AstNode, { type: 'cell' | 'range' | 'wholeCol' | 'wholeRow' }>
+/** Whether a name's source holds a relative atom (evaluator.ts `relativeAtom`, restated over the whole tree). */
+function clockTaintHasRelativeAtom(node: AstNode): boolean {
+  switch (node.type) {
+    case 'cell': return !node.ref.absCol || !node.ref.absRow
+    case 'range': return !node.ref.from.absCol || !node.ref.from.absRow || !node.ref.to.absCol || !node.ref.to.absRow
+    case 'wholeCol': case 'wholeRow': return !node.ref.from.absolute || !node.ref.to.absolute
+    case 'ref3d': return clockTaintHasRelativeAtom(node.target as AstNode)
+    case 'spill': return !node.anchor.absCol || !node.anchor.absRow
+    case 'call': return node.args.some(clockTaintHasRelativeAtom)
+    case 'union': return node.refs.some(r => clockTaintHasRelativeAtom(r as AstNode))
+    case 'binary': return clockTaintHasRelativeAtom(node.left) || clockTaintHasRelativeAtom(node.right)
+    case 'intersect': return clockTaintHasRelativeAtom(node.left as AstNode) || clockTaintHasRelativeAtom(node.right as AstNode)
+    case 'unary': case 'implicitIntersect': return clockTaintHasRelativeAtom(node.expr)
+    default: return false
+  }
+}
 
 /**
  * The across-midnight follow-up (brief cf-midnight): every cell whose value could move with the clock (`loadClock.ts`).
