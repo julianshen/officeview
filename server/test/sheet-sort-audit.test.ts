@@ -7,7 +7,8 @@
  * (sort and filter), then over the detected range and the used range from A1 (headerless), and for `sortWithheld` also
  * over the band A21:F40 (every sort or filter holding row 20 is refused `drawing-impact`: B20 is under a cell-anchored
  * shape), for each column: lists the column's values (every page), filters by the list's first two entries, clears,
- * filters `text contains "e"`, clears, sorts ascending, clears. After the first committed sort and the first committed
+ * filters `text contains "e"`, clears, filters blanks only (listing again at the current viewGen), clears, sorts
+ * ascending, clears. After the first committed sort and the first committed
  * filter of a session, and once at the identity view, it runs the 4b text answers under that view (find, copy of the
  * used range, a11y over the used range, fit of every used column). Each sheet ends with a descending sort of its last band, `sheet-order`, and every
  * tile of the used extent at (zoomStep 5, dpr 1) under that view.
@@ -286,6 +287,9 @@ async function audited(name: string, doc: Uint8Array, queries: readonly string[]
             await run({ sheetId, kind: 'filter', rule: 'values', range: band, col }, { columns: [[col, { kind: 'values', list: l.first.list, mode: 'include', ids, blanks: ids.length === 0 }]] }, true)
           }
           await run({ sheetId, kind: 'filter', rule: 'text', range: band, col }, { columns: [[col, { kind: 'text', op: 'contains', first: 'e', wildcards: false }]] }, true)
+          // Blanks only: a withheld cell matches it (it is blank), an author-hidden row never shows (C1).
+          const relisted = l.first ? await v.list(sheetId, gen, band, col) : undefined
+          if (relisted?.first) await run({ sheetId, kind: 'filter', rule: 'blanks', range: band, col }, { columns: [[col, { kind: 'values', list: relisted.first.list, mode: 'include', ids: [], blanks: true }]] }, true)
           await run({ sheetId, kind: 'sort', rule: 'asc', range: band, col }, { keys: [{ col, order: 'asc' }] }, true)
         }
       }
@@ -368,13 +372,6 @@ describe('4c wire audit (visible-only, copy full)', () => {
     const all = [...runs.values()] as Array<Audited & { controls: readonly string[] }>
     expect(all.length).toBe(5 + AUDIT_FIXTURES.length)
     for (const s of all) {
-      // Non-vacuity: every op class answered, and the fixture's visible text flows through lists, copy, a11y and find.
-      expect([s.name, s.lists.length > 0, s.views.length > 0, s.copies.length > 0, s.fits.length > 0, s.orders.length > 0, s.tiles > 0]).toEqual([s.name, true, true, true, true, true, true])
-      for (const ctl of s.controls) {
-        expect([s.name, ctl, s.lists.some((l) => l.items.some((i) => i.text === ctl))]).toEqual([s.name, ctl, true])
-        expect([s.name, ctl, s.copies.some((x) => x.includes(ctl)), s.cells.some(([, , t]) => t === ctl)]).toEqual([s.name, ctl, true, true])
-        expect([s.name, ctl, s.finds.find((x) => x.query === ctl)!.hits.length > 0]).toEqual([s.name, ctl, true])
-      }
       // The needles: no decoded message of any session holds one.
       expect([s.name, leaked(decoded(s), [...NEEDLES, ...markers, 'MARKER-'])]).toEqual([s.name, []])
       // A hidden sheet's name: no transmitted string is it.
@@ -382,6 +379,13 @@ describe('4c wire audit (visible-only, copy full)', () => {
       // The exact withheld values: no value-list item, copy field or a11y text is one.
       const banned = AUDIT_FIXTURES.find((f) => f.name === s.name)?.banned ?? []
       expect([s.name, banned.filter((b) => answerFields(s).includes(b))]).toEqual([s.name, []])
+      // Non-vacuity: every op class answered, and the fixture's visible text flows through lists, copy, a11y and find.
+      expect([s.name, s.lists.length > 0, s.views.length > 0, s.copies.length > 0, s.fits.length > 0, s.orders.length > 0, s.tiles > 0]).toEqual([s.name, true, true, true, true, true, true])
+      for (const ctl of s.controls) {
+        expect([s.name, ctl, s.lists.some((l) => l.items.some((i) => i.text === ctl))]).toEqual([s.name, ctl, true])
+        expect([s.name, ctl, s.copies.some((x) => x.includes(ctl)), s.cells.some(([, , t]) => t === ctl)]).toEqual([s.name, ctl, true, true])
+        expect([s.name, ctl, s.finds.find((x) => x.query === ctl)!.hits.length > 0]).toEqual([s.name, ctl, true])
+      }
     }
     const byName = (n: string) => runs.get(n)!
     // Committed views per fixture (so the audit ran answers under sorted and filtered views); unknown coverage commits
@@ -468,6 +472,7 @@ describe('4c wire audit (visible-only, copy full)', () => {
         } else {
           const picked = new Set(lists.get(x.col)!.items.slice(0, 2).map((i) => i.text))
           const rule = x.rule === 'text' ? { kind: 'text' as const, op: 'contains' as const, first: 'e', wildcards: false }
+            : x.rule === 'blanks' ? await o.values(local(x.range), x.col, () => false, true)
             : await o.values(local(x.range), x.col, (l) => picked.has(l), picked.size === 0)
           const r = rule ? await o.filter({ range: local(x.range), columns: new Map([[x.col, rule]]) }) : 'unchanged'
           expect(r).toMatch(/committed|unchanged/)
@@ -674,6 +679,8 @@ describe('the hostile battery (S4 §6.6, §9 4c; plan P4)', () => {
       const a = await session(s), other = await session(s), twin = await session(s)
       try {
         const text = (col: number, first: string) => [col, { kind: 'text', op: 'contains', first, wildcards: false }]
+        // A list issued before the starting view below: stale once that view commits.
+        const older = await a.list('0', 0, f.range, f.listCol)
         // A non-identity starting view: a committed filter, so the counts and the probe tile are a filter's.
         const start = await a.view('sheet-filter', { sheetId: '0', viewGen: 0, range: f.range, columns: [text(f.setup.col, f.setup.first)] })
         expect(start.end).toBeUndefined()
@@ -696,6 +703,7 @@ describe('the hostile battery (S4 §6.6, §9 4c; plan P4)', () => {
           { name: 'forged list id', type: 'sheet-filter', body: filter({ columns: [[f.listCol, values(FORGED_LIST)]] }), code: 'stale-filter-values', row: true, twin: { columns: [[f.listCol, 'OWN']] } },
           { name: "another sid's id", type: 'sheet-filter', body: filter({ columns: [[f.listCol, values(theirs.first!.list)]] }), code: 'stale-filter-values', row: true, twin: { columns: [[f.listCol, 'OWN']] } },
           { name: "another column's id", type: 'sheet-filter', body: filter({ columns: [[f.listCol, values(otherCol.first!.list)]] }), code: 'stale-filter-values', row: true, twin: { columns: [[f.listCol, 'OWN']] } },
+          { name: 'a list from an older viewGen', type: 'sheet-filter', body: filter({ columns: [[f.listCol, values(older.first!.list)]] }), code: 'stale-filter-values', row: true, twin: { columns: [[f.listCol, 'OWN']] } },
           { name: 'out-of-grid range (sort)', type: 'sheet-sort', body: sort({ range: { ...f.range, r1: OUT_OF_GRID } }), code: 'policy-refused', row: false, twin: sort({}) },
           { name: 'out-of-grid range (filter)', type: 'sheet-filter', body: filter({ range: { ...f.range, c1: 16_384 } }), code: 'policy-refused', row: false, twin: filter({}) },
           { name: 'hidden key column (sort)', type: 'sheet-sort', body: sort({ keys: [{ col: f.hiddenCol, order: 'asc' }] }), code: 'hidden-target', row: true, twin: sort({}) },
