@@ -2,6 +2,7 @@ import type { XlsxSheet } from '../types'
 import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
+import { cfResidentMidnight } from './midnight'
 import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
@@ -439,6 +440,8 @@ export async function prepareCfTextScope(
   const { evaluation, dateContext } = cfAlignClock(routed, request.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
     try {
       const gen = cfRulesVersion(rules)
+      // The across-midnight follow-up: the document's load clock and clock-tainted cells (`midnight.ts`).
+      const midnight = cfResidentMidnight(sheet)
       const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, valuePolicy)
       const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
       const stamp: CfStamp = {
@@ -459,7 +462,7 @@ export async function prepareCfTextScope(
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
         if (request.signal.aborted) { closeAccount(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}),
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}), ...(midnight ? { midnight } : {}),
           sheetName: sheet.name, ...(workbook ? { workbook } : {}) })
         let lease: CfLease<CfPrepared>
         try {

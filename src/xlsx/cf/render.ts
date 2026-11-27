@@ -4,6 +4,7 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
+import { cfResidentMidnight } from './midnight'
 import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
@@ -403,6 +404,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const { evaluation, dateContext } = cfAlignClock(routed, options.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
   const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, valuePolicy)
   const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
+  // The across-midnight follow-up: the document's load clock and clock-tainted cells (`midnight.ts`).
+  const midnight = cfResidentMidnight(sheet)
   const stamp = options.request?.stamp ?? {
     owner: options.store?.stamp.docId ?? 'static',
     sheetId: sheet.sheetId ?? sheet.name,
@@ -561,7 +564,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // Ruling S3-I1-UNITS: the batch is capped at CF_LIMITS.activeUnits work units, not wall time.
         const batchBudget = createCfWorkBudget({ signal })
         const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, scan: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges, ...(evaluation ? { evaluation } : {}),
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges, ...(evaluation ? { evaluation } : {}), ...(midnight ? { midnight } : {}),
           sheetName: sheet.name, ...(workbook ? { workbook } : {}) })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)

@@ -10,6 +10,7 @@ import { canonicalOrder, findCyclicCells, ITERATIVE_PASS_HARD_CAP, runBoundedPas
 import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
 import { savedSpillFollowers } from './saved-spills'
 import { workbookValuePolicy } from './value-policy'
+import { markDocumentClockUnknown, type DocumentClockTaint } from './loadClock'
 
 /** Per-document value policy (spec §4.4): cached documents never reach the evaluator. */
 export { markSavedValuesOnly, workbookValuePolicy, type WorkbookValuePolicy } from './value-policy'
@@ -492,6 +493,98 @@ function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
   const result = { formulas, byKey, bySheet, volatileReaders, revision }
   formulaReferenceIndexes.set(doc, result)
   return result
+}
+
+/** A call whose value can move between two recalculations with no edit: the clock, randomness, or a reference computed at
+ * runtime (INDIRECT / OFFSET, whose target cannot be indexed statically). A text match, so a string literal naming one
+ * over-taints (the fail-closed direction). */
+const VOLATILE_CALL = /\b(?:TODAY|NOW|RAND|RANDBETWEEN|RANDARRAY|INDIRECT|OFFSET|CELL|INFO)\s*\(/i
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** An A1 range (`A1:B3`, `$A$1`) as 0-based bounds, or undefined. */
+function a1RangeBounds(ref: string): { minRow: number; maxRow: number; minCol: number; maxCol: number } | undefined {
+  const parts = ref.replace(/\$/g, '').split(':')
+  const at = (p: string): [number, number] | undefined => {
+    const m = /^([A-Z]+)(\d+)$/i.exec(p.trim())
+    if (!m) return undefined
+    let col = 0
+    for (const ch of m[1]!.toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64)
+    return [Number(m[2]) - 1, col - 1]
+  }
+  const a = at(parts[0] ?? ''), b = at(parts[1] ?? parts[0] ?? '')
+  if (!a || !b) return undefined
+  return { minRow: Math.min(a[0], b[0]), maxRow: Math.max(a[0], b[0]), minCol: Math.min(a[1], b[1]), maxCol: Math.max(a[1], b[1]) }
+}
+
+/**
+ * The across-midnight follow-up (brief cf-midnight): every cell whose value could move with the clock (`loadClock.ts`).
+ * Seeds: a formula that calls a volatile function, names a defined name whose text (transitively) does, or whose text cannot
+ * be read (a shared-formula follower without a readable master). The closure: every formula that reads a tainted cell
+ * (the static reference index, names expanded), and the spill or array output of a tainted owner. A saved-values-only
+ * document with a seed is tainted everywhere (its reference index is never built: fail closed).
+ */
+export function computeDocumentClockTaint(doc: XlsxDocument): DocumentClockTaint {
+  const names = doc.definedNames ?? []
+  const volatileNames = new Set<string>()
+  for (let changed = true; changed;) {
+    changed = false
+    for (const n of names) {
+      const key = n.name.toLowerCase()
+      if (volatileNames.has(key)) continue
+      if (VOLATILE_CALL.test(n.source) || [...volatileNames].some(v => new RegExp(`(^|[^A-Za-z0-9_.])${escapeRegExp(v)}($|[^A-Za-z0-9_.(])`, 'i').test(n.source))) {
+        volatileNames.add(key); changed = true
+      }
+    }
+  }
+  const nameMatchers = [...volatileNames].map(v => new RegExp(`(^|[^A-Za-z0-9_.!])${escapeRegExp(v)}($|[^A-Za-z0-9_.(])`, 'i'))
+  const volatileText = (text: string): boolean => VOLATILE_CALL.test(text) || nameMatchers.some(m => m.test(text))
+  const seeds: Array<{ sheet: string; row: number; col: number }> = []
+  for (const sheet of doc.sheets) {
+    const masters = new Map<number, string>()
+    for (const row of sheet.rows) for (const cell of row.cells) if (cell.sharedFormula?.si !== undefined && cell.formula) masters.set(cell.sharedFormula.si, cell.formula)
+    for (const row of sheet.rows) for (const cell of row.cells) {
+      const text = cell.formula ?? (cell.sharedFormula ? masters.get(cell.sharedFormula.si) : undefined)
+      if (text === undefined ? cell.sharedFormula !== undefined : volatileText(text)) seeds.push({ sheet: sheet.name.toLowerCase(), row: cell.row, col: cell.col })
+    }
+  }
+  const out = new Map<string, Set<number>>()
+  if (seeds.length === 0) return out
+  if (workbookValuePolicy(doc) === 'cached') return 'all'
+  const index = referenceIndexFor(doc)
+  const followers = new Map<string, Array<{ sheet: string; row: number; col: number }>>()
+  const ownerCellKey = spillOwnerCellKeys(doc)
+  for (const record of docSpillStates.get(doc)?.generated ?? []) {
+    const owner = ownerCellKey(record.ownerKey)
+    if (owner === undefined) continue
+    const list = followers.get(owner) ?? []
+    list.push({ sheet: record.sheet.name.toLowerCase(), row: record.cell.row, col: record.cell.col })
+    followers.set(owner, list)
+  }
+  const arrays = new Map<string, { minRow: number; maxRow: number; minCol: number; maxCol: number }>()
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) if (cell.arrayRef) {
+    const bounds = a1RangeBounds(cell.arrayRef)
+    if (bounds) arrays.set(makeCellKey(sheet.name, cell.col, cell.row), bounds)
+  }
+  const queue: Array<{ sheet: string; row: number; col: number }> = []
+  const add = (at: { sheet: string; row: number; col: number }): void => {
+    let set = out.get(at.sheet)
+    if (!set) out.set(at.sheet, set = new Set())
+    const id = at.row * 16384 + at.col
+    if (set.has(id)) return
+    set.add(id); queue.push(at)
+  }
+  for (const seed of seeds) add(seed)
+  while (queue.length > 0) {
+    const at = queue.pop()!
+    const key = makeCellKey(at.sheet, at.col, at.row)
+    for (const follower of followers.get(key) ?? []) add(follower)
+    const array = arrays.get(key)
+    if (array) for (let row = array.minRow; row <= array.maxRow; row++) for (let col = array.minCol; col <= array.maxCol; col++) add({ sheet: at.sheet, row, col })
+    for (const reader of queryReferences(index, at.sheet, { minRow: at.row, maxRow: at.row, minCol: at.col, maxCol: at.col })) {
+      const formula = index.byKey.get(reader)
+      if (formula) add({ sheet: formula.sheet, row: formula.row, col: formula.col })
+    }
+  }
+  return out
 }
 
 function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpillState['runtimeIndex']>, revision: number): void {
@@ -2302,4 +2395,7 @@ function evaluateWorkbookFormulasInternal(
   // A full pass reads every cell afresh: it is the resynchronisation point for direct edits nobody announced, so the
   // syntactic reader index is rebuilt from the cells at the next dependent recompute.
   if (!onlyKeys) formulaReferenceIndexes.delete(doc)
+  // The across-midnight follow-up: a recalculation after load (a pivot commit's `recomputeDependents`) that read the
+  // clock may have moved cells to another instant than the document's load clock names, so every cell is tainted.
+  if (onlyKeys && volatileKeys.size > 0) markDocumentClockUnknown(doc)
 }

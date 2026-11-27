@@ -624,31 +624,43 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
     })
   }, 90_000)
 
-  it('clock: TODAY() is announced for the day the consumer samples and not for the next', async () => {
+  it('clock: TODAY() is announced for the day the consumer samples; a day after the load it is withheld, or announced under the rules-tick reading', async () => {
     const h = await import('./helpers/cf-views')
-    await h.withPaint(async () => {
-      const bytes = h.workbookBytes({ ...Object.fromEntries([-1, 0, 1].map((d, i) => [`A${i + 2}`, SERIAL + d])), C2: 0, C3: 0, C4: 0 }, h.cfBlock('C2:C4', h.exprRule('$A2=TODAY()', 1, 0)))
-      const doc = (await h.load(bytes, 'cached')).doc
-      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
-      try {
+    const { CF_ACROSS_MIDNIGHT_CAP, injectCfAcrossMidnightReadings } = await import('../src/xlsx/cf/midnight')
+    const caps = h.REGISTERED.filter(id => !id.startsWith('formula:calc-manual-'))
+    const bytes = h.workbookBytes({ ...Object.fromEntries([-1, 0, 1].map((d, i) => [`A${i + 2}`, SERIAL + d])), C2: 0, C3: 0, C4: 0 }, h.cfBlock('C2:C4', h.exprRule('$A2=TODAY()', 1, 0)))
+    const doc = (await h.load(bytes, 'cached')).doc
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+    try {
+      await h.withPaint(async () => {
         expect((await mounted(doc, 'C3')).name, 'today').toMatch(APPLIED)
         expect((await mounted(doc, 'C2')).name, 'yesterday is not today').not.toMatch(APPLIED)
-        vi.setSystemTime(NOW + 86_400_000)
+      }, caps)
+      vi.setSystemTime(NOW + 86_400_000)
+      // The across-midnight follow-up: the document was loaded on NOW's day; unregistered, the next day withholds the clock rule.
+      await h.withPaint(async () => {
         expect((await mounted(doc, 'C3')).name, 'a day later').not.toMatch(APPLIED)
-        expect((await mounted(doc, 'C4')).name, 'tomorrow is today a day later').toMatch(APPLIED)
-      } finally { vi.useRealTimers() }
-    }, (await import('./helpers/cf-views')).REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
+        expect((await mounted(doc, 'C4')).name, 'a day later, withheld').toMatch(UNAVAILABLE)
+      }, caps)
+      injectCfAcrossMidnightReadings({ [CF_ACROSS_MIDNIGHT_CAP]: 'rules-tick' })
+      try {
+        await h.withPaint(async () => {
+          expect((await mounted(doc, 'C4')).name, 'tomorrow is today a day later (rules-tick)').toMatch(APPLIED)
+        }, [...caps, CF_ACROSS_MIDNIGHT_CAP])
+      } finally { injectCfAcrossMidnightReadings(null) }
+    } finally { vi.useRealTimers() }
   }, 120_000)
 
   it('manual calculation: the saved values are announced with the capability, and the rule is withheld without it', async () => {
     const h = await import('./helpers/cf-views')
     await h.withPaint(async () => {
-      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
+      // The mounted viewer reads the wall clock: the document is loaded on that day.
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached', undefined, Date.now())).doc
       expect((await mounted(doc, 'C2')).name).toMatch(APPLIED)
       expect((await mounted(doc, 'C3')).name).not.toMatch(APPLIED)
     })
     await h.withPaint(async () => {
-      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached', undefined, Date.now())).doc
       expect((await mounted(doc, 'C2')).name).toMatch(UNAVAILABLE)
     }, h.REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
   }, 90_000)

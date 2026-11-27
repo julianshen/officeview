@@ -61,7 +61,7 @@ export const DXFS = `<dxfs count="3"><dxf><fill><patternFill patternType="solid"
 /** xf 0 General, xf 1 the built-in date format (numFmtId 14): the cell kinds a `timePeriod` rule reads as dates. */
 const STYLES = `<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>${DXFS}`
 
-export type CellSpec = number | string | boolean | { f: string; v?: number } | { date: number }
+export type CellSpec = number | string | boolean | { f: string; v?: number; ca?: true } | { date: number }
 /** `rows`: A1 notation to a value; a `{ f }` is a formula (cached `v` only when stated: an uncached formula otherwise). */
 export function sheetData(cells: Readonly<Record<string, CellSpec>>, rowHt?: number): string {
   const byRow = new Map<number, Array<[string, CellSpec]>>()
@@ -72,7 +72,7 @@ export function sheetData(cells: Readonly<Record<string, CellSpec>>, rowHt?: num
     if (typeof v === 'boolean') return `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`
     if (typeof v === 'string') return `<c r="${ref}" t="inlineStr"><is><t>${v}</t></is></c>`
     if ('date' in v) return `<c r="${ref}" s="1"><v>${v.date}</v></c>`
-    return `<c r="${ref}"><f>${v.f}</f>${v.v === undefined ? '' : `<v>${v.v}</v>`}</c>`
+    return `<c r="${ref}"><f${v.ca ? ' ca="1"' : ''}>${v.f}</f>${v.v === undefined ? '' : `<v>${v.v}</v>`}</c>`
   }).join('')}</row>`).join('')
 }
 export const cfBlock = (sqref: string, rules: string): string => `<conditionalFormatting sqref="${sqref}">${rules}</conditionalFormatting>`
@@ -84,8 +84,10 @@ export const workbookBytes = (cells: Readonly<Record<string, CellSpec>>, cf: str
 /* ------------------------------ loading ------------------------------ */
 
 export interface Loaded { doc: XlsxDocument; sheet: XlsxSheet; bytes: Uint8Array; sheetId: string }
-export async function load(bytes: Uint8Array, valuePolicy: ValuePolicy = 'cached', sheetName?: string): Promise<Loaded> {
-  const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy })
+export async function load(bytes: Uint8Array, valuePolicy: ValuePolicy = 'cached', sheetName?: string, at: number = NOW): Promise<Loaded> {
+  // Loaded at `at` (default NOW, the instant the legs are evaluated at): the document's load clock (the across-midnight
+  // follow-up) names the day its rules are read on, as a viewer that opened it that day.
+  const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy, evaluation: { now: () => at } })
   const sheet = doc.sheets.find(s => s.name === sheetName) ?? doc.sheets[0]!
   return { doc, sheet, bytes, sheetId: sheet.sheetId ?? sheet.name }
 }

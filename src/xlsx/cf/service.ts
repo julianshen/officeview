@@ -8,8 +8,9 @@ import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
-import { cfDefinitionFormulas, cfVisualFormulaBounds, isCfFormulaOperand, type CfBarBound, type CfCellState, type CfDefinition, type CfFormula, type CfFormulaBound, type CfIconThreshold, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfScaleBound, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
-import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
+import { cfDefinitionFormulas, cfRulesUseClock, cfVisualFormulaBounds, isCfFormulaOperand, type CfBarBound, type CfCellState, type CfDefinition, type CfFormula, type CfFormulaBound, type CfIconThreshold, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfScaleBound, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
+import { cfElementToLiteral, cfFormulaFootprint, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
+import { CF_ACROSS_MIDNIGHT_REASON, cfAcrossMidnight, cfDateContextDay, cfEpochSerialOffset, type CfMidnightContext } from './midnight'
 import { cfAdmittedSheetNames, prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
 import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings, cfvoNonNumericTreatmentOf } from './formulaReadings'
 import { cfRuntimeEvidence, evaluateCellIsOperands, evaluatePredicate, type CfEvidenceGate } from './predicates'
@@ -215,6 +216,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
      * source the service reads is wrapped so its `stamp()` carries the live `dependencyGen`; absent, cross-sheet rules
      * withhold and no stamp is touched. */
     workbook?: CfWorkbookSource
+    /** The across-midnight follow-up (brief cf-midnight): the route's load instant and clock-tainted cells. Absent (a
+     * validation oracle, a document no parse recorded), no rule is judged across midnight. */
+    midnight?: CfMidnightContext
     /** Validation-only seam (Task 39 fix round 4): the Stage 5 counterfactual reads, and may replace, a cell's per-rule
      * outcomes before the multi-positive guards and the compositor run on them. The viewer never passes it. */
     cellOutcomes?: (row: number, col: number, rules: readonly CfRule[], outcomes: CfOutcome<unknown>[]) => void } = {}) {
@@ -246,6 +250,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
         const statistics = options.statistics?.session ?? createCfStatistics(memory)
         const stats = options.statistics?.results ?? new Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>()
         const leases: CfLease<CfRangeStatistics>[] = []
+        // This preparation's clock: the route's, or the load instant under the `frozen` reading across midnight.
+        let clockDateContext = options.dateContext, clockEvaluation = options.evaluation
         let batch: CfFormulaBatch | undefined
         let adopted = false
         const work = async (units = 1) => {
@@ -297,6 +303,64 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
           const boundsBudget = createCfWorkBudget({ signal, scan: true })
           if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
+          // The across-midnight follow-up (brief cf-midnight, `midnight.ts`): once this preparation's day differs from the
+          // route's load day, a clock-reading rule and a rule reading a clock-tainted cell are judged under
+          // `clock:across-midnight`: withheld by default, or under the registered reading. Same day, nothing here applies.
+          // Charges no work: the same-day preparation spends exactly the budget it spent before.
+          const midnight = options.midnight
+          const acrossMidnight = midnight ? cfAcrossMidnight(cap => evidence.allows(cap)) : 'rules-tick'
+          /** Rules withheld at every covered cell, and rules withheld at each cell that reads a tainted cell. */
+          const midnightRules = new Set<CfRule>(), midnightCells = new Set<CfRule>()
+          const midnightTaint = midnight?.taint ?? { kind: 'none' as const }
+          const midnightEdge = cfEdgeModeOf(cap => evidence.allows(cap))
+          const taintedAt = (sheet: string | undefined, rect: SourceRect): boolean => midnightTaint.kind === 'all' || (midnightTaint.kind === 'cells' && midnightTaint.has(sheet, rect))
+          /** A formula reads a tainted cell over `targets` (an unanchored or uncapped footprint counts as tainted: fail closed). */
+          const footprintTainted = (f: CfFormula, targets: readonly SourceRect[]): boolean => {
+            if (midnightTaint.kind === 'none') return false
+            if (!f.anchor) return true
+            const fp = cfFormulaFootprint(f, targets, f.anchor, midnightEdge, { uncapped: true })
+            return fp === 'over-cap' || fp.some(e => taintedAt(e.sheet, e.rect))
+          }
+          /** One cell of a per-cell rule: the cell itself (unless an expression, which reads only its references) and its formulas' reads. */
+          const midnightCellTainted = (rule: CfRule, row: number, col: number): boolean => {
+            const cell = { firstRow: row, lastRow: row, firstCol: col, lastCol: col }
+            return (rule.definition.kind !== 'expression' && taintedAt(undefined, cell)) || cfDefinitionFormulas(rule.definition).some(f => footprintTainted(f, [cell]))
+          }
+          if (midnight && acrossMidnight !== 'rules-tick') {
+            const clockRules: CfRule[] = [], scopeRules: CfRule[] = [], cellRules: CfRule[] = []
+            for (const rule of ordered) {
+              const d = rule.definition
+              if (cfRulesUseClock({ rules: [rule] })) clockRules.push(rule)
+              if (midnightTaint.kind === 'none') continue
+              const reads = rule.ranges.some(r => taintedAt(undefined, r)) || cfDefinitionFormulas(d).some(f => footprintTainted(f, rule.ranges))
+              if (!reads) continue
+              // A statistical rule or a visual reads its whole scope (and its bounds' references) at every cell.
+              if (statistical(rule) || isVisualDefinition(d)) scopeRules.push(rule)
+              else cellRules.push(rule)
+            }
+            const judged = acrossMidnight === 'frozen' ? clockRules.length > 0
+              : acrossMidnight === 'withhold' ? clockRules.length + scopeRules.length + cellRules.length > 0
+              : scopeRules.length + cellRules.length > 0
+            if (judged) {
+              const timeZone = clockDateContext?.timeZone ?? clockEvaluation?.timeZone ?? 'UTC'
+              const dateSystem = clockDateContext?.dateSystem ?? clockEvaluation?.dateSystem ?? '1900'
+              const liveDay = clockDateContext ? cfDateContextDay(clockDateContext) : clockEvaluation ? clockEvaluation.clock.clockGen : undefined
+              const liveEpoch = clockDateContext?.clockSerial === undefined ? clockDateContext?.epochNowMs ?? clockEvaluation?.clock.epochNowMs : undefined
+              const load = liveDay === undefined ? undefined : midnight.load({ day: liveDay, ...(liveEpoch !== undefined ? { epochMs: liveEpoch } : {}) }, timeZone, dateSystem)
+              // A preparation that names no day cannot show it is the load day (fail closed).
+              if (load === undefined || liveDay !== load.day) {
+                if (acrossMidnight === 'frozen' && load !== undefined) {
+                  // Every rule of this preparation reads the load clock: the predicates and the formulas alike.
+                  clockDateContext = Object.freeze(load.epochMs !== undefined ? { dateSystem, timeZone, epochNowMs: load.epochMs } : { dateSystem, timeZone, clockSerial: load.day + cfEpochSerialOffset(dateSystem) })
+                  if (clockEvaluation) clockEvaluation = load.epochMs !== undefined ? Object.freeze({ ...clockEvaluation, clock: Object.freeze({ epochNowMs: load.epochMs, clockGen: load.day }) }) : undefined
+                } else {
+                  if (acrossMidnight !== 'full-recalc') for (const rule of clockRules) midnightRules.add(rule)
+                  for (const rule of scopeRules) midnightRules.add(rule)
+                  for (const rule of cellRules) if (!midnightRules.has(rule)) midnightCells.add(rule)
+                }
+              }
+            }
+          }
           // Scope shapes whose committed Excel fixture cannot discriminate them (Ruling F-2, final review I5): each is
           // gated on its capability, which is unverified in production, so these scales are withheld.
           const scopeBlock = new Map<CfRule, CfOutcome<never>>()
@@ -388,8 +452,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             // Ruling S5-L: under manual calculation a formula rule is unresolved until formula:calc-manual-saved-values confirms
             // that Excel evaluates CF against the saved values, and a volatile TODAY() also needs formula:calc-manual-today
             // (not registered: its reading, live or stale, is unmeasured).
-            const refused = !options.evaluation ? 'cf-evaluation-context-missing'
-              : options.evaluation.calcMode === 'manual' && (cfFormulaReading('formula:calc-manual-saved-values', check) === undefined
+            const refused = !clockEvaluation ? 'cf-evaluation-context-missing'
+              : clockEvaluation.calcMode === 'manual' && (cfFormulaReading('formula:calc-manual-saved-values', check) === undefined
                 || (formulas.some(f => f.usesClock) && cfFormulaReading('formula:calc-manual-today', check) === undefined)) ? 'cf-unmeasured-capability'
               : visual ? visualFormulaRefusal(rule, visual, check) : formulaRuleRefusal(rule, formulas, check)
             if (refused) { formulaGate.set(rule, { kind: 'unresolved', reason: refused }); continue }
@@ -409,7 +473,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           }
           if (formulaTasks.length > 0) {
             batch = await prepareCfFormulaBatch(formulaTasks, {
-              source, sheetId: stamp.sheetId, ...(options.sheetName !== undefined ? { sheetName: options.sheetName } : {}), stamp, evaluation: options.evaluation,
+              source, sheetId: stamp.sheetId, ...(options.sheetName !== undefined ? { sheetName: options.sheetName } : {}), stamp, evaluation: clockEvaluation,
               ...(options.workbook ? { workbook: options.workbook, admittedSheets: cfAdmittedSheetNames(sheet, options.sheetName) } : {}),
               ...(cfFormulaReading('formula:cross-sheet-missing', check) === 'no-format' ? { missingSheet: 'ref-error' as const } : {}),
               edge: cfEdgeModeOf(check), memory, signal, budget, statistics, targets: rects,
@@ -527,6 +591,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 }
                 if (!covered) continue
                 matching.push(rule)
+                if (midnightRules.has(rule) || (midnightCells.has(rule) && midnightCellTainted(rule, row, col))) {
+                  outcomes.push({ kind: 'unresolved', reason: CF_ACROSS_MIDNIGHT_REASON })
+                  continue
+                }
                 if (value.kind === 'string') await work(value.value.length + 1)
                 const preparedStats = stats.get(rule)
                 if (rule.definition.kind === 'colorScale') {
@@ -632,7 +700,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   outcomes.push(out)
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
-                    : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
+                    : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, clockDateContext))
                 }
               }
               // The pure compositor implements the candidate ordering contract; enabling
@@ -689,3 +757,5 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
   }
   return { prepareCf, at: cache.at, dispose: cache.dispose, resolveCfCellStyle }
 }
+/** The paged route's across-midnight context, re-exported so the worker builds it from the module it already loads. */
+export { cfPagedMidnight } from './midnight'

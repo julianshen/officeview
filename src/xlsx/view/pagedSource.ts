@@ -53,6 +53,7 @@ import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVE
 import { estimatePayloadBytes } from './payloadBytes'
 import { savedPivotRects } from '../pivots/stub'
 import { SOURCE_ALLOCATION, adoptAllocation, type SourceAllocationOptions } from './allocationAccount'
+import { pagedWorkbookClockTainted } from '../formula/loadClock'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -1020,6 +1021,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
         now: instant,
+        midnightWorkbook: this.workbook,
         ...(evaluation ? { evaluation } : {}),
         ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
         ...(evaluation ? (options?.dateContext ? { dateContext: options.dateContext } : {}) : { dateContext: ownDateContext }),
@@ -1035,7 +1037,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         return { ...cfReadError(this.sheet.sheetId, { ...request.stamp, clockGen: liveClockGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting request names a different day; re-request under the live clock.'), requiredBytes: undefined }
       }
       const result = await prepareCfRemote(effective, this.sheet.sheetId, source, liveRules, account, remoteOptions)
-      return result.kind === 'ready' && liveRules?.clockFree === true ? { ...result, clockFree: true } : result
+      // A clock-free sheet of a workbook that may hold clock-tainted cells still follows the tick (the across-midnight
+      // follow-up): its rules can read a cell that moves with the clock.
+      return result.kind === 'ready' && liveRules?.clockFree === true && !pagedWorkbookClockTainted(this.workbook) ? { ...result, clockFree: true } : result
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
     }
@@ -1841,6 +1845,9 @@ export interface CfRemotePrepareOptions {
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** The across-midnight follow-up (brief cf-midnight): the workbook whose first judged clock is the load clock and whose
+   * import counts say whether any cell may move with the clock (`cfPagedMidnight`). Absent: nothing is judged. */
+  readonly midnightWorkbook?: object & Readonly<{ completeness?: string; clockFormulas?: number }>
   /** Stage 5 (Ruling S5-L): the workbook's evaluation policy. Each preparation takes one clock snapshot from `now`
    * (default: the wall clock). Absent: formula rules are unresolved (`cf-evaluation-context-missing`). */
   readonly evaluation?: import('../cf/formula').CfDocumentEvaluation
@@ -2173,7 +2180,8 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}),
+    ...(options?.midnightWorkbook ? { midnight: serviceModule.cfPagedMidnight(options.midnightWorkbook) } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
     ...(options?.workbook ? { workbook: options.workbook } : {}), ...(options?.sheetName !== undefined ? { sheetName: options.sheetName } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {

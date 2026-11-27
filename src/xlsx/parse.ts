@@ -22,7 +22,8 @@ import { frozenPaneFrom, sheetViewRightToLeft } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
 import { drawingPartContext, resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
-import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
+import { computeDocumentClockTaint, evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
+import { recordDocumentLoadClock } from './formula/loadClock'
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
@@ -552,8 +553,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     if ((sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length || sheet.conditionalFormatting !== undefined) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
   }
   initializeSavedSpills(doc)
+  // The across-midnight follow-up (brief cf-midnight): one clock sample for the load, read through the same seam a
+  // validation run pins, shared by the load-time evaluation and the recorded load clock (`formula/loadClock.ts`).
+  const loadNow = options.evaluation?.now ?? Date.now
+  const loadEpochMs = loadNow()
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
-  else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation, now: () => loadEpochMs })
+  recordDocumentLoadClock(doc, { epochMs: loadEpochMs, timeZone: options.evaluation?.timeZone ?? doc.semantics?.timeZone ?? timeZone, dateSystem: doc.semantics?.dateSystem ?? semantics.dateSystem, taint: computeDocumentClockTaint(doc) })
   // Labels are formatted with the chart's output cap (no builder grows past it).
   const CHART_LABEL_OUTPUT = 256
   // Charts without cached values (openpyxl) read their series from the cells

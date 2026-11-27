@@ -96,6 +96,16 @@ export function isLoadEvaluated(formula: LoadFormula, fullCalcOnLoad: boolean): 
   const text = formula.text
   return text !== undefined && (text.length > MAX_LOAD_FORMULA_CHARS || LOAD_VOLATILE.test(text))
 }
+/**
+ * The across-midnight follow-up (brief cf-midnight): a formula whose value Excel recalculates when the clock moves (a
+ * volatile or `ca` formula, every formula under fullCalcOnLoad, and an over-long text, fail closed). An uncached formula
+ * alone is not one: a paged workbook shows it as unavailable.
+ */
+export function isClockSensitive(formula: Pick<LoadFormula, 'calcAlways' | 'text'>, fullCalcOnLoad: boolean): boolean {
+  if (fullCalcOnLoad || formula.calcAlways) return true
+  const text = formula.text
+  return text !== undefined && (text.length > MAX_LOAD_FORMULA_CHARS || LOAD_VOLATILE.test(text))
+}
 export function countLoadEvaluatedFormulas(doc: XlsxDocument): number {
   const fullCalcOnLoad = doc.calc?.fullCalcOnLoad === true
   let n = 0

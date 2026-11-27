@@ -18,6 +18,7 @@ import { residentSource } from '../src/xlsx/cf/render'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { VERIFIED_CAPABILITIES, injectCfFormulaSelections } from '../src/xlsx/cf/evidence'
+import { CF_ACROSS_MIDNIGHT_CAP, injectCfAcrossMidnightReadings } from '../src/xlsx/cf/midnight'
 import {
   refOfRc, formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, inputBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
   type Loaded, type Obs,
@@ -217,7 +218,7 @@ describe('one clock per preparation on every leg (S5-M)', () => {
       process.env.TZ = zone
       try {
         await withPaint(async () => {
-          const l = await load(clockBytes(), 'cached')
+          const l = await load(clockBytes(), 'cached', undefined, now)
           const policy = { ...cfDocumentEvaluationOf(l.doc) }
           expect(policy.timeZone).toBe(zone)
           const today = SERIAL_NOW + (zone === 'UTC' ? 0 : 1), expected = [-2, -1, 0, 1, 2].map(d => SERIAL_NOW + d === today ? RED : undefined)
@@ -589,30 +590,42 @@ describe('the real consumers forward the context: asset preparation and print/ex
       expect(await pagePixels(cached, RED_RGB)).toBe(0)
     })
   })
-  it('clock: TODAY() follows the wall clock the consumer samples, and moves with it', async () => {
-    await withPaint(async () => {
-      const l = await load(clockBytes(), 'cached')
-      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
-      try {
+  it('clock: TODAY() follows the wall clock the consumer samples; across midnight it is withheld, or moves under the rules-tick reading', async () => {
+    const l = await load(clockBytes(), 'cached')
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+    try {
+      await withPaint(async () => {
         expect(await assetFills(l, CLOCK_REFS), 'today').toEqual([undefined, undefined, RED, undefined, undefined])
         const page = await pagePixels(l, RED_RGB)
         expect(page).toBeGreaterThan(100)
-        vi.setSystemTime(NOW + 86_400_000)
-        expect(await assetFills(l, CLOCK_REFS), 'tomorrow').toEqual([undefined, undefined, undefined, RED, undefined])
-      } finally { vi.useRealTimers() }
-    }, REGISTERED_WITHOUT_MANUAL)
+      }, REGISTERED_WITHOUT_MANUAL)
+      vi.setSystemTime(NOW + 86_400_000)
+      // The across-midnight follow-up: the document was loaded on NOW's day; unregistered, the next day's clock rule is withheld.
+      await withPaint(async () => {
+        expect(await assetFills(l, CLOCK_REFS), 'tomorrow, withheld').toEqual([undefined, undefined, undefined, undefined, undefined])
+        expect(await pagePixels(l, RED_RGB), 'nothing painted on the page').toBe(0)
+      }, REGISTERED_WITHOUT_MANUAL)
+      // Rehearsed under `rules-tick` (production before the follow-up): the rule reads the new day.
+      injectCfAcrossMidnightReadings({ [CF_ACROSS_MIDNIGHT_CAP]: 'rules-tick' })
+      try {
+        await withPaint(async () => {
+          expect(await assetFills(l, CLOCK_REFS), 'tomorrow, rules-tick').toEqual([undefined, undefined, undefined, RED, undefined])
+        }, [...REGISTERED_WITHOUT_MANUAL, CF_ACROSS_MIDNIGHT_CAP])
+      } finally { injectCfAcrossMidnightReadings(null) }
+    } finally { vi.useRealTimers() }
   })
   it('manual calculation: the saved values are read with the capability and the rule is withheld without it, on assets and on the page', async () => {
     const refs = ['C2', 'C3', 'C4', 'C5']
     let with_ = 0, without = 0
     await withPaint(async () => {
-      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
+      // The asset path reads the wall clock: the document is loaded on that day.
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached', undefined, Date.now())
       const fills = await assetFills(l, refs)
       expect(fills.map(f => f !== undefined)).toEqual([true, false, true, false])
       with_ = await pagePixels(l, RED_RGB)
     })
     await withPaint(async () => {
-      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached', undefined, Date.now())
       expect(await assetFills(l, refs)).toEqual([undefined, undefined, undefined, undefined])
       without = await pagePixels(l, RED_RGB)
     }, REGISTERED_WITHOUT_MANUAL)

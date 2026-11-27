@@ -62,6 +62,7 @@ import { mainFormatBudget } from './mainFormatBudget'
 import type { EffectiveFormatScope, FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { detectProfile } from '../../xlsx/storage/importSession'
+import { documentClockTainted } from '../../xlsx/formula/loadClock'
 
 function localDaySerial(now = new Date()): number {
   return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000)
@@ -1178,7 +1179,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // day its keys and stamps name; a sheet not (yet) known to be clock-free follows the clock, a clock-free one keeps its day, so
   // learning the fact moves nothing and the tick reaches only the others.
   const appliedDays = useRef(new Map<string, number>()).current
-  const clockFree = cfRules ? cfRules.clockFree === true : hasRemoteCf && remote!.cfClockFree(activeSheetId)
+  // The across-midnight follow-up: a sheet whose clock-free rules may read a cell that moves with the clock (a `ca` TODAY()
+  // cell, `formula/loadClock.ts`) follows the tick too, so its preparation is judged on the new day.
+  const clockFree = cfRules ? cfRules.clockFree === true && !documentClockTainted(entry!.sheet) : hasRemoteCf && remote!.cfClockFree(activeSheetId)
   const dayKey = activeSheetId ?? ''
   if (!clockFree || !appliedDays.has(dayKey)) appliedDays.set(dayKey, clockGen)
   const tickGen = appliedDays.get(dayKey)!

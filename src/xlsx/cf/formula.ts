@@ -22,6 +22,7 @@ import { CONDITIONAL_MAX_CRITERION_LENGTH } from '../formula/functions/cond'
 import { DEFAULT_MAX_DP_CELLS, tokenizeWildcardPattern } from '../formula/functions/wildcard'
 import { createReferenceServices } from '../formula/refs'
 import { epochToSerial } from '../formula/serial'
+import { cfClockDay } from './midnight'
 import type { XlsxDocument } from '../types'
 import type { ValuePolicy } from '../view/contracts'
 import type { CfDateContext } from './predicates'
@@ -619,10 +620,9 @@ export function cfEvaluationContextFor(policy: CfDocumentEvaluation, now: () => 
     if (clock) return clock
     formulaActivity.clockReads++
     const epochNowMs = now()
-    const serial = epochToSerial(epochNowMs, policy.timeZone, policy.dateSystem)
     // The unix day number of the local calendar date: the interactive midnight tick's own numbering (`localDaySerial`), so a
     // main-thread stamp and this one name the same day. A zone the engine cannot resolve falls back to the UTC day.
-    const clockGen = typeof serial === 'number' ? Math.floor(serial) - (policy.dateSystem === '1904' ? 24_107 : 25_569) : Number.isFinite(epochNowMs) ? Math.floor(epochNowMs / 86_400_000) : 0
+    const clockGen = cfClockDay(epochNowMs, policy.timeZone, policy.dateSystem)
     clock = Object.freeze({ epochNowMs, clockGen })
     return clock
   }

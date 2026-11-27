@@ -27,7 +27,7 @@ import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
 import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinates'
-import { isLoadEvaluated } from '../view/values'
+import { isClockSensitive, isLoadEvaluated } from '../view/values'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { WORKER_BUDGETS } from '../view/tileCache'
 import { classifyPart, inventoryLimits } from './admission'
@@ -81,6 +81,9 @@ export interface PagedWorkbook {
   /** Formulas the engine would have evaluated at load (values.ts `isLoadEvaluated`)
    * seen so far; final once `completeness` is 'complete'. Feeds the saved-values status. */
   loadEvaluatedFormulas: number
+  /** The across-midnight follow-up: formulas whose value moves with the clock (values.ts `isClockSensitive`) seen so far;
+   * final once `completeness` is 'complete'. Zero on a complete import: no cell moves with the clock. */
+  clockFormulas: number
   /** Resolves on every committed page and on completion (adapters wait on it). */
   changed(): Promise<void>
   /** Style table and date system (S5.4), read before the first sheet. */
@@ -256,7 +259,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
   const workbook: PagedWorkbook = {
-    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0, calcMode,
+    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0, clockFormulas: 0, calcMode,
     changed: () => changedPromise, formatting: DEFAULT_FORMATTING,
     parts: { src, inventory, signal }, pivotPartBytes: limits.paged.pivotPartBytes,
   }
@@ -475,6 +478,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           const meta = record.meta
           if ((meta?.formula !== undefined || meta?.sharedFormula !== undefined)
             && isLoadEvaluated({ cached: record.cached, calcAlways: meta.ca === true, text: meta.formula }, fullCalcOnLoad)) workbook.loadEvaluatedFormulas++
+          if ((meta?.formula !== undefined || meta?.sharedFormula !== undefined) && isClockSensitive({ calcAlways: meta.ca === true, text: meta.formula }, fullCalcOnLoad)) workbook.clockFormulas++
           if (record.row < r0) r0 = record.row
           if (record.row > r1) r1 = record.row
           if (record.col < c0) c0 = record.col
