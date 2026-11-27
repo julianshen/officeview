@@ -877,6 +877,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (const i of verifyOnlyCaseOrder(manifest.cases, stage)) {
     const c = manifest.cases[i]
     if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    // The across-midnight case is captured at two instants across local midnight by capture-midnight.ts, never here.
+    if (c.acrossMidnight) {
+      console.log(`[cf-refs/capture] ${c.id}: captured by scripts/cf-refs/capture-midnight.ts, skipped`)
+      continue
+    }
     if (verifyOnly && verifyOnlyCaptureState(c, REPO_ROOT) === 'skip') {
       console.log(`[cf-refs/capture] ${c.id}: no capture yet, skipped (stays ${c.status})`)
       continue

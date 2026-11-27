@@ -11,6 +11,7 @@
  */
 
 import { S2_NUM_SEGMENT_READINGS } from './num-segment-readings'
+import { MIDNIGHT_CAP, MIDNIGHT_CASE_ID, MIDNIGHT_CELLS, MIDNIGHT_DXFS, MIDNIGHT_INSTANT1, MIDNIGHT_RANGE, MIDNIGHT_RULES, midnightDecisive, midnightMarkers, midnightToken } from './midnight-case'
 
 export type CfOracleStatus = 'measured' | 'unsupported' | 'recipe-pending' | 'geometry-unverified'
 
@@ -325,6 +326,12 @@ export interface CfOracleCase {
    * `anchor`/`anchor-5` resolve against the clock anchor serial.
    */
   calcObservationSources?: Readonly<Record<string, { saved: string; recomputed: string }>>
+  /**
+   * The across-midnight follow-up (brief cf-midnight): a two-instant capture across local midnight, run by
+   * `capture-midnight.ts` (never by `capture.ts`), decided by `decideAcrossMidnight` (midnight-case.ts) for `capabilityId`.
+   * The anchor date is the night the workbook is built for (`clockRequirement.anchorLocalDate`, D).
+   */
+  acrossMidnight?: { capabilityId: string; sidecarPath: string; screenshotPaths: readonly string[] }
   /** Stage 5: a live edit of a referenced sheet without saving, observed through DisplayFormat (`post:` refs). */
   formulaDynamicRefresh?: { sheet: string; edits: readonly { ref: string; value: number }[]; refs: readonly string[] }
   status: CfOracleStatus
@@ -2530,7 +2537,66 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
     reason: 'Awaiting unlocked macOS display session for Excel 16.114 screen and printer copy-picture captures',
     tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 14. stage1-clock-across-midnight (brief cf-midnight; registrable, owns clock:across-midnight). Appended last.
+  midnightCase(),
 ]
+
+/**
+ * The across-midnight follow-up (owner choice 2026-11-27; registrable): a workbook left open in Excel across local midnight
+ * with no edit. Does Excel keep everything on the load day until a recalculation (frozen), move the clock rules to the new
+ * day while the TODAY() cells keep the load day (rules-tick, production before the follow-up), or move both (full-recalc)?
+ * Layout and every prediction: midnight-case.ts; recipe: docs/validation/xlsx-cf-recipes-stage1.md §4. The expectations
+ * here are instant 1's (the load day, every reading alike), which production paints on the load day.
+ */
+function midnightCase(): CfOracleCase {
+  const load = (ref: string) => midnightToken(MIDNIGHT_CELLS.find(c => c.ref === ref)!, MIDNIGHT_INSTANT1)
+  const decisive = MIDNIGHT_CELLS.filter(midnightDecisive).length
+  return {
+    id: MIDNIGHT_CASE_ID,
+    stage: 1,
+    question:
+      `The across-midnight follow-up (brief cf-midnight; registrable): with the workbook open in Excel and no edit, recalculation, scroll or window change from about 23:55 to about 00:05 local time, does Excel keep the rules and the TODAY() cells on the load day (frozen), move the clock rules only (rules-tick), or move both (full-recalc)? ${decisive} decisive cells: literal dates D-1..D+2 under timePeriod today, yesterday, tomorrow and =E2=TODAY() (frozen vs the others), TODAY() cells under literal cellIs operands D and D+1 (full-recalc vs the others), TODAY() cells under timePeriod rules (rules-tick vs the others); far dates under a clock rule and a clock-free column as controls; NOW() and TODAY() sentinels read as values. Built for one night (D = anchorLocalDate, Asia/Taipei).`,
+    input: `tests/fixtures/xlsx-cf/inputs/${MIDNIGHT_CASE_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${MIDNIGHT_CASE_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: MIDNIGHT_RANGE,
+    requiredAppearances: ['screen'],
+    clockRequirement: {
+      dateSystem: '1900',
+      requiredTimeZone: 'Asia/Taipei',
+      anchorLocalDate: DEFAULT_CLOCK_ANCHOR_DATE,
+      anchorSerial: D1900,
+      staleSavedTodaySerial: D1900 - 5,
+      staleCacheCellRef: 'F2',
+      localTodayCellRef: 'B3',
+      utcTodayCellRef: 'B2',
+    },
+    markers: midnightMarkers(DEFAULT_CLOCK_ANCHOR_DATE),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: MIDNIGHT_CELLS.filter(c => load(c.ref) !== 'none').map(c => c.ref),
+      negativeRefs: MIDNIGHT_CELLS.filter(c => load(c.ref) === 'none').map(c => c.ref),
+      cells: MIDNIGHT_CELLS.map(c => {
+        const t = load(c.ref), dxf = MIDNIGHT_DXFS[MIDNIGHT_RULES[c.rule]!.dxfId]!
+        return t === 'none'
+          ? { ref: c.ref, controlRef: c.controlRef, matched: false, note: `${c.group}: no format on the load day` }
+          : { ref: c.ref, controlRef: c.controlRef, matched: true, fillRgb: dxf.fillRgb, ...(dxf.fontRgb ? { fontRgb: dxf.fontRgb } : {}), ...(dxf.bold ? { bold: true } : {}), note: `${c.group}: formatted on the load day` }
+      }),
+    },
+    acrossMidnight: {
+      capabilityId: MIDNIGHT_CAP,
+      sidecarPath: `tests/fixtures/xlsx-cf/refs/${MIDNIGHT_CASE_ID}.json`,
+      screenshotPaths: ['i1', 'i1-after', 'i2', 'i2-after', 'i3'].map(s => `tests/fixtures/xlsx-cf/refs/${MIDNIGHT_CASE_ID}-${s}.png`),
+    },
+    captures: [],
+    status: 'recipe-pending',
+    reason: 'Awaiting the two-instant capture across local midnight (capture-midnight.ts; recipe docs/validation/xlsx-cf-recipes-stage1.md §4)',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
 
 /** Complete capability-to-evidence registry for all Stage 1 markers. */
 export const CF_STAGE1_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE1_CASES.flatMap(c =>

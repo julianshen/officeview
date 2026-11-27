@@ -4389,6 +4389,585 @@
       }
     },
     {
+      "id": "stage1-clock-across-midnight",
+      "stage": 1,
+      "question": "The across-midnight follow-up (brief cf-midnight; registrable): with the workbook open in Excel and no edit, recalculation, scroll or window change from about 23:55 to about 00:05 local time, does Excel keep the rules and the TODAY() cells on the load day (frozen), move the clock rules only (rules-tick), or move both (full-recalc)? 18 decisive cells: literal dates D-1..D+2 under timePeriod today, yesterday, tomorrow and =E2=TODAY() (frozen vs the others), TODAY() cells under literal cellIs operands D and D+1 (full-recalc vs the others), TODAY() cells under timePeriod rules (rules-tick vs the others); far dates under a clock rule and a clock-free column as controls; NOW() and TODAY() sentinels read as values. Built for one night (D = anchorLocalDate, Asia/Taipei).",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage1-clock-across-midnight.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage1-clock-across-midnight.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:K12",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "clockRequirement": {
+        "dateSystem": "1900",
+        "requiredTimeZone": "Asia/Taipei",
+        "anchorLocalDate": "2026-11-06",
+        "anchorSerial": 46332,
+        "staleSavedTodaySerial": 46327,
+        "staleCacheCellRef": "F2",
+        "localTodayCellRef": "B3",
+        "utcTodayCellRef": "B2"
+      },
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:B2",
+          "sqref": "B2:B5",
+          "ruleType": "timePeriod",
+          "timePeriod": "today",
+          "priority": 1,
+          "formulas": [
+            "FLOOR(B2,1)=TODAY()"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:C2",
+          "sqref": "C2:C5",
+          "ruleType": "timePeriod",
+          "timePeriod": "yesterday",
+          "priority": 2,
+          "formulas": [
+            "FLOOR(C2,1)=TODAY()-1"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:D2",
+          "sqref": "D2:D5",
+          "ruleType": "timePeriod",
+          "timePeriod": "tomorrow",
+          "priority": 3,
+          "formulas": [
+            "FLOOR(D2,1)=TODAY()+1"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:E2",
+          "sqref": "E2:E5",
+          "ruleType": "expression",
+          "priority": 4,
+          "formulas": [
+            "E2=TODAY()"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:F2",
+          "sqref": "F2",
+          "ruleType": "cellIs",
+          "operator": "equal",
+          "priority": 5,
+          "formulas": [
+            "46332"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:F3",
+          "sqref": "F3",
+          "ruleType": "cellIs",
+          "operator": "equal",
+          "priority": 6,
+          "formulas": [
+            "46333"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:F4",
+          "sqref": "F4",
+          "ruleType": "cellIs",
+          "operator": "equal",
+          "priority": 7,
+          "formulas": [
+            "46333"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:F5",
+          "sqref": "F5",
+          "ruleType": "cellIs",
+          "operator": "equal",
+          "priority": 8,
+          "formulas": [
+            "46332"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:G2",
+          "sqref": "G2",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 9,
+          "formulas": [
+            "46332"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:G3",
+          "sqref": "G3",
+          "ruleType": "cellIs",
+          "operator": "lessThan",
+          "priority": 10,
+          "formulas": [
+            "46333"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:H2",
+          "sqref": "H2",
+          "ruleType": "timePeriod",
+          "timePeriod": "today",
+          "priority": 11,
+          "formulas": [
+            "FLOOR(H2,1)=TODAY()"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:H3",
+          "sqref": "H3",
+          "ruleType": "timePeriod",
+          "timePeriod": "yesterday",
+          "priority": 12,
+          "formulas": [
+            "FLOOR(H3,1)=TODAY()-1"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:H4",
+          "sqref": "H4",
+          "ruleType": "timePeriod",
+          "timePeriod": "tomorrow",
+          "priority": 13,
+          "formulas": [
+            "FLOOR(H4,1)=TODAY()+1"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:H5",
+          "sqref": "H5",
+          "ruleType": "timePeriod",
+          "timePeriod": "today",
+          "priority": 14,
+          "formulas": [
+            "FLOOR(H5,1)=TODAY()"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:I2",
+          "sqref": "I2:I5",
+          "ruleType": "timePeriod",
+          "timePeriod": "today",
+          "priority": 15,
+          "formulas": [
+            "FLOOR(I2,1)=TODAY()"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "clock:across-midnight:J2",
+          "sqref": "J2:J5",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 16,
+          "formulas": [
+            "2"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100"
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "5adf510e9b3ebd3a8e75f219301bf9398eb9d114a386bb71e4555f72d06cc02b",
+        "savedSha256": "5adf510e9b3ebd3a8e75f219301bf9398eb9d114a386bb71e4555f72d06cc02b",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B3",
+          "C2",
+          "D4",
+          "E3",
+          "F2",
+          "F4",
+          "G3",
+          "H2",
+          "H4",
+          "J3",
+          "J5"
+        ],
+        "negativeRefs": [
+          "B2",
+          "B4",
+          "B5",
+          "C3",
+          "C4",
+          "C5",
+          "D2",
+          "D3",
+          "D5",
+          "E2",
+          "E4",
+          "E5",
+          "F3",
+          "F5",
+          "G2",
+          "H3",
+          "H5",
+          "I2",
+          "I3",
+          "I4",
+          "I5",
+          "J2",
+          "J4"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B8",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B9",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "literal-clock: formatted on the load day"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B10",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B11",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C8",
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "literal-clock: formatted on the load day"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C9",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C10",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C11",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D8",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D9",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D10",
+            "matched": true,
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500",
+            "note": "literal-clock: formatted on the load day"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "D11",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "E2",
+            "controlRef": "E8",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "E3",
+            "controlRef": "E9",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "literal-clock: formatted on the load day"
+          },
+          {
+            "ref": "E4",
+            "controlRef": "E10",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "E11",
+            "matched": false,
+            "note": "literal-clock: no format on the load day"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F8",
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "cell-literal: formatted on the load day"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F9",
+            "matched": false,
+            "note": "cell-literal: no format on the load day"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F10",
+            "matched": true,
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500",
+            "note": "cell-literal: formatted on the load day"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "F11",
+            "matched": false,
+            "note": "cell-literal: no format on the load day"
+          },
+          {
+            "ref": "G2",
+            "controlRef": "G8",
+            "matched": false,
+            "note": "cell-literal: no format on the load day"
+          },
+          {
+            "ref": "G3",
+            "controlRef": "G9",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "cell-literal: formatted on the load day"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "H8",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "cell-clock: formatted on the load day"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "H9",
+            "matched": false,
+            "note": "cell-clock: no format on the load day"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "H10",
+            "matched": true,
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500",
+            "note": "cell-clock: formatted on the load day"
+          },
+          {
+            "ref": "H5",
+            "controlRef": "H11",
+            "matched": false,
+            "note": "cell-clock: no format on the load day"
+          },
+          {
+            "ref": "I2",
+            "controlRef": "I8",
+            "matched": false,
+            "note": "clock-control: no format on the load day"
+          },
+          {
+            "ref": "I3",
+            "controlRef": "I9",
+            "matched": false,
+            "note": "clock-control: no format on the load day"
+          },
+          {
+            "ref": "I4",
+            "controlRef": "I10",
+            "matched": false,
+            "note": "clock-control: no format on the load day"
+          },
+          {
+            "ref": "I5",
+            "controlRef": "I11",
+            "matched": false,
+            "note": "clock-control: no format on the load day"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "J8",
+            "matched": false,
+            "note": "free: no format on the load day"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "J9",
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "free: formatted on the load day"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "J10",
+            "matched": false,
+            "note": "free: no format on the load day"
+          },
+          {
+            "ref": "J5",
+            "controlRef": "J11",
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "free: formatted on the load day"
+          }
+        ]
+      },
+      "acrossMidnight": {
+        "capabilityId": "clock:across-midnight",
+        "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight.json",
+        "screenshotPaths": [
+          "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight-i1.png",
+          "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight-i1-after.png",
+          "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight-i2.png",
+          "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight-i2-after.png",
+          "tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight-i3.png"
+        ]
+      },
+      "captures": [],
+      "status": "recipe-pending",
+      "reason": "Awaiting the two-instant capture across local midnight (capture-midnight.ts; recipe docs/validation/xlsx-cf-recipes-stage1.md §4)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage2-scale-interpolation",
       "stage": 2,
       "question": "Precondition probe (S2-A). Rounding ladder: 2-colour FF000000->FFFFFFFF, num 0 / num 510, values 0, 1, 3, 5, 255, 509, 510. Colour space: FFFF0000->FF0000FF min/max on 0, 50, 100. Spec palette: 3-colour scale FFF8696B/FFFFEB84/FF63BE7B, min/percentile 50/max over 1..9, plus midpoint threshold. Screen and printer appearances.",

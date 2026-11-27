@@ -104,6 +104,7 @@ import {
   type S5Fixture,
   type S5Value,
 } from './cases'
+import { MIDNIGHT_CASE_ID, MIDNIGHT_MARKER, MIDNIGHT_RANGE, midnightCells, midnightCfXml, midnightMarkers } from './midnight-case'
 import { parseXml } from '../../src/core/xml'
 import { readZipPartsSync, verifyCfCase } from './verify'
 
@@ -419,6 +420,22 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           '</x14:conditionalFormatting>',
           '</x14:conditionalFormattings>',
         ].join(''),
+        dxfsXml: DEFAULT_DXFS_XML,
+      }
+    }
+
+    case MIDNIGHT_CASE_ID: {
+      // The across-midnight follow-up: built for the night of the anchor date (midnight-case.ts holds the layout).
+      const fill = cellFillXf(true)
+      return {
+        dimension: MIDNIGHT_RANGE,
+        date1904: false,
+        dateStyle: true,
+        cellFillRgb: MIDNIGHT_MARKER.fillRgb,
+        // Uniform columns and rows: the capture locates every cell from the two corner markers alone.
+        colWidths: [{ min: 1, max: 11, width: 12 }],
+        cells: midnightCells(anchorDateIso).map(c => c.marker ? { ref: c.ref, v: c.v, s: fill } : { ref: c.ref, v: c.v, ...(c.f !== undefined ? { f: c.f } : {}), ...(c.s !== undefined ? { s: c.s } : {}) }),
+        legacyCfXml: midnightCfXml(anchorDateIso),
         dxfsXml: DEFAULT_DXFS_XML,
       }
     }
@@ -2476,6 +2493,8 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
     cases.push({
       ...template,
       ...(updatedClockReq ? { clockRequirement: updatedClockReq } : {}),
+      // The across-midnight case's literal cellIs operands are serials of its night: its markers follow the anchor.
+      ...(template.acrossMidnight ? { markers: midnightMarkers(effectiveAnchorDate) } : {}),
       resavedByExcel: preserveExistingSaved ? (prev?.resavedByExcel ?? wasResavedByExcel) : false,
       ...(preserveExistingSaved && prev?.resaveReceipt ? { resaveReceipt: prev.resaveReceipt } : {}),
       status: preserveExistingSaved && prev ? prev.status : template.status,

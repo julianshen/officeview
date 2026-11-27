@@ -106,7 +106,9 @@ export interface Stage1CaseAudit {
 export interface Stage1CapabilityAudit {
   capabilityId: string
   caseId: string
-  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unverified-nondiscriminating' | 'unaccounted'
+  /** `unverified-across-midnight`: a rule question of the across-midnight case (capture-midnight.ts), never verified by the
+   * Stage 1 capture path; its only evidence is `decideAcrossMidnight`, registered as `clock:across-midnight`. Never blocks. */
+  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unverified-nondiscriminating' | 'unverified-across-midnight' | 'unaccounted'
 }
 
 export interface Stage1AuditReport {
@@ -169,8 +171,9 @@ function auditCase(c: CfOracleCase, rootDir: string, verified?: ReturnType<typeo
     return failCase(c.id, c.status, 'hash-mismatch', `Expected input/saved hashes missing for ${c.id}`, checks)
   }
   // Unsupported cases carry no captures: their evidence is the refusal itself.
-  // Every other case must declare its capture specs (PNGs may still be pending).
-  if (c.status !== 'unsupported' && !check('has-capture-specs', Array.isArray(c.captures) && c.captures.length > 0)) {
+  // Every other case must declare its capture specs (PNGs may still be pending). The across-midnight case declares its own
+  // two-instant capture instead (`acrossMidnight`, capture-midnight.ts), decided by `decideAcrossMidnight`.
+  if (c.status !== 'unsupported' && !check('has-capture-specs', Array.isArray(c.captures) && (c.captures.length > 0 || (c.acrossMidnight !== undefined && c.acrossMidnight.screenshotPaths.length > 0)))) {
     return failCase(c.id, c.status, 'missing-capture', `No capture specs declared for ${c.id}`, checks)
   }
   check('has-capture-specs', true)
@@ -220,6 +223,7 @@ export function auditStage1Manifest(manifest: CfManifest, options: { rootDir?: s
     if (owning?.structuralValid) {
       disposition = owning.status === 'unsupported' ? 'refused-unsupported' : owning.code === undefined || owning.status === 'measured' ? 'verified' : 'supported-structural'
       if (owning.status === 'measured' && owning.code !== undefined) disposition = 'supported-structural'
+      if (stage1ManifestCases.find(c => c.id === entry.caseId)?.acrossMidnight) disposition = 'unverified-across-midnight'
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
   })
