@@ -225,7 +225,7 @@ function fakeRun(options: { world: (now: number) => MidnightWorld; idle?: (now: 
       const p = midnightPredictions(w)
       return [`nowBefore:::${now}:::`, ...MIDNIGHT_CELLS.map(c => `${c.ref}:::v:::${p[c.ref] === 'none' ? 'missing value' : ARGB_RGB16(MIDNIGHT_TOKEN_FILL[p[c.ref] as 'red'])}`), `${MIDNIGHT_SENTINELS.today}:::${D}:::`, `nowAfter:::${now}:::`].join('|||')
     },
-    openWorkbook: () => { opened++; return `${MIDNIGHT_CASE_ID}.xlsx` },
+    openWorkbook: (_path, beforeEach) => { beforeEach('the open'); opened++; clock += 5_000; beforeEach('a poll of Excel while it opens the workbook'); clock += 5_000; return `${MIDNIGHT_CASE_ID}.xlsx` },
     closeWorkbook: () => { closed++ },
     screenshot: path => { shots.push({ at: clock, path }); clock += 1_000; files.set(path, screenPng(midnightPredictions(recalculated ? MIDNIGHT_INSTANT3 : options.world(clock)), options.markers ?? true)) },
     readFile: path => files.get(path) ?? new Uint8Array(Buffer.from('saved-workbook')),
@@ -278,6 +278,19 @@ describe('the capture run (dry)', () => {
     await expect(runMidnightCapture(c, run.deps)).rejects.toThrow(/user is active/)
     expect(run.scripts.filter(s => s.lines.some(l => l.includes('display format'))).length).toBe(1)
     expect(run.counts()).toEqual({ opened: 1, closed: 1 })
+  })
+  it('aborts, never retries, when the user becomes active between the open and the setup script; the workbook is closed (fix round 1, P2)', async () => {
+    const setup = midnightSchedule(NIGHT, ZONE).setup
+    // Idle at the open; active from 5 s after it (the poll while Excel opens and the setup script).
+    const run = fakeRun({ world: () => MIDNIGHT_INSTANT1, idle: now => (now >= setup + 4_000 ? 3 : 3600) })
+    await expect(runMidnightCapture(c, run.deps)).rejects.toThrow(/setup: the user is active.*poll/)
+    expect(run.scripts.length, 'no setup script, no readout').toBe(0)
+    expect(run.counts()).toEqual({ opened: 1, closed: 1 })
+    // Active only after the poll: the setup script is still guarded.
+    const late = fakeRun({ world: () => MIDNIGHT_INSTANT1, idle: now => (now >= setup + 9_000 ? 3 : 3600) })
+    await expect(runMidnightCapture(c, late.deps)).rejects.toThrow(/setup: the user is active.*setup script/)
+    expect(late.scripts.length).toBe(0)
+    expect(late.counts()).toEqual({ opened: 1, closed: 1 })
   })
   it('aborts when instant 2 does not fall on exactly the next local day', async () => {
     const run = fakeRun({ world: () => MIDNIGHT_INSTANT1, overshootInstant2: 86_400_000 })

@@ -53,7 +53,8 @@ export interface MidnightCaptureDeps {
   displayLocked(): boolean
   /** Runs one script inside `tell application "Microsoft Excel"`. */
   excel(lines: string[]): string
-  openWorkbook(path: string): string
+  /** Opens the workbook, calling `beforeEach` before the `open` and before every poll of Excel while it opens (it throws to abort). */
+  openWorkbook(path: string, beforeEach: (what: string) => void): string
   closeWorkbook(name: string): void
   /** Screenshot of the main display to `path` (no interaction with any application). */
   screenshot(path: string): void
@@ -224,12 +225,21 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
   const shots = c.acrossMidnight.screenshotPaths
   const release = deps.keepAwake()
   let workbook: string | undefined
+  let openAttempted = false
   try {
     await deps.sleepUntil(at.setup)
-    if (deps.displayLocked()) throw new MidnightAbort('setup: the display is locked')
-    if (!(deps.idleSeconds() >= MIDNIGHT_MIN_IDLE_SECONDS)) throw new MidnightAbort('setup: the user is active')
-    if (localDateOf(deps.now(), zone) !== D) throw new MidnightAbort('setup: the local date changed')
-    workbook = deps.openWorkbook(resolve(REPO_ROOT, c.saved))
+    // Fix round 1 (P2): idle and lock are checked before every Excel interaction of the setup: the open, each poll while
+    // Excel opens the workbook, and the setup script. A user active at any of them aborts the run (never retried).
+    const guard = (what: string): void => {
+      if (deps.displayLocked()) throw new MidnightAbort(`setup: the display is locked (before ${what})`)
+      const idle = deps.idleSeconds()
+      if (!(idle >= MIDNIGHT_MIN_IDLE_SECONDS)) throw new MidnightAbort(`setup: the user is active (idle ${idle}s < ${MIDNIGHT_MIN_IDLE_SECONDS}s) before ${what}`)
+      if (localDateOf(deps.now(), zone) !== D) throw new MidnightAbort(`setup: the local date changed (before ${what})`)
+    }
+    // The open may have been sent before an abort: the workbook is then closed by name too.
+    openAttempted = true
+    workbook = deps.openWorkbook(resolve(REPO_ROOT, c.saved), guard)
+    guard('the setup script')
     deps.excel(midnightSetupScript(workbook, c.sheet))
     deps.log(`setup done at ${new Date(deps.now()).toISOString()}`)
     await deps.sleepUntil(at.instant1)
@@ -256,7 +266,8 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
     }
     return { capture, sidecar }
   } finally {
-    if (workbook) { try { deps.closeWorkbook(workbook) } catch (e) { deps.log(`close failed: ${String(e)}`) } }
+    const opened = workbook ?? (openAttempted ? c.saved.split('/').pop()! : undefined)
+    if (opened) { try { deps.closeWorkbook(opened) } catch (e) { deps.log(`close failed: ${String(e)}`) } }
     release()
   }
 }
@@ -276,11 +287,13 @@ export function realMidnightDeps(): MidnightCaptureDeps {
     },
     displayLocked: () => isDisplayLocked(),
     excel: lines => execFileSync('osascript', ['-e', 'tell application "Microsoft Excel"', ...lines.flatMap(l => ['-e', l]), '-e', 'end tell'], { encoding: 'utf8', timeout: 120_000 }).trim(),
-    openWorkbook: path => {
+    openWorkbook: (path, beforeEach) => {
       const name = path.split('/').pop()!
+      beforeEach('the open')
       execFileSync('open', ['-a', 'Microsoft Excel', path])
       const deadline = Date.now() + 60_000
       for (;;) {
+        beforeEach('a poll of Excel while it opens the workbook')
         const names = execFileSync('osascript', ['-e', 'tell application "Microsoft Excel" to get name of every workbook'], { encoding: 'utf8' }).trim()
         if (names.split(', ').includes(name)) return name
         if (Date.now() > deadline) throw new MidnightAbort(`open ${name} timed out`)
