@@ -125,7 +125,7 @@ FAIL index module set differs from baseline ± recorded changes:
 ```
 
 - **The base was already red.** Task 3 measured 426,556 B at the base (with the same `src/xlsx/rowFont.ts` line, from xlsx-cf). That figure is taken from the Task 3 report; it was not re-measured here. The gate is not in CI. No limit or baseline was changed.
-- **4c's delta is +5 B at eca7be34** (426,561 − 426,556), **and +6 B at 9f0fef6b** (426,562 B). The task reports record per-task moves of a few bytes each (0 at Task 3, +2 and +1 at Task 9, −6 at Task 10, +5 at Task 11a), and they disagree on the running figure (Task 9 gives its base as 426,561 B), so only the endpoints above are claimed. The moves are hashed lazy-chunk names in the index's `dynamicImports`. The only `src/` module in the differing set is `rowFont.ts`, as at the base, so no 4c module joined the index closure.
+- **4c's delta is +5 B at eca7be34** (426,561 − 426,556), **+6 B at 9f0fef6b** (426,562 B) **and +5 B at the head 9985539c** (426,561 B). The task reports record per-task moves of a few bytes each (0 at Task 3, +2 and +1 at Task 9, −6 at Task 10, +5 at Task 11a), and they disagree on the running figure (Task 9 gives its base as 426,561 B), so only the endpoints above are claimed. The moves are hashed lazy-chunk names in the index's `dynamicImports`. The only `src/` module in the differing set is `rowFont.ts`, as at the base, so no 4c module joined the index closure.
 - New client code is reachable only from the lazy chunks: `streamControls.ts`, `streamWorkbook.ts` and the `InteractiveSheetDoc.tsx` / `FilterDropdown.tsx` edits sit behind `RemoteSheetView` and `InteractiveSheetDoc`. `dist/core.js` stays pure and engine-free (the three `ok` lines).
 
 ## Compatibility matrix
