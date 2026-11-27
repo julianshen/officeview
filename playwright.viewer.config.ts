@@ -67,6 +67,11 @@ const STREAM_PORT = Number(process.env.OV_STREAM_PORT ?? 4181)
 const STREAM_4B_SPECS = /(^|[\\/])stream-sheet-4b\.spec\.ts$/
 const STREAM_4B_PORT = Number(process.env.OV_STREAM_4B_PORT ?? STREAM_PORT + 10)
 process.env.OV_STREAM_4B_PORT = String(STREAM_4B_PORT)
+// Stage 4c: the `stream-4c` project (stream-sheet-4c.spec.ts) has a third stream harness for the same reason, on
+// OV_STREAM_4C_PORT .. +2 (default OV_STREAM_PORT + 20, clear of `stream-4b`'s +10 .. +12); workers read the same variable.
+const STREAM_4C_SPECS = /(^|[\\/])stream-sheet-4c\.spec\.ts$/
+const STREAM_4C_PORT = Number(process.env.OV_STREAM_4C_PORT ?? STREAM_PORT + 20)
+process.env.OV_STREAM_4C_PORT = String(STREAM_4C_PORT)
 const projects: Project[] = [
   { name: 'chromium', testIgnore: [SLIDESHOW_SPECS, STREAM_SPECS], use: { ...devices['Desktop Chrome'] } },
 ]
@@ -84,8 +89,9 @@ projects.push({
   },
 })
 
-projects.push({ name: 'stream', testMatch: STREAM_SPECS, testIgnore: STREAM_4B_SPECS, use: { ...devices['Desktop Chrome'] } })
+projects.push({ name: 'stream', testMatch: STREAM_SPECS, testIgnore: [STREAM_4B_SPECS, STREAM_4C_SPECS], use: { ...devices['Desktop Chrome'] } })
 projects.push({ name: 'stream-4b', testMatch: STREAM_4B_SPECS, use: { ...devices['Desktop Chrome'] } })
+projects.push({ name: 'stream-4c', testMatch: STREAM_4C_SPECS, use: { ...devices['Desktop Chrome'] } })
 
 export default defineConfig({
   testDir: 'tests/browser',
@@ -119,6 +125,13 @@ export default defineConfig({
     command: `bun --preload ./scripts/stream-s0/napi-preload.ts server/test/app.ts`,
     url: `http://127.0.0.1:${STREAM_4B_PORT + 1}/__stream-harness`,
     env: { OV_STREAM_PORT: String(STREAM_4B_PORT), IV_HARNESS_PORT: String(PORT) },
+    reuseExistingServer: false,
+    timeout: 60_000,
+  }, {
+    // The `stream-4c` project's own stream harness: the same server/test/app.ts on OV_STREAM_4C_PORT.
+    command: `bun --preload ./scripts/stream-s0/napi-preload.ts server/test/app.ts`,
+    url: `http://127.0.0.1:${STREAM_4C_PORT + 1}/__stream-harness`,
+    env: { OV_STREAM_PORT: String(STREAM_4C_PORT), IV_HARNESS_PORT: String(PORT) },
     reuseExistingServer: false,
     timeout: 60_000,
   }],
