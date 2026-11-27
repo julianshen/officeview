@@ -1453,7 +1453,7 @@ item 3's sort and filter half (keys use base coverage); the rest of item
 #### As built (4c)
 
 Stage 4c was built on `feature/streaming-s4c` (fb624989..eca7be34, then
-the key-view fix e6a90dcf/66c086f9 and the prep split 83d6500f, with
+the key-view fix e6a90dcf/66c086f9 and the prep split 83d6500f/9f0fef6b, with
 docs commits between), to the plan
 `docs/superpowers/plans/2026-11-26-streaming-s4c.md`, its plan calls P1–P16
 and the rulings in its ledger
