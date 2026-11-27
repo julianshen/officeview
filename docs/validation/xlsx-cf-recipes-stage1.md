@@ -77,3 +77,169 @@ bun scripts/cf-refs/capture.ts --stage 1 --case stage1-timeperiod-today-clock-2
 | `stage1-dxf-layering-2` | `Sheet1!A1:F6` | None (`status: unsupported`) | Rows `2..4` vs. Rows `5..6` | Unsupported DXF sub-elements (`gradientFill`, `patternFill="gray125"`, `diagonal` border, `alignment`, `protection`) — verified structurally and refused as `unsupported-capability`. |
 | `stage1-blank-merge-order` | `Sheet1!A1:Z14` | `screen` | Rows `2..8` (CF) vs. Rows `10..13` (Controls) | Sparse blank `B2` and distant `Z5`, merged `A4:C4` (`C` hidden) and `E4:G4` (anchor `E` hidden), hidden-row `aboveAverage` (`A5:A8` with row 6 hidden), sorted rows (`J2:J5`), and whole-column `M1:M1048576`. |
 | `stage1-numfmt-accessibility` | `Sheet1!A1:G10` | `screen` and `printer` | Columns `B,D,F` vs. `C,E,F7` | `1.25 -> 0.00` with fill (`B2` vs. `C2`), value-only `0.000` without fill (`D2` vs. `E2`), narrow column `width=3` currency `###` overflow (`F2` vs. `F7`), both `screen` and `printer` captures, and optional `zh-TW` Accessibility Inspector check. |
+
+## 4. The across-midnight case (`stage1-clock-across-midnight`; registrable, owns `clock:across-midnight`)
+
+Brief: `.superpowers/sdd/cf-midnight/brief.md` (owner choice 2026-11-27). Layout and every prediction: `scripts/cf-refs/midnight-case.ts`; capture: `scripts/cf-refs/capture-midnight.ts`; tests: `tests/xlsx-cf-midnight*.test.ts*`.
+
+### 4.1 Question
+
+A workbook stays open in Excel across local midnight, with no edit, recalculation, scroll or window change. Clock rules (`timePeriod`, `=E2=TODAY()`) and `TODAY()` cells can then name different days. Which of three pre-registered readings does Excel follow at about 00:05?
+
+| Reading | Rules read | `TODAY()` cells show |
+|---|---|---|
+| `frozen` | D (the load day) | D |
+| `rules-tick` | D+1 | D (production before this follow-up) |
+| `full-recalc` | D+1 | D+1 |
+
+### 4.2 Production before the capture (committed first)
+
+Unregistered (`CF_ACROSS_MIDNIGHT_PRODUCTION_READINGS` is empty), production withholds from the first preparation on another local day than the load day, until reload (`cf-unmeasured-across-midnight`):
+- every cell of a clock-reading rule;
+- every cell whose rule reads a clock-tainted cell (`formula/loadClock.ts`: volatile formulas and their static readers; a saved-values document with a volatile formula, and a paged workbook with one, are tainted everywhere).
+
+The same day nothing changes. Under each registered reading (with its evidence) every route applies it:
+- `rules-tick` removes the gate;
+- `frozen` evaluates the preparation at the load instant;
+- `full-recalc` reads the live clock and keeps the tainted cells withheld, because no route recalculates a cell after load. That is a narrowing; registering `full-recalc` lifts only the clock cells that read no tainted cell.
+
+The reach is pinned by `tests/xlsx-cf-midnight-survey.test.ts`.
+
+### 4.3 Layout (built for one night D)
+
+- **Night and serials:** D = `clockRequirement.anchorLocalDate` (Asia/Taipei). Every literal date and every literal `cellIs` operand is a serial of D.
+- **Ranges:** A1:K12, Sheet1, uniform columns (width 12) and rows (18 pt).
+  - Designated cells: rows 2..5, columns B..J.
+  - Their unformatted same-content controls: rows 8..11.
+  - Sentinels: `NOW()` in K2 and `TODAY()` in K3, no rule.
+  - Static marker fill FF13F7A9 in A1 and K12, used to locate the grid in a screenshot.
+- **`TODAY()` cells:** saved at their load-day value D + k. Excel recalculates them on open.
+- **Fills:** the Stage 1 dxfs (opaque red, green, yellow fills).
+- **Size:** 34 designated cells, 18 of them decisive.
+
+| Readings | Cells that separate them |
+|---|---|
+| frozen / rules-tick | 12 |
+| frozen / full-recalc | 14 |
+| rules-tick / full-recalc | 10 |
+
+### 4.4 Predictions (tokens are DisplayFormat fills; `none` = no fill)
+
+| Cell | Group | Value | Rule | Instant 1 | 2: frozen | 2: rules-tick | 2: full-recalc | Instant 3 | Role |
+|---|---|---|---|---|---|---|---|---|---|
+| B2 | literal-clock | D-1 | timePeriod today | none | none | none | none | none | control |
+| B3 | literal-clock | D | timePeriod today | red | red | none | none | none | decisive |
+| B4 | literal-clock | D+1 | timePeriod today | none | none | red | red | red | decisive |
+| B5 | literal-clock | D+2 | timePeriod today | none | none | none | none | none | control |
+| C2 | literal-clock | D-1 | timePeriod yesterday | green | green | none | none | none | decisive |
+| C3 | literal-clock | D | timePeriod yesterday | none | none | green | green | green | decisive |
+| C4 | literal-clock | D+1 | timePeriod yesterday | none | none | none | none | none | control |
+| C5 | literal-clock | D+2 | timePeriod yesterday | none | none | none | none | none | control |
+| D2 | literal-clock | D-1 | timePeriod tomorrow | none | none | none | none | none | control |
+| D3 | literal-clock | D | timePeriod tomorrow | none | none | none | none | none | control |
+| D4 | literal-clock | D+1 | timePeriod tomorrow | yellow | yellow | none | none | none | decisive |
+| D5 | literal-clock | D+2 | timePeriod tomorrow | none | none | yellow | yellow | yellow | decisive |
+| E2 | literal-clock | D-1 | =E2=TODAY() | none | none | none | none | none | control |
+| E3 | literal-clock | D | =E3=TODAY() | red | red | none | none | none | decisive |
+| E4 | literal-clock | D+1 | =E4=TODAY() | none | none | red | red | red | decisive |
+| E5 | literal-clock | D+2 | =E5=TODAY() | none | none | none | none | none | control |
+| F2 | cell-literal | =TODAY() | cellIs equal D | green | green | green | none | none | decisive |
+| F3 | cell-literal | =TODAY() | cellIs equal D+1 | none | none | none | green | green | decisive |
+| F4 | cell-literal | =TODAY()+1 | cellIs equal D+1 | yellow | yellow | yellow | none | none | decisive |
+| F5 | cell-literal | =TODAY()-1 | cellIs equal D | none | none | none | yellow | yellow | decisive |
+| G2 | cell-literal | =TODAY() | cellIs greaterThan D | none | none | none | red | red | decisive |
+| G3 | cell-literal | =TODAY() | cellIs lessThan D+1 | red | red | red | none | none | decisive |
+| H2 | cell-clock | =TODAY() | timePeriod today | red | red | none | red | red | decisive |
+| H3 | cell-clock | =TODAY() | timePeriod yesterday | none | none | green | none | none | decisive |
+| H4 | cell-clock | =TODAY()+1 | timePeriod tomorrow | yellow | yellow | none | yellow | yellow | decisive |
+| H5 | cell-clock | =TODAY()+1 | timePeriod today | none | none | green | none | none | decisive |
+| I2 | clock-control | D-30 | timePeriod today | none | none | none | none | none | control |
+| I3 | clock-control | D+30 | timePeriod today | none | none | none | none | none | control |
+| I4 | clock-control | D-365 | timePeriod today | none | none | none | none | none | control |
+| I5 | clock-control | D+365 | timePeriod today | none | none | none | none | none | control |
+| J2 | free | 1 | cellIs greaterThan 2 | none | none | none | none | none | control |
+| J3 | free | 5 | cellIs greaterThan 2 | green | green | green | green | green | control |
+| J4 | free | 0 | cellIs greaterThan 2 | none | none | none | none | none | control |
+| J5 | free | 7 | cellIs greaterThan 2 | green | green | green | green | green | control |
+
+Instant 1 is the same under every reading. Instant 3 (after Calculate Now) is the post-recalculation world under every reading; it decides nothing and is a positive control that the cells and the rules can move.
+
+### 4.5 Capture protocol (`bun scripts/cf-refs/capture-midnight.ts --case stage1-clock-across-midnight`)
+
+1. **On the capture day, before the evening:**
+   - Rebuild for tonight: `bun scripts/cf-refs/build.ts --stage 1 --case stage1-clock-across-midnight --refresh-clock-date`. This sets D to today (Asia/Taipei), regenerates the input and resaves it in Excel.
+   - Check that the resave kept every rule, the literal serials and the marker fill.
+   - Commit the rebuilt input, saved workbook and manifest. The rebuild only changes the dates; the readings, the production behaviour and this recipe precede it.
+2. **Before 23:45, the orchestrator:**
+   - The host zone is Asia/Taipei.
+   - Excel is running with no other workbook in front.
+   - Screen Recording is allowed for the terminal (`screencapture`).
+   - Display sleep and the screen saver must not start between 23:43 and 00:10. The script holds `caffeinate -d -i`; still check the screen-saver delay, and do not change it.
+   - Start the script in the background; it refuses after 23:45 or on another date than D.
+   - Do not touch the machine until it exits.
+3. **The script:**
+   - Waits until 23:45.
+   - **Setup:** opens the saved workbook, activates it and Sheet1, sets zoom to 100, scrolls to A1 and selects M20, outside the range. This is the last view change.
+   - **Instant 1 at 23:55 on D and instant 2 at 00:05 on D+1, each:**
+     1. check the local date;
+     2. take a screenshot of the main display, with no interaction with Excel;
+     3. check idle and lock;
+     4. run one read-only readout script: the NOW() sentinel, every designated cell's value and DisplayFormat interior colour, the TODAY() sentinel, the NOW() sentinel again; no `calculate`, `select`, `scroll` or `activate`;
+     5. take a second screenshot (recorded only: did the readout repaint?);
+     6. check the local date again.
+   - **Instant 3**, right after instant 2: idle check, then `calculate` (Calculate Now), the readout and a screenshot.
+   - Closes the workbook without saving, writes `tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight.json` and five PNGs, and prints the decision.
+4. **What each step can disturb, and the design around it:**
+   - The screenshot touches no application.
+   - A DisplayFormat readout may make Excel evaluate the rules on demand at the current clock. That is what instant 2 measures. It may also repaint the screen, which the second screenshot records.
+   - The NOW() sentinel, read first and last in each readout, shows any recalculation. If it moved during instant 2's readout, the readout recalculated and nothing registers. If it moved before instant 2, Excel recalculated by itself, which is consistent with `full-recalc` only.
+   - Instant 1's readout is read-only, and the sentinel proves it did not recalculate.
+   - Instant 3 runs after every instant 2 observation, so its `calculate` cannot reach them.
+5. **Refusals and aborts (never retried; the night is consumed):**
+
+| Condition | When | Result |
+|---|---|---|
+| Host zone is not the case zone | at start | refused |
+| Local date at start is not D | at start | refused |
+| Started after 23:45 | at start | refused |
+| Display locked | before setup and every readout | abort |
+| User active (`ioreg` HIDIdleTime < 120 s) | before setup and every readout | abort |
+| Local date is not D (instant 1), or not exactly D+1 (instant 2), at the start or the end | instants 1 and 2 | abort |
+
+   - An abort closes the workbook without saving and exits 2.
+   - An instant 3 abort keeps instants 1 and 2 and records the missing instant 3.
+
+### 4.6 Decision rule (`decideAcrossMidnight`, committed before the capture)
+
+A reading registers only if all of these hold:
+1. Instant 1 ran on D and instant 2 on exactly D+1, at the start and the end of each.
+2. Instant 1's DisplayFormat and screen equal the instant 1 predictions at every designated cell.
+3. The NOW() sentinel did not move during instant 2's readout. It moved before instant 2 if and only if the matched reading is `full-recalc`.
+4. At instant 2 exactly one reading matches every decisive cell in DisplayFormat, and every control matches.
+5. The instant 2 screenshot, taken before any interaction, shows the same token as DisplayFormat at every designated cell. A disagreement means Excel's paint depends on a redraw, so nothing registers. An unmeasurable screenshot also registers nothing.
+6. Instant 3, if taken, equals the post-recalculation predictions. Otherwise the case is unsound and nothing registers.
+
+To register, add the reading to `CF_ACROSS_MIDNIGHT_PRODUCTION_READINGS`, publish its evidence through the audit, and move the pinned tests. In every other outcome nothing registers and the withhold stays. A `full-recalc` registration keeps the tainted cells withheld (§4.2).
+
+### 4.7 Rehearsal (Phase 1 task 7)
+
+- **`tests/xlsx-cf-midnight-case.test.ts`:**
+  - **Production against the model:** the generated workbook is loaded at 23:50 on D.
+    - At 23:55 on D, every world paints instant 1.
+    - At 00:05 on D+1, each injected reading paints its predictions; `full-recalc` withholds its 10 `TODAY()` cells.
+    - Unregistered, the clock and `TODAY()` cells are withheld and column J paints.
+  - **The decision:** each planted reading selects exactly itself. A no-match plant, a redraw-dependent or unmeasurable screen, a recalculating readout, a wrong night, an off control or an unsound instant 3 register nothing.
+  - **The dry capture run:** an injected clock, Excel, `ioreg` and screenshots (synthetic PNGs with the markers).
+    - The step order is setup, readout, readout, then calculate. Each screenshot comes before its readout.
+    - It refuses another night or a late start.
+    - It aborts on an active user, closing the workbook, and when instant 2 is not the next day.
+- **`tests/xlsx-cf-midnight.test.ts` and `tests/xlsx-cf-midnight-mounted.test.tsx`:** every route under every world (static, resident, text, worker, assets and print), and the mounted tick.
+- **Gates:** the oracle conformance test and `cf-compare --stage 5` (interactive, paged) under the committed tree. Same-day outcomes are unchanged.
+
+### 4.8 Run
+
+```sh
+bun scripts/cf-refs/build.ts --stage 1 --case stage1-clock-across-midnight --refresh-clock-date   # on the capture day; commit
+bun scripts/cf-refs/capture-midnight.ts --case stage1-clock-across-midnight --dry-run           # prints tonight's schedule
+bun scripts/cf-refs/capture-midnight.ts --case stage1-clock-across-midnight                     # before 23:45, in the background
+```
