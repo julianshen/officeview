@@ -250,3 +250,33 @@ describe('prep on the document host', () => {
     expect(ports.size).toBe(1)
   })
 })
+
+describe('jobs queued before a prep refusal (final review R3)', () => {
+  const clock = { day: '2026-11-28', timeZone: 'UTC' }
+  const view = { sort: { range: GRID, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+  const route = { docRef: 'doc', contentPolicy: 'visible-only' as const, clock }
+  async function pair(second: (pool: Pool) => Promise<unknown>) {
+    const pool = new Pool({ workers: 1, testHooks: true, prepDeadlineCapMsForTests: 100, prepHangMsForTests: 1000 }); pools.push(pool)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    const first = pool.sheetView('s1', { ...route, op: 'derive', sheetIndex: 0, view })
+    const queued = second(pool)
+    const [a, b] = await Promise.all([rejection(first), rejection(queued)])
+    return { pool, a, b }
+  }
+  test('a second derive on the same worker is refused from the remembered verdict: one prep, one retire', async () => {
+    const { pool, a, b } = await pair((p) => p.sheetView('s2', { ...route, op: 'derive', sheetIndex: 0, view }))
+    expect([a, b].map((e) => (e as Error).name)).toEqual(['SheetPrepRefused', 'SheetPrepRefused'])
+    expect([pool.stats().sheetPreps, pool.stats().retired, pool.admission.reserved]).toEqual([1, 1, 0])
+  }, 30_000)
+  test('a queued find under the view is refused the same way', async () => {
+    const { pool, a, b } = await pair((p) => p.sheetText('s2', { ...route, op: 'find', query: 'apple', matchCase: false, sheetIndex: 0, sizes: [], limit: 10, view }))
+    expect([a, b].map((e) => (e as Error).name)).toEqual(['SheetPrepRefused', 'SheetPrepRefused'])
+    expect([pool.stats().sheetPreps, pool.stats().retired, pool.admission.reserved]).toEqual([1, 1, 0])
+  }, 30_000)
+  test('a queued tile under the view is refused the same way', async () => {
+    const tile = { ...route, sheetIndex: 0, viewGen: 1, zoomStep: 5, dpr: 1 as const, palette: 'light' as const, col: 0, row: 0, mark: { kind: 'off' as const }, view }
+    const { pool, a, b } = await pair((p) => p.tile('s2', tile, TILE_BYTES_ESTIMATE))
+    expect([a, b].map((e) => (e as Error).name)).toEqual(['SheetPrepRefused', 'SheetPrepRefused'])
+    expect([pool.stats().sheetPreps, pool.stats().retired, pool.admission.reserved]).toEqual([1, 1, 0])
+  }, 30_000)
+})

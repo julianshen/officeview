@@ -468,6 +468,7 @@ export class Pool {
     try {
       return await this.exclusive(slot, async () => {
         if (signal?.aborted) throw new ShowCancelled()
+        if (port) this.knownPrep(docRef, contentPolicy, job.sheetIndex, clock)
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
         if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, clock, signal)
@@ -495,6 +496,7 @@ export class Pool {
     try {
       return await this.exclusive(slot, async () => {
         if (signal?.aborted) throw new ShowCancelled()
+        if (port) this.knownPrep(docRef, contentPolicy, view.sheetIndex, clock)
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
         if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, view.sheetIndex, clock, signal)
@@ -527,7 +529,9 @@ export class Pool {
     }
     if (signal?.aborted) throw new ShowCancelled()
   }
-  /** Fix round 1: throws the remembered `SheetPrepRefused` of the port, if any (before any admission or worker). */
+  /** Fix round 1: throws the remembered `SheetPrepRefused` of the port, if any (before any admission or worker).
+   * Final review R3: every caller checks again once it holds the worker's exclusive slot, before reopening or
+   * preparing, so a job that queued behind the refused prep does not run it again. */
   private knownPrep(docRef: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock | undefined): void {
     const known = clock && this.prepRefusals.get(prepKey(docRef, policy, sheetIndex, clock))
     if (known) throw new SheetPrepRefused(known)
@@ -548,6 +552,8 @@ export class Pool {
     try {
       return await this.exclusive(slot, async () => {
         if (signal?.aborted) throw new ShowCancelled()
+        // R3: a job queued behind a prep that was refused meanwhile is refused here, before any reopen or prep.
+        if (port) this.knownPrep(docRef, contentPolicy, job.sheetIndex, job.clock)
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         // Again after the (re)open: a socket that closed while the document was parsed gets no tile.
         if (signal?.aborted) throw new ShowCancelled()
