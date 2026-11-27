@@ -1279,7 +1279,8 @@ tiles; the presenter notes sidecar namespace
   positions. An identity view hashes exactly as 4b's (a golden pins it),
   and the sid is never in it. `authorHiddenTier` is `'c1'` under
   `visible-only` when the view has a filter or a `sortFilter`, else
-  `'none'`, so a C1 view never shares tiles with a `'full'` one. The
+  `'none'` (a `sortFilter` pins rows an earlier filter hid, so they need
+  C1 too). The
   server derives a view by replaying the three ops through the local
   engine from the identity view, and caches 8 derived views per document
   (LRU, by `(sheetIndex, clock, canonical hash)`). Each distinct derived
@@ -1502,7 +1503,8 @@ pairs.
   authored layout), `coverage-unknown` (`visible-only`),
   `filter-condition-refused` (`visible-only`, typed conditions),
   `stale-filter-values`, `view-state-limit`. Each refusal moves nothing
-  (no `viewGen`, order, count or tile) and writes its `sheet_ops` row.
+  (no `viewGen`, order, count or tile), and each one past the shape check
+  writes its `sheet_ops` row.
 - **Filter values through the join.** Value lists are the local engine's
   entries over the key view (§6.4 amendment), merged by display text, so a
   covered or undrawn cell, the rotated-box adversary's cells included, is
