@@ -182,11 +182,12 @@ Instant 1 is the same under every reading. Instant 3 (after Calculate Now) is th
    - **Setup:** opens the saved workbook, activates it and Sheet1, sets zoom to 100, scrolls to A1 and selects M20, outside the range. This is the last view change.
    - **Instant 1 at 23:55 on D and instant 2 at 00:05 on D+1, each:**
      1. check the local date;
-     2. take a screenshot of the main display, with no interaction with Excel;
-     3. check idle and lock;
-     4. run one read-only readout script: the NOW() sentinel, every designated cell's value and DisplayFormat interior colour, the TODAY() sentinel, the NOW() sentinel again; no `calculate`, `select`, `scroll` or `activate`;
-     5. take a second screenshot (recorded only: did the readout repaint?);
-     6. check the local date again.
+     2. check idle and lock, then that the target is the only open workbook of its name, at its full path, and is the front workbook (read-only queries; fix round 3);
+     3. take a screenshot of the main display, with no interaction with Excel;
+     4. check idle, lock, uniqueness and front again;
+     5. run one read-only readout script, which resolves the workbook by full path (never by name) and fails unless it is the front workbook: the NOW() sentinel, every designated cell's value and DisplayFormat interior colour, the TODAY() sentinel, the NOW() sentinel again; no `calculate`, `select`, `scroll` or `activate`;
+     6. take a second screenshot (recorded only: did the readout repaint?);
+     7. check the local date again.
    - **Instant 3**, right after instant 2: idle check, then `calculate` (Calculate Now), the readout and a screenshot.
    - Closes the workbook without saving, writes `tests/fixtures/xlsx-cf/refs/stage1-clock-across-midnight.json` and five PNGs, and prints the decision.
 4. **What each step can disturb, and the design around it:**

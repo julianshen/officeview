@@ -13,8 +13,9 @@
  * Schedule (case zone, which must be the host's zone):
  * - setup at 23:45 on D: open the saved workbook, activate it and Sheet1, zoom 100, scroll to A1, select M20 (outside the
  *   range). The last interaction before instant 1.
- * - instant 1 at 23:55 on D, instant 2 at 00:05 on D+1, each in this order: idle and lock check; local date check; the
- *   screenshot (`screencapture` of the main display: no Excel interaction); the readout (one script: the NOW() sentinel,
+ * - instant 1 at 23:55 on D, instant 2 at 00:05 on D+1, each in this order: local date check; idle and lock check, then
+ *   the target alone under its name, at its full path, and in front (read-only; fix round 3); the screenshot
+ *   (`screencapture` of the main display: no Excel interaction); the same checks again; the readout (by full path) (one script: the NOW() sentinel,
  *   every designated cell's value and DisplayFormat fill, the NOW() sentinel again; no `calculate`, no select, no scroll);
  *   the second screenshot (recorded only: did the readout repaint?); local date check.
  * - instant 3 right after instant 2: idle check; `calculate` (Calculate Now); the readout; the screenshot.
@@ -97,10 +98,37 @@ export function midnightSchedule(anchorIso: string, zone: string): { setup: numb
 }
 
 const q = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-/** The setup script: the last interaction before instant 1. */
-export function midnightSetupScript(workbook: string, sheet: string): string[] {
+/**
+ * Fix round 3: the workbook is resolved by its full path, never by name: the lines set `wb` to the one workbook whose
+ * POSIX full path is `path`, and raise an error (the run aborts) when there is none.
+ */
+function workbookByPath(path: string): string[] {
   return [
-    `set wb to workbook "${q(workbook)}"`,
+    'set wb to missing value',
+    'repeat with w in workbooks',
+    '  set p to (full name of w as string)',
+    '  if p does not start with "/" then set p to POSIX path of p',
+    `  if p is "${q(path)}" then set wb to contents of w`,
+    'end repeat',
+    'if wb is missing value then error "the target workbook is not open"',
+  ]
+}
+/** The lines that raise an error unless the active (front) workbook is the one at `path`. */
+function frontIsPath(path: string): string[] {
+  return [
+    'set ap to (full name of active workbook as string)',
+    'if ap does not start with "/" then set ap to POSIX path of ap',
+    `if ap is not "${q(path)}" then error "the front workbook is not the target"`,
+  ]
+}
+/** A read-only check: the active workbook is the target (returns "front", or raises). */
+export function midnightFrontCheckScript(path: string): string[] {
+  return [...frontIsPath(path), 'return "front"']
+}
+/** The setup script: the last interaction before instant 1. */
+export function midnightSetupScript(path: string, sheet: string): string[] {
+  return [
+    ...workbookByPath(path),
     'activate object wb',
     `set ws to worksheet "${q(sheet)}" of wb`,
     'activate object ws',
@@ -108,11 +136,12 @@ export function midnightSetupScript(workbook: string, sheet: string): string[] {
     'set scroll row of active window to 1',
     'set scroll column of active window to 1',
     'select range "M20" of ws',
+    ...frontIsPath(path),
     'return "ok"',
   ]
 }
 /** The readout: the NOW() sentinel, every cell's value and DisplayFormat fill, the sentinel again. `calculate` only at instant 3. */
-export function midnightReadoutScript(workbook: string, sheet: string, refs: readonly string[], calculateFirst: boolean): string[] {
+export function midnightReadoutScript(path: string, sheet: string, refs: readonly string[], calculateFirst: boolean): string[] {
   const cell = (r: string): string[] => [
     `set v to ""`, `try`, `  set v to ((value of range "${q(r)}" of ws) as string)`, `end try`,
     `set df to "missing value"`, `try`, `  set df to (color of interior object of display format of range "${q(r)}" of ws as string)`, `end try`,
@@ -120,7 +149,8 @@ export function midnightReadoutScript(workbook: string, sheet: string, refs: rea
   ]
   const sentinel = (label: string): string[] => [`set s to ""`, `try`, `  set s to ((value of range "${MIDNIGHT_SENTINELS.now}" of ws) as string)`, `end try`, `set end of outList to ("${label}" & ":::" & s & ":::")`]
   return [
-    `set wb to workbook "${q(workbook)}"`,
+    ...workbookByPath(path),
+    ...frontIsPath(path),
     `set ws to worksheet "${q(sheet)}" of wb`,
     ...(calculateFirst ? ['calculate'] : []),
     'set outList to {}',
@@ -185,8 +215,15 @@ export function screenTokens(png: DecodedPng): Record<string, MidnightToken | 'u
 
 export class MidnightAbort extends Error {}
 
+/** Aborts unless exactly one open workbook has the target's name and its full path is the target's. */
+function assertOnlyTarget(deps: MidnightCaptureDeps, target: string, label: string): void {
+  const name = target.split('/').pop()!
+  const same = deps.openWorkbookPaths().filter(p => p.split('/').pop() === name)
+  if (same.length !== 1 || same[0] !== target) throw new MidnightAbort(`${label}: expected exactly the target ${target} open under its name, found [${same.join(', ')}]`)
+}
+
 /** One instant: checks, screenshot, readout, screenshot, checks. */
-async function instant(deps: MidnightCaptureDeps, c: CfOracleCase, workbook: string, label: string, expectedDate: string, shots: readonly string[], calculate: boolean): Promise<MidnightInstantObservation & { startedAt: string; endedAt: string; raw: unknown }> {
+async function instant(deps: MidnightCaptureDeps, c: CfOracleCase, target: string, label: string, expectedDate: string, shots: readonly string[], calculate: boolean): Promise<MidnightInstantObservation & { startedAt: string; endedAt: string; raw: unknown }> {
   const zone = c.clockRequirement!.requiredTimeZone
   const guard = (what: string) => {
     if (deps.displayLocked()) throw new MidnightAbort(`${label}: the display is locked (${what})`)
@@ -198,9 +235,24 @@ async function instant(deps: MidnightCaptureDeps, c: CfOracleCase, workbook: str
   if (localDateBefore !== expectedDate) throw new MidnightAbort(`${label}: the local date is ${localDateBefore}, not ${expectedDate}`)
   const refs = MIDNIGHT_CELLS.map(x => x.ref)
   let screen: Record<string, MidnightToken | 'unknown'> | undefined, screenAfter: Record<string, MidnightToken | 'unknown'> | undefined
-  if (!calculate) { deps.screenshot(resolve(REPO_ROOT, shots[0]!)); screen = screenTokens(decodePngSync(deps.readFile(resolve(REPO_ROOT, shots[0]!)))!) }
+  // Fix round 3: before the screenshot and before the readout, the target must be the only workbook of its name, at its
+  // full path, and the front one (read-only queries, each guarded).
+  const identity = (what: string): void => {
+    guard(`the workbook check before ${what}`)
+    assertOnlyTarget(deps, target, `${label} (before ${what})`)
+    guard(`the front check before ${what}`)
+    let front: string
+    try { front = deps.excel(midnightFrontCheckScript(target)) } catch (e) { throw new MidnightAbort(`${label}: the target is not the front workbook before ${what} (${(e as Error).message})`) }
+    if (front.trim() !== 'front') throw new MidnightAbort(`${label}: the target is not the front workbook before ${what}`)
+  }
+  if (!calculate) {
+    identity('the screenshot')
+    deps.screenshot(resolve(REPO_ROOT, shots[0]!)); screen = screenTokens(decodePngSync(deps.readFile(resolve(REPO_ROOT, shots[0]!)))!)
+  }
+  identity('the readout')
   guard('the readout')
-  const raw = deps.excel(midnightReadoutScript(workbook, c.sheet, [...refs, MIDNIGHT_SENTINELS.today], calculate))
+  let raw: string
+  try { raw = deps.excel(midnightReadoutScript(target, c.sheet, [...refs, MIDNIGHT_SENTINELS.today], calculate)) } catch (e) { throw new MidnightAbort(`${label}: the readout refused (${(e as Error).message})`) }
   const readout = parseMidnightReadout(raw)
   const shotAfter = calculate ? shots[0]! : shots[1]!
   deps.screenshot(resolve(REPO_ROOT, shotAfter))
@@ -229,7 +281,6 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
   if (start > at.setup) throw new MidnightAbort(`started at ${new Date(start).toISOString()}, after the setup time ${MIDNIGHT_TIMES.setup}`)
   const shots = c.acrossMidnight.screenshotPaths
   const release = deps.keepAwake()
-  let workbook: string | undefined
   let openSent = false
   const target = resolve(REPO_ROOT, c.saved)
   try {
@@ -248,19 +299,21 @@ export async function runMidnightCapture(c: CfOracleCase, deps: MidnightCaptureD
     const name = target.split('/').pop()!
     const clash = deps.openWorkbookPaths().find(p => p.split('/').pop() === name)
     if (clash !== undefined) throw new MidnightAbort(`setup: a workbook named ${name} is already open (${clash}); close it first`)
-    workbook = deps.openWorkbook(target, what => { guard(what); if (what === 'the open') openSent = true })
+    deps.openWorkbook(target, what => { guard(what); if (what === 'the open') openSent = true })
+    guard('the workbook check before the setup script')
+    assertOnlyTarget(deps, target, 'setup')
     guard('the setup script')
-    deps.excel(midnightSetupScript(workbook, c.sheet))
+    try { deps.excel(midnightSetupScript(target, c.sheet)) } catch (e) { throw new MidnightAbort(`setup: the setup script refused (${(e as Error).message})`) }
     deps.log(`setup done at ${new Date(deps.now()).toISOString()}`)
     await deps.sleepUntil(at.instant1)
-    const i1 = await instant(deps, c, workbook, 'instant 1', D, [shots[0]!, shots[1]!], false)
+    const i1 = await instant(deps, c, target, 'instant 1', D, [shots[0]!, shots[1]!], false)
     deps.log(`instant 1 done at ${i1.endedAt}`)
     await deps.sleepUntil(at.instant2)
-    const i2 = await instant(deps, c, workbook, 'instant 2', D1, [shots[2]!, shots[3]!], false)
+    const i2 = await instant(deps, c, target, 'instant 2', D1, [shots[2]!, shots[3]!], false)
     deps.log(`instant 2 done at ${i2.endedAt}`)
     let i3: Awaited<ReturnType<typeof instant>> | undefined
     try {
-      i3 = await instant(deps, c, workbook, 'instant 3', D1, [shots[4]!], true)
+      i3 = await instant(deps, c, target, 'instant 3', D1, [shots[4]!], true)
     } catch (e) {
       if (!(e instanceof MidnightAbort)) throw e
       deps.log(`instant 3 not taken: ${e.message}`)
