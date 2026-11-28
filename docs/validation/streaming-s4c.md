@@ -181,6 +181,46 @@ Legs (a)–(g) are 4a's and 4b's, unchanged. (h)–(j) are 4c's (Task 12): (h) a
 - Load (1/5/15 min): start 5.90/6.78/8.14, after the serial run 5.44/6.60/7.98, end 5.23/6.19/7.66. 4b recorded 83.8 ms (dpr 1) at a load of about 4; on this one run the dpr 1 p95 is 94.3 ms. 4c edited the tile path (`server/src/sheet/tile.ts`, `render.ts`, `pool.ts`, the tile-grid bound), so the rise is not attributed to load; it was not investigated, since T8 p95 is recorded and not gated for 4c.
 - The max is still the worker-recycle stall (about 0.86 s).
 
+## Linux CI and the million-row open
+
+PR #115's first CI run (ubuntu-latest, x86_64, Bun 1.4.5, server shard 2/2) failed three million-row cases. All three pass on macOS:
+- `sheet-sort-filter` "a million-row sort": the 10 s `hello` wait ran out;
+- the `beforeAll` of `sheet-view-prep` "a cold first sort of a million rows under visible-only": it ran out at 30 s;
+- the `beforeAll` of "a sorted million-row view under visible-only after a worker recycle": it ran out at 30 s, and the CI log shows `RenderTimeout` from `ensureOpen`, which is the pool's own 30 s open deadline.
+
+**Cause: the open itself, not 4c.** The open is `OfficePackage.load`, then `projectPackage` (visible-only only), then the engine parse, then the saved-values parse (F1). `render.ts` `open`, `server/src/policy*`, `src/xlsx/parse` and `src/core` are unchanged since fb624989. The phases were timed on the `oneMillionSort` bytes (7,970,544 B), in-process, in ms. Linux is an OrbStack ubuntu:24.04 container, aarch64, run with `--privileged --init` as a non-root user, Bun 1.4.5.
+
+| | project | engine parse | cached parse | total |
+|---|---|---|---|---|
+| macOS head, visible-only | 10,507 | 6,932 | 1,882 | 19,331 |
+| macOS base fb624989, visible-only | 10,544 | 7,400 | 2,437 | 20,388 |
+| macOS head / base, full | 0 | 5,043 / 4,850 | 1,260 / 1,127 | 6,310 / 5,983 |
+| Linux head, visible-only (3 runs) | 12,050–16,099 | 7,414–7,993 | 1,685–2,434 | 22,484–25,206 |
+| Linux base, visible-only (3 runs) | 12,471–13,490 | 6,494–7,869 | 1,606–2,664 | 20,579–23,882 |
+| Linux head / base, full | 0 | 6,375 / 6,139 | 1,490 / 1,434 | 7,874 / 7,581 |
+
+A whole `Pool.open` (tiles mode, interleaved runs) on Linux took 22.4–27.3 s at the head and 21.7–24.4 s at the base under visible-only, and about 8.0 s at both under `'full'`. The head and the base are equal within noise.
+
+The projection's profile on macOS (10.9 s): `writeTree` is 61% of it. It runs twice per part, once for the untouched-bytes comparison and once for the output, at about 3.3 s per call on the sheet. `Object.entries` in `readTree` and `attr()` takes 1.9 s, and `scanVisibility` about 2.5 s.
+
+**The CI runner is about 2.3× slower than the container.** That is the median of six tests that pass in CI (CI ms / container ms): 14 sequential million-row sorts 37,978 / 17,568; grid500x100 tile bytes 9,590 / 3,338; a 512² tile 2,416 / 1,046; edge tiles 1,891 / 808; pool.tile admission 3,397 / 1,711; the million-row last row 342 / 147. The ratios run from 2.0 to 2.9. So on the CI runner the visible-only million-row open is estimated at about 50–57 s, and the `'full'` one at about 18 s.
+
+**A product limit, as it already was at 4b.** On a host at CI speed, a visible-only open of a million-row sheet exceeds the 30 s open deadline and is refused. Production defaults are unchanged: the pool's 30 s open deadline, the render deadline and every server limit. Owner ruling (option 1): only the million-row cases get longer waits.
+- Their pools use the test-only `openDeadlineMs: 120_000`; "a million-row sort" now runs on a one-worker pool of its own.
+- "A million-row sort" waits 60 s for its manifest. `Client.hello` gained an optional `ms` argument; its default is unchanged.
+- The visible-only cold-sort open waits 120 s for its manifest.
+- A hook or test that parses the document has 180 s.
+- The recycle describe is split so that no hook or test holds two parses: open and layout; then sort, tile and recycle; then the layout re-parse.
+Every assertion is kept.
+
+Remaining risk (not changed; it is a production deadline): on the CI runner, the prep deadline for this sheet is 2,000 + 7.6 × `PREP_MS_PER_MIB` ≈ 9.6 s. The cold prep before the recycle test's tile took 3.5 s in the container, so about 8 s is estimated at CI speed.
+
+After the change the cases were re-run, each file alone:
+- **macOS:** `sheet-view-prep` 16 pass; `sheet-sort-filter` 20 pass.
+- **Linux container:** `sheet-view-prep` 16 pass in 114.8 s, where before the change the recycle describe's second hook ran out at 30.0 s. "commits" took 4,975 ms and "its later tiles paint" 5,031 ms. `sheet-sort-filter` 20 pass; "a million-row sort" took 11,954 ms.
+
+At CI speed, that 5.0 s test (a cold prep plus a paint) is about 11.5 s. Its prep part is the only step left near a production deadline.
+
 ## Known flakes and environment notes
 
 Seen during 4c; listed, not fixed. The server and vitest cases passed when their files ran alone, except `slideshow-screens`, which fails alone too.
@@ -222,7 +262,7 @@ The full text is in the S4 design, §11.2 "As built (4c)", and the dated parent 
 
 - **Root cause:** `xlsx-viewer-worker-overflow` `SPEC guard %s` with `epoch-after-stage` (from 4b). The million-row refusal is explained and fixed (Status); `server/README.md` has its Stage 4c bullet (6d76d3cb, c4050d92).
 - **Resolved by fix round 1 (9985539c): tiles after a recycle, and repeated preps.** Before it, a probe (one-worker pool, `recyclePages: 1`, `oneMillionSort`, `visible-only`) got `RenderTimeout` after 19.5 s and 20.3 s on the tiles after the recycle. A too-large sort also cost two worker retirements. Now tiles and text jobs prep, and the verdict is remembered (§Prep deadline).
-- **The `visible-only` million-row open takes about 19–23 s** (projection and parse) against the 30 s open deadline. The prep test opens it in a `beforeAll` of its own 30 s.
+- **The `visible-only` million-row open takes about 19–23 s on macOS and about 50–57 s (estimated) on the CI runner** (projection and parse), against the 30 s open deadline, so it is refused on a host at CI speed (§Linux CI and the million-row open). **Follow-up: speed up the open.** Write each projected tree once (dirty tracking in place of the second `writeTree`), parse once in `readTree` (the validator pass and the ordered parse are two parses), make `attr()` a direct lookup, and avoid the second XLSX parse in a tiles open (the engine parse and the saved-values parse).
 - **A withholding-bearing corpus XLSX** (a drawing over text, a withheld key cell, a collapsed body row), for the 4b ink oracle and the 4c corpus parity alike.
 - **Column and row default styles** are not kept by the parser (above).
 - **A harness `POST /drop`** would let a browser spec prove resume (Task 11).

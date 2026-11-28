@@ -21,7 +21,7 @@ import { buildXlsx, type XlsxCellSpec } from '../../src/testdata/ooxml-builders'
 import { decodeSheetLayout, decodeSheetOrder, decodeTileBody, decodeValuesPage, LAYOUT_PART_BYTES, ORDER_LIMITS, TILE_ZOOM_STEPS, type SheetOrder, type StreamSheetLayout, type WireRange, type WireSortSpec } from '../../src/stream/sheet-wire'
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
-import type { Pool, PoolSheetViewJob, PoolTileJob } from '../src/pool'
+import { Pool, type PoolSheetViewJob, type PoolTileJob } from '../src/pool'
 import { DocumentHost } from '../src/render'
 import type { SheetViewReply } from '../src/sheet/view-ops'
 import { orderBytes, type CanonicalView, type ResolvedFilter } from '../src/sheet/view-spec'
@@ -85,10 +85,10 @@ async function serverOn(doc: Uint8Array, o: Parameters<typeof start>[0] = {}) {
   const store = AuditStore.open(':memory:')
   const h = await start({ doc, now: () => clock.t, tokenTtlSec: 86_400, audit: new AuditTable({ store }), ...o })
   let rq = 1000
-  /** A new session, or (`resume`) the resume of `resume.sid` on a new socket. */
-  async function open(resume?: { sid: string; token: string }) {
+  /** A new session, or (`resume`) the resume of `resume.sid` on a new socket. `helloMs`: the manifest wait (`Client.hello`'s default if absent). */
+  async function open(resume?: { sid: string; token: string }, helloMs?: number) {
     const c = new Client(h.url)
-    const m = await c.hello({ features: VIEW, ...(resume ? { resume: { sid: resume.sid, resumeProof: resume.token } } : {}) })
+    const m = await c.hello({ features: VIEW, ...(resume ? { resume: { sid: resume.sid, resumeProof: resume.token } } : {}) }, helloMs)
     await c.ready()
     while (h.stream.table.get(m.session.sid)?.status !== 'stream') await Bun.sleep(5)
     const sid = m.session.sid as string
@@ -579,8 +579,12 @@ describe('rates, cancel, admission and audit (P8, P11, P12)', () => {
   }, 30_000)
 
   test('a million-row sort', async () => {
-    const s = await serverOn(await oneMillionSort(), { policy: { contentPolicy: 'full' } })
-    const a = await s.open(), b = await s.open()
+    // Budgets: the million-row open costs about 18 s ('full') on the CI runner, pre-existing at 4b fb624989
+    // (docs/validation/streaming-s4c.md, "Linux CI and the million-row open"). A pool of its own, with a 120 s open
+    // deadline (the production default stays 30 s), and a 60 s manifest wait.
+    const own = new Pool({ workers: 1, openDeadlineMs: 120_000 })
+    const s = await serverOn(await oneMillionSort(), { policy: { contentPolicy: 'full' }, pool: own })
+    const a = await s.open(undefined, 60_000), b = await s.open(undefined, 60_000)
     const held0 = s.h.stream.documentLedgerBytes()
     const range = wire(0, ONE_MILLION_ROWS - 1, 0, 0, 0)
     const view: CanonicalView = { sort: { range, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, sortFilter: null, filter: null }
@@ -601,7 +605,9 @@ describe('rates, cancel, admission and audit (P8, P11, P12)', () => {
     while (s.h.stream.table.get(b.sid)) await Bun.sleep(5)
     expect(s.h.stream.documentLedgerBytes()).toBe(held0)
     await s.h.stop()
-  }, 30_000)
+    await own.dispose()
+    // The million-row open costs about 18 s on the CI runner (docs/validation/streaming-s4c.md): one open, 180 s.
+  }, 180_000)
 
   test('audit', async () => {
     const s = await serverOn(await sortGrid())

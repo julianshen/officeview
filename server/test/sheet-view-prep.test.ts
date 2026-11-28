@@ -99,11 +99,14 @@ describe('the prep deadline', () => {
 describe('a cold first sort of a million rows under visible-only', () => {
   let s: Awaited<ReturnType<typeof serverOn>>
   let a: Awaited<ReturnType<Awaited<ReturnType<typeof serverOn>>['open']>>
-  // The open parses and projects the million rows (about 20 s measured); the sort test below has its own 30 s.
+  // The open parses and projects the million rows: about 20 s on macOS, about 50 s on the CI runner, pre-existing at
+  // 4b fb624989 (docs/validation/streaming-s4c.md, "Linux CI and the million-row open"). So this pool's open deadline
+  // is 120 s (the production default stays 30 s), the manifest wait 120 s and the hook 180 s; the sort test below has
+  // its own 30 s (it parses nothing).
   beforeAll(async () => {
-    s = await serverOn(await oneMillionSort(), new Pool({ workers: 1 }), { policy: { contentPolicy: 'visible-only' } })
-    a = await s.open(29_000)
-  }, 30_000)
+    s = await serverOn(await oneMillionSort(), new Pool({ workers: 1, openDeadlineMs: 120_000 }), { policy: { contentPolicy: 'visible-only' } })
+    a = await s.open(120_000)
+  }, 180_000)
 
   test('commits', async () => {
     const layout = await a.layout()
@@ -124,20 +127,27 @@ describe('a sorted million-row view under visible-only after a worker recycle (f
   const view = { sort: { range, keys: [{ col: 0, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
   const tileJob = { docRef: 'doc', contentPolicy: 'visible-only' as const, sheetIndex: 0, viewGen: 1, zoomStep: 5, dpr: 1 as const, palette: 'light' as const, col: 0, row: 0, mark: { kind: 'off' as const }, clock, view }
   let pool: Pool
-  // Each hook is a parse of the million rows (about 20 s); the test below has its own 30 s.
+  // A parse of the million rows costs about 20 s on macOS and about 50 s on the CI runner, pre-existing at 4b fb624989
+  // (docs/validation/streaming-s4c.md, "Linux CI and the million-row open"). So the pool's open deadline is 120 s (the
+  // production default stays 30 s), no hook holds two parses, and a hook that parses has 180 s. The test below
+  // parses nothing and keeps its own 30 s.
   beforeAll(async () => {
-    pool = new Pool({ workers: 1, recyclePages: 1 }); pools.push(pool)
+    pool = new Pool({ workers: 1, recyclePages: 1, openDeadlineMs: 120_000 }); pools.push(pool)
     await pool.open('doc', await oneMillionSort(), 'visible-only', { sheetMode: 'tiles' })
     await pool.sheetLayout('s', { docRef: 'doc', contentPolicy: 'visible-only', sheetIndex: 0, clock })
-  }, 30_000)
+  }, 180_000)
+  // No parse: the sort and the first tile run on the open document; the tile's page then recycles the worker.
   beforeAll(async () => {
     const r = await pool.sheetView('s', { docRef: 'doc', contentPolicy: 'visible-only', clock, op: 'sort', sheetIndex: 0, base: { sort: null, sortFilter: null, filter: null }, sort: view.sort })
     expect(r.op).toBe('view')
-    // The first tile paints on the warm port; the worker then recycles, and the layout job parses the document again.
+    // The first tile paints on the warm port; the worker then recycles.
     expect((await pool.tile('s', tileJob, TILE_BYTES_ESTIMATE)).w).toBe(512)
     expect(pool.stats().recycled).toBe(1)
-    await pool.sheetLayout('s', { docRef: 'doc', contentPolicy: 'visible-only', sheetIndex: 0, clock })
   }, 30_000)
+  // One parse: the layout job on the recycled worker parses the document again (180 s, as above).
+  beforeAll(async () => {
+    await pool.sheetLayout('s', { docRef: 'doc', contentPolicy: 'visible-only', sheetIndex: 0, clock })
+  }, 180_000)
 
   test('its later tiles paint: the cold port is prepared under the prep deadline', async () => {
     const preps = pool.stats().sheetPreps
