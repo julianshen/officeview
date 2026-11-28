@@ -103,6 +103,8 @@ export function sheetViewNext(job: SheetViewJob): CanonicalView {
  */
 export const PREP_MS_PER_MIB = 1000
 export const PREP_DEADLINE_CAP_MS = 30_000
+/** Owner decision (2026-11-28): how long a prep `timeout` verdict is remembered for its port (a `failed` one is kept). */
+export const PREP_TIMEOUT_MEMORY_MS = 60_000
 /** The prep deadline of a document of `bytes` admitted bytes (`cap`: `PREP_DEADLINE_CAP_MS` unless a test injects one). */
 export function sheetPrepDeadlineMs(bytes: number, renderDeadlineMs: number, cap = PREP_DEADLINE_CAP_MS): number {
   return Math.min(cap, renderDeadlineMs + Math.ceil(PREP_MS_PER_MIB * bytes / (1024 * 1024)))
@@ -182,10 +184,12 @@ export class Pool {
   /**
    * Fix round 1 (controller ruling): the too-large verdicts of sheet preps by `docRef|policy|sheetIndex|day|timeZone`
    * (the port the prep builds). A later job that reads the port is refused at once, with no admission and no worker,
-   * so a client's re-fetch never retires a second worker. Kept while the document is registered (cleared with
-   * `showRefusals`: re-register, forget).
+   * so a client's re-fetch never retires a second worker. A `failed` verdict is kept while the document is registered
+   * (cleared with `showRefusals`: re-register, forget). Owner decision (2026-11-28): a `timeout` verdict is kept only
+   * `PREP_TIMEOUT_MEMORY_MS` from when it was recorded (`at`, on the pool's clock `now`); once older, it is dropped and
+   * the next job preps again. A later timeout records it afresh; a later success clears nothing else.
    */
-  private prepRefusals = new Map<string, SheetPrepRefused['cause']>()
+  private prepRefusals = new Map<string, { cause: SheetPrepRefused['cause']; at: number }>()
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
    * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
@@ -535,7 +539,7 @@ export class Pool {
     } catch (e) {
       const cause = e instanceof RenderTimeout ? 'timeout' : e instanceof RenderFailed && e.refusal === undefined && !this.disposed ? 'failed' : undefined
       if (!cause) throw e
-      if (this.sources.has(docRef)) this.prepRefusals.set(prepKey(docRef, policy, sheetIndex, clock), cause)
+      if (this.sources.has(docRef)) this.prepRefusals.set(prepKey(docRef, policy, sheetIndex, clock), { cause, at: this.now() })
       throw new SheetPrepRefused(cause)
     }
     if (signal?.aborted) throw new ShowCancelled()
@@ -594,8 +598,13 @@ export class Pool {
    * Final review R3: every caller checks again once it holds the worker's exclusive slot, before reopening or
    * preparing, so a job that queued behind the refused prep does not run it again. */
   private knownPrep(docRef: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock | undefined): void {
-    const known = clock && this.prepRefusals.get(prepKey(docRef, policy, sheetIndex, clock))
-    if (known) throw new SheetPrepRefused(known)
+    if (!clock) return
+    const key = prepKey(docRef, policy, sheetIndex, clock)
+    const known = this.prepRefusals.get(key)
+    if (!known) return
+    // Owner decision: a timeout older than PREP_TIMEOUT_MEMORY_MS is forgotten, so this job preps again.
+    if (known.cause === 'timeout' && this.now() - known.at > PREP_TIMEOUT_MEMORY_MS) { this.prepRefusals.delete(key); return }
+    throw new SheetPrepRefused(known.cause)
   }
   /** TEST-ONLY (honoured with `testHooks`): from now on each cold port build waits `ms` first. */
   prepHangForTests(ms: number): void { if (this.testHooks) this.prepHangMs = ms }

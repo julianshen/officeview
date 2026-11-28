@@ -11,7 +11,7 @@ import { decodeSheetLayout, decodeSheetOrder, type SheetOrder, type StreamSheetL
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { DEFAULT_CAPS } from '../src/admission'
-import { Pool, TILE_BYTES_ESTIMATE, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, sheetPrepDeadlineMs, ShowCancelled } from '../src/pool'
+import { Pool, TILE_BYTES_ESTIMATE, PREP_DEADLINE_CAP_MS, PREP_MS_PER_MIB, PREP_TIMEOUT_MEMORY_MS, sheetPrepDeadlineMs, SheetPrepRefused, ShowCancelled } from '../src/pool'
 import { DocumentHost } from '../src/render'
 import { rejection } from './fixtures/rejection'
 import { Client, start } from './harness'
@@ -278,5 +278,88 @@ describe('jobs queued before a prep refusal (final review R3)', () => {
     const { pool, a, b } = await pair((p) => p.tile('s2', tile, TILE_BYTES_ESTIMATE))
     expect([a, b].map((e) => (e as Error).name)).toEqual(['SheetPrepRefused', 'SheetPrepRefused'])
     expect([pool.stats().sheetPreps, pool.stats().retired, pool.admission.reserved]).toEqual([1, 1, 0])
+  }, 30_000)
+})
+
+describe('a remembered prep timeout expires (owner decision)', () => {
+  const clock = { day: '2026-11-28', timeZone: 'UTC' }
+  const view = { sort: { range: GRID, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+  const route = { docRef: 'doc', contentPolicy: 'visible-only' as const, clock }
+  const derive = (pool: Pool, s: string) => pool.sheetView(s, { ...route, op: 'derive', sheetIndex: 0, view })
+  const counts = (pool: Pool) => [pool.stats().sheetPreps, pool.stats().retired]
+  /** A pool on a clock the test steps (`t.ms`), whose cold port builds hang past the prep deadline until released. */
+  async function timedOut(o: Partial<ConstructorParameters<typeof Pool>[0]> = {}) {
+    const t = { ms: 1_000_000 }
+    const pool = new Pool({ workers: 1, testHooks: true, now: () => t.ms, prepDeadlineCapMsForTests: 100, prepHangMsForTests: 1000, ...o }); pools.push(pool)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    return { pool, t }
+  }
+
+  test('PREP_TIMEOUT_MEMORY_MS is 60 s', () => {
+    expect(PREP_TIMEOUT_MEMORY_MS).toBe(60_000)
+  })
+
+  test('a job within 60 s of a prep timeout is refused too-large with no new prep and no new retire', async () => {
+    const { pool, t } = await timedOut()
+    const first = await rejection(derive(pool, 's1'))
+    expect([(first as SheetPrepRefused).name, (first as SheetPrepRefused).cause]).toEqual(['SheetPrepRefused', 'timeout'])
+    expect(counts(pool)).toEqual([1, 1])
+    t.ms += PREP_TIMEOUT_MEMORY_MS - 1
+    const again = await rejection(derive(pool, 's2'))
+    expect([(again as SheetPrepRefused).name, (again as SheetPrepRefused).cause]).toEqual(['SheetPrepRefused', 'timeout'])
+    expect(counts(pool)).toEqual([1, 1])
+    expect(pool.admission.reserved).toBe(0)
+  }, 30_000)
+
+  test('past 60 s the remembered timeout is dropped: the same job preps again and commits', async () => {
+    const { pool, t } = await timedOut()
+    await rejection(derive(pool, 's1'))
+    expect(counts(pool)).toEqual([1, 1])
+    t.ms += PREP_TIMEOUT_MEMORY_MS + 1
+    pool.prepHangForTests(0)
+    const r = await derive(pool, 's2')
+    expect(r.op).toBe('view')
+    expect(counts(pool)).toEqual([2, 1])
+    expect(pool.admission.reserved).toBe(0)
+  }, 30_000)
+
+  test('a new timeout re-arms the 60 s', async () => {
+    const { pool, t } = await timedOut()
+    await rejection(derive(pool, 's1'))
+    t.ms += PREP_TIMEOUT_MEMORY_MS + 1
+    // The hang is still in place: the prep runs again and times out again.
+    await rejection(derive(pool, 's2'))
+    expect(counts(pool)).toEqual([2, 2])
+    t.ms += PREP_TIMEOUT_MEMORY_MS - 1
+    const again = await rejection(derive(pool, 's3'))
+    expect((again as SheetPrepRefused).cause).toBe('timeout')
+    expect(counts(pool)).toEqual([2, 2])
+  }, 30_000)
+
+  test('a failed prep is still refused past 60 s', async () => {
+    // A real worker whose `sheet-view-prep` jobs are answered with a failure reply (no refusal code) in its place.
+    const factory = (url: string, options: WorkerOptions) => {
+      const w = new Worker(url, options)
+      let last = { parses: 0, pages: 0, docs: 0, probes: 0 }
+      w.addEventListener('message', (e) => { const d = (e as MessageEvent).data; if (d && d.stats) last = d.stats })
+      const post = w.postMessage.bind(w) as (m: unknown, t?: Transferable[]) => void
+      w.postMessage = ((m: { type?: string; id?: number }, tr?: Transferable[]) => {
+        if (m && m.type === 'sheet-view-prep') {
+          queueMicrotask(() => w.onmessage?.({ data: { id: m.id, ok: false, error: 'forced prep failure', stats: last } } as MessageEvent))
+          return
+        }
+        post(m, tr)
+      }) as typeof w.postMessage
+      return w
+    }
+    const { pool, t } = await timedOut({ workerFactoryForTests: factory, prepHangMsForTests: undefined, prepDeadlineCapMsForTests: undefined })
+    const first = await rejection(derive(pool, 's1'))
+    expect([(first as SheetPrepRefused).name, (first as SheetPrepRefused).cause]).toEqual(['SheetPrepRefused', 'failed'])
+    expect(counts(pool)).toEqual([1, 0])
+    t.ms += PREP_TIMEOUT_MEMORY_MS + 1
+    const again = await rejection(derive(pool, 's2'))
+    expect((again as SheetPrepRefused).cause).toBe('failed')
+    expect(counts(pool)).toEqual([1, 0])
+    expect(pool.admission.reserved).toBe(0)
   }, 30_000)
 })
