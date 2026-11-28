@@ -11,6 +11,7 @@ import type { SheetClock } from '../sheet/clock'
 import type { TileJob } from '../sheet/tile'
 import type { SheetTextJob } from '../sheet/text-ops'
 import type { SheetViewJob } from '../sheet/view-ops'
+import type { CanonicalView } from '../sheet/view-spec'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
@@ -22,6 +23,8 @@ export type WorkerRequest =
     /** TEST-ONLY (the pool sends it only with `testHooks`): each probe's hold. */ mediaHoldMs?: number
     /** TEST-ONLY (the pool sends it only with `testHooks`): `mediaPart` never returns once it wrote its file. */
     testWedge?: 'after-part'
+    /** TEST-ONLY (the pool sends it only with `testHooks`): count each derived-view replay by the job type it ran in. */
+    countReplays?: true
   }
   /** Piece 5 (D21, D22): a unit's audio uses and their probed entries (a short read job). */
   | { type: 'media-refs'; id: number; docKey: string; unit: number }
@@ -54,13 +57,17 @@ export type WorkerRequest =
   /** Stage 4c (P3, P6): one sort, filter, derive, value-list or range-detect job over a sheet's key view. */
   | { type: 'sheet-view'; id: number; docKey: string; clock: SheetClock; contentPolicy: 'visible-only' | 'full'; job: SheetViewJob }
   /** Stage 4c Task 14a: prepare sheet `sheetIndex`'s sort data (snapshot, key view, `sheet-view` port) under the
-   * session clock; a warm port answers at once. `hangMs` (test hook): a cold build waits this long first. */
-  | { type: 'sheet-view-prep'; id: number; docKey: string; clock: SheetClock; contentPolicy: 'visible-only' | 'full'; sheetIndex: number; hangMs?: number }
+   * session clock; a warm port answers at once. Owner decision 2026-11-28: then derive and cache each of `views` (the
+   * non-identity views the next job reads), so that job only reads them. `hangMs` (test hook): a cold build waits
+   * this long first. */
+  | { type: 'sheet-view-prep'; id: number; docKey: string; clock: SheetClock; contentPolicy: 'visible-only' | 'full'; sheetIndex: number; views?: CanonicalView[]; hangMs?: number }
   /** Stage 4c final review R2: drop what the document retains for derived view `viewHash` of `(sheetIndex, clock)`
    * (its last server holder is gone). */
   | { type: 'sheet-view-release'; id: number; docKey: string; clock: SheetClock; sheetIndex: number; viewHash: string }
   /** TEST-ONLY (the pool sends it only with `testHooks`): what the document retains for derived views. */
   | { type: 'sheet-view-retained'; id: number; docKey: string }
+  /** TEST-ONLY (the pool sends it only with `testHooks`): the derived-view replays by job type (`countReplays`). */
+  | { type: 'sheet-view-replays'; id: number }
   /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
   | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
@@ -104,8 +111,10 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   if (m.type === 'probe-result') { probeAnswered(m); return }
   try {
     let result: unknown
+    if (host.replaysForTests) host.jobForTests = m.type
     if (m.type === 'init') {
       host.configureMedia(m.media, m.media ? poolProbe : undefined)
+      if (m.countReplays) host.replaysForTests = {}
       if (m.mediaHoldMs) host.mediaSeams = { hangMs: m.mediaHoldMs }
       // Bun (1.3.10, measured) terminates a worker only once its JS yields: the wedge awaits, never spins.
       if (m.testWedge === 'after-part') host.afterPartForTests = () => new Promise<void>(() => {})
@@ -123,9 +132,10 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     else if (m.type === 'sheet-text') result = await host.sheetText(m.docKey, m.clock, m.job)
     // A derived view's order is cached here: its buffers are copied, never transferred.
     else if (m.type === 'sheet-view') result = await host.sheetView(m.docKey, m.clock, m.contentPolicy, m.job)
-    else if (m.type === 'sheet-view-prep') result = await host.sheetViewPrep(m.docKey, m.clock, m.contentPolicy, m.sheetIndex, m.hangMs)
+    else if (m.type === 'sheet-view-prep') result = await host.sheetViewPrep(m.docKey, m.clock, m.contentPolicy, m.sheetIndex, m.hangMs, m.views)
     else if (m.type === 'sheet-view-release') { await host.releaseView(m.docKey, m.sheetIndex, m.clock, m.viewHash); result = null }
     else if (m.type === 'sheet-view-retained') result = await host.retainedViewsForTests(m.docKey)
+    else if (m.type === 'sheet-view-replays') result = { ...host.replaysForTests }
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }

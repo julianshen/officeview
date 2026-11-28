@@ -25,7 +25,7 @@ import { sessionSizesOf, type WireSizes } from './sheet/view-state'
 import { sheetTextView, type TextView } from './sheet/text-view'
 import { answerSheetText, type SheetTextJob, type SheetTextReply } from './sheet/text-ops'
 import { keyDocument, sheetKeyView, type KeyView } from './sheet/key-view'
-import { openSheetViewPort, type DerivedCache, type DerivedView, type SheetViewJob, type SheetViewPort, type SheetViewReply } from './sheet/view-ops'
+import { openSheetViewPort, SheetViewFailed, type DerivedCache, type DerivedView, type SheetViewJob, type SheetViewPort, type SheetViewReply } from './sheet/view-ops'
 import { canonicalView, canonicalViewHash, IDENTITY_VIEW, isIdentityView, type CanonicalView } from './sheet/view-spec'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import { TILE_PX, TILE_ZOOM_STEPS } from '../../src/stream/sheet-wire'
@@ -488,8 +488,13 @@ export class DocumentHost {
    * Stage 4c Task 14a: prepares sheet `sheetIndex`'s sort data under `clock`: its snapshot, key view and `sheet-view`
    * port, the entry every later job of `(sheetIndex, clock)` reads. `built` is false when the port was already there
    * (a warm port: nothing is built). `hangMs` (test hook): a cold build waits this long first.
+   *
+   * Owner decision 2026-11-28: then each of `views` other than the identity view is derived into the derived-view
+   * cache (`derivedView`), so the next job (tile, sheet-text, sheet-view) only reads it under its render deadline. The
+   * cached view stays under R2: the pool releases it after that job unless a holder charges it. A replay the engine
+   * refuses (`SheetViewFailed`) is no verdict on the port: nothing is cached, and the job's own derive fails as before.
    */
-  async sheetViewPrep(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', sheetIndex: number, hangMs?: number): Promise<{ built: boolean }> {
+  async sheetViewPrep(docKey: string, clock: SheetClock, contentPolicy: 'visible-only' | 'full', sheetIndex: number, hangMs?: number, views: readonly CanonicalView[] = []): Promise<{ built: boolean }> {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
     if ((doc.contentPolicyId === 'full@1') !== (contentPolicy === 'full')) throw new RenderRefusal('bad-job', 'sheet-view: content policy')
@@ -498,6 +503,10 @@ export class DocumentHost {
     const e = this.viewPortEntry(doc, docKey, portKey, sheetIndex, clock, contentPolicy, hangMs)
     e.uses++
     try { await e.port } finally { if (--e.uses === 0 && e.evicted) void closeViewPort(e) }
+    for (const view of views) {
+      if (isIdentityView(canonicalView(view))) continue
+      try { await this.derivedView(docKey, sheetIndex, clock, view) } catch (err) { if (!(err instanceof SheetViewFailed)) throw err }
+    }
     return { built }
   }
 
@@ -561,6 +570,7 @@ export class DocumentHost {
           const key = `${portKey}|${canonicalViewHash(view)}`
           const hit = derived.get(key)
           if (hit) { derived.delete(key); derived.set(key, hit); seen?.(hit) }
+          else if (this.replaysForTests) this.replaysForTests[this.jobForTests] = (this.replaysForTests[this.jobForTests] ?? 0) + 1
           return hit
         },
         put: (d) => {
@@ -857,6 +867,10 @@ export class DocumentHost {
 
   /** TEST-ONLY (set by the worker from a `testHooks` init): runs once `mediaPart` has written its file. */
   afterPartForTests?: () => Promise<void>
+  /** TEST-ONLY (set by the worker from a `testHooks` init): derived-view replays (cache misses) by the job type they
+   * ran in (`jobForTests`, set by the worker per message); absent in production. */
+  replaysForTests?: Record<string, number>
+  jobForTests = ''
   /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch, a ledger); empty in production. */
   showOptions: ShowBuildOptions = {}
   /** The seams plus the job's admitted grant (PR #78 round 13), when the pool sent one. */

@@ -373,3 +373,62 @@ describe('a remembered prep timeout expires (owner decision)', () => {
     expect(pool.admission.reserved).toBe(0)
   }, 30_000)
 })
+
+describe('after a recycle the prep derives the view; the jobs under it only read it (owner decision 2026-11-28)', () => {
+  test('the prep replays the sort; a find and a tile under the view replay nothing in their own jobs', async () => {
+    const clock = { day: '2026-11-28', timeZone: 'UTC' }
+    const view = { sort: { range: GRID, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+    const route = { docRef: 'doc', contentPolicy: 'visible-only' as const, clock }
+    const tile = { ...route, sheetIndex: 0, viewGen: 1, zoomStep: 5, dpr: 1 as const, palette: 'light' as const, col: 0, row: 0, mark: { kind: 'off' as const }, view }
+    // Two pages per worker: the warm worker paints two tiles and recycles; the cold one paints one tile.
+    const pool = new Pool({ workers: 1, testHooks: true, recyclePages: 2 }); pools.push(pool)
+    // R2 with no holder: every job's derived view is released once it ends, so each job below starts cold.
+    pool.retainViewsBy(() => false)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    expect((await pool.sheetView('s', { ...route, op: 'sort', sheetIndex: 0, base: { sort: null, sortFilter: null, filter: null }, sort: view.sort })).op).toBe('view')
+    expect((await pool.tile('s', tile, TILE_BYTES_ESTIMATE)).w).toBe(512)
+    expect((await pool.tile('s', { ...tile, row: 1 }, TILE_BYTES_ESTIMATE)).w).toBe(512)
+    expect(pool.stats().recycled).toBe(1)
+    const retained = async () => (await pool.retainedViewsForTests('doc', 'visible-only'))!.derived
+    // The cold worker: a find under the view. Its prep builds the port and replays the sort; the find replays nothing.
+    const find = await pool.sheetText('s', { ...route, op: 'find', query: 'apple', matchCase: false, sheetIndex: 0, sizes: [], limit: 10, view })
+    expect(find.op).toBe('find')
+    expect(await pool.viewReplaysForTests('doc')).toEqual({ 'sheet-view-prep': 1 })
+    expect(await retained()).toBe(0)
+    // A tile under the view: its prep (warm port) replays the released view again; the tile job replays nothing.
+    const t = await pool.tile('s', tile, TILE_BYTES_ESTIMATE)
+    expect([t.w, t.h]).toEqual([512, 512])
+    expect(await pool.viewReplaysForTests('doc')).toEqual({ 'sheet-view-prep': 2 })
+    expect(await retained()).toBe(0)
+    expect(pool.stats().recycled).toBe(1)
+    expect(pool.admission.reserved).toBe(0)
+  }, 30_000)
+
+  test('a sort on a sorted base: the prep replays the base, the sort job only its own step', async () => {
+    const clock = { day: '2026-11-28', timeZone: 'UTC' }
+    const base = { sort: { range: GRID, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+    const route = { docRef: 'doc', contentPolicy: 'visible-only' as const, clock }
+    const pool = new Pool({ workers: 1, testHooks: true }); pools.push(pool)
+    pool.retainViewsBy(() => false)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    const r = await pool.sheetView('s', { ...route, op: 'sort', sheetIndex: 0, base, sort: { range: GRID, keys: [{ col: 1, order: 'desc' }], caseSensitive: false } })
+    expect(r.op).toBe('view')
+    expect(await pool.viewReplaysForTests('doc')).toEqual({ 'sheet-view-prep': 1 })
+    expect(await pool.retainedViewsForTests('doc', 'visible-only')).toMatchObject({ derived: 0 })
+  }, 30_000)
+
+  test('an abort during a prep that derived leaves no unheld derived view', async () => {
+    const clock = { day: '2026-11-28', timeZone: 'UTC' }
+    const view = { sort: { range: GRID, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }, sortFilter: null, filter: null }
+    const pool = new Pool({ workers: 1, testHooks: true, prepHangMsForTests: 400 }); pools.push(pool)
+    pool.retainViewsBy(() => false)
+    await pool.open('doc', await sortGrid(), 'visible-only', { sheetMode: 'tiles' })
+    const ac = new AbortController()
+    const job = pool.sheetView('s', { docRef: 'doc', contentPolicy: 'visible-only', clock, op: 'derive', sheetIndex: 0, view }, undefined, ac.signal)
+    setTimeout(() => ac.abort(), 150)
+    expect(await rejection(job)).toBeInstanceOf(ShowCancelled)
+    expect(await pool.viewReplaysForTests('doc')).toEqual({ 'sheet-view-prep': 1 })
+    expect(await pool.retainedViewsForTests('doc', 'visible-only')).toMatchObject({ derived: 0 })
+    expect(pool.admission.reserved).toBe(0)
+  }, 30_000)
+})

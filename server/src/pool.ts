@@ -99,7 +99,9 @@ export function sheetViewNext(job: SheetViewJob): CanonicalView {
  * `PREP_DEADLINE_CAP_MS`. Measured on `oneMillionSort` (7.6 MiB admitted, 1,048,576 rows), its snapshot already
  * built: a cold prep took 0.55–0.95 s under `'full'` and 1.6–2.05 s under `'visible-only'`, loaded runs included; a
  * cold snapshot adds 0.35–0.6 s. Its deadline is 2,000 + 7.6 × 1,000 ≈ 9.6 s, 3.7× the slowest prep with a cold
- * snapshot. The cap is the parse's own default deadline (`openDeadlineMs`).
+ * snapshot. The cap is the parse's own default deadline (`openDeadlineMs`). Owner decision 2026-11-28: the prep also
+ * derives the next job's view; a `visible-only` prep that derives a million-row sort took 2.6–3.3 s (snapshot built),
+ * 2.9× under the deadline.
  */
 export const PREP_MS_PER_MIB = 1000
 export const PREP_DEADLINE_CAP_MS = 30_000
@@ -115,6 +117,9 @@ const viewReadsPort = (view: CanonicalView | undefined) => view !== undefined &&
 const readsPort = (job: SheetViewJob) => job.op !== 'extent' || viewReadsPort(job.view)
 /** The port a prep builds, as its verdict is remembered. */
 const prepKey = (docRef: string, policy: string, sheetIndex: number, clock: SheetClock) => `${docRef}|${policy}|${sheetIndex}|${clock.day}|${clock.timeZone}`
+/** Owner decision 2026-11-28: the input views a `sheet-view` job derives (`derive` in view-ops), which its prep derives
+ * first: a derive's or extent's view, a sort's or filter's base. A value list and a detection derive none. */
+const sheetViewDerives = (job: SheetViewJob): Array<CanonicalView | undefined> => job.op === 'sort' || job.op === 'filter' ? [job.base] : job.op === 'derive' || job.op === 'extent' ? [job.view] : []
 /** A sheet-view job's admission charge: `orderBytes(next view) + 16 MiB`. */
 /** R2: the derived views a `sheet-view` job may leave in its worker's cache. */
 const sheetViewCached = (job: SheetViewJob): Array<CanonicalView | undefined> => job.op === 'sort' || job.op === 'filter' ? [job.base, sheetViewNext(job)] : job.op === 'detect' ? [] : [job.view]
@@ -295,7 +300,7 @@ export class Pool {
     // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited here
     // (the start gate takes it as the load signal); a worker whose init fails has media off (every entry
     // `media-unavailable`).
-    worker.post({ type: 'init', id: this.nextId++, ...(this.media && prefix ? { media: { ...this.media, prefix } } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}), ...(this.mediaWedge ? { testWedge: this.mediaWedge } : {}) } satisfies WorkerRequest)
+    worker.post({ type: 'init', id: this.nextId++, ...(this.media && prefix ? { media: { ...this.media, prefix } } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}), ...(this.mediaWedge ? { testWedge: this.mediaWedge } : {}), ...(this.testHooks ? { countReplays: true as const } : {}) } satisfies WorkerRequest)
     on.close = () => {
       // First, before anything awaiting the close (`replace`, a dying job's refund) resumes: its probes are killed
       // (their exits are reaped on this thread) and its staged files deleted.
@@ -479,11 +484,12 @@ export class Pool {
         if (port) this.knownPrep(docRef, contentPolicy, job.sheetIndex, clock)
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
-        if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, clock, signal)
         let r: unknown
-        // R2: a view the server stopped holding while this job waited is not left cached by it.
-        try { r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob }) }
-        finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, clock, [job.view]) }
+        // R2: a view the server stopped holding while this job waited (or that its prep derived) is not left cached.
+        try {
+          if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, clock, [job.view], signal)
+          r = await this.runJob(slot, admitted, { type: 'sheet-text', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, job: text as SheetTextJob })
+        } finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, clock, [job.view]) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetTextReply
       })
@@ -510,12 +516,13 @@ export class Pool {
         if (port) this.knownPrep(docRef, contentPolicy, view.sheetIndex, clock)
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         if (signal?.aborted) throw new ShowCancelled()
-        if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, view.sheetIndex, clock, signal)
         let r: unknown
-        // R2: what the job may leave cached (its base and next view, or its view) is released unless still held; a
-        // sort or filter's next view is held by the caller from before the job until its commit ends.
-        try { r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob }) }
-        finally { await this.evictUnheld(slot, docRef, contentPolicy, view.sheetIndex, clock, sheetViewCached(view as SheetViewJob)) }
+        // R2: what the job or its prep may leave cached (its base and next view, or its view) is released unless still
+        // held; a sort or filter's next view is held by the caller from before the job until its commit ends.
+        try {
+          if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, view.sheetIndex, clock, sheetViewDerives(view as SheetViewJob), signal)
+          r = await this.runJob(slot, admitted, { type: 'sheet-view', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy, job: view as SheetViewJob })
+        } finally { await this.evictUnheld(slot, docRef, contentPolicy, view.sheetIndex, clock, sheetViewCached(view as SheetViewJob)) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as SheetViewReply
       })
@@ -530,10 +537,16 @@ export class Pool {
    * (the worker is retired, as for any job) or a failure the worker reports is `SheetPrepRefused`, remembered for the
    * document (fix round 1); a worker refusal code (`unknown-doc`, `bad-job`) stays `RenderFailed`. An abort during the
    * prep throws `ShowCancelled`, so no op runs.
+   *
+   * Owner decision 2026-11-28: the prep also derives and caches each of `views` other than the identity view (the
+   * views the next job derives), so that job only reads them under the render deadline; a derive past the prep
+   * deadline is the same timeout. The caller runs the prep inside the `try` whose `finally` is `evictUnheld` of those
+   * views (R2), so a view the prep derived does not outlive the turn unless a holder charges it.
    */
-  private async sheetPrep(slot: Slot, admitted: Job, docRef: string, docKey: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock, signal?: AbortSignal): Promise<void> {
+  private async sheetPrep(slot: Slot, admitted: Job, docRef: string, docKey: string, policy: 'visible-only' | 'full', sheetIndex: number, clock: SheetClock, views: ReadonlyArray<CanonicalView | undefined>, signal?: AbortSignal): Promise<void> {
     this.sheetPreps++
-    const msg: WorkerRequest = { type: 'sheet-view-prep', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy: policy, sheetIndex, ...(this.prepHangMs ? { hangMs: this.prepHangMs } : {}) }
+    const derive = views.filter((v): v is CanonicalView => viewReadsPort(v)).map((v) => canonicalView(v))
+    const msg: WorkerRequest = { type: 'sheet-view-prep', id: this.nextId++, docKey, clock: { day: clock.day, timeZone: clock.timeZone }, contentPolicy: policy, sheetIndex, ...(derive.length ? { views: derive } : {}), ...(this.prepHangMs ? { hangMs: this.prepHangMs } : {}) }
     try {
       await this.runJob(slot, admitted, msg, sheetPrepDeadlineMs(this.sources.get(docRef)?.length ?? 0, this.admission.caps.renderDeadlineMs, this.prepCapMs))
     } catch (e) {
@@ -594,6 +607,18 @@ export class Pool {
     })
   }
 
+  /** TEST-ONLY (honoured with `testHooks`): the derived-view replays `docRef`'s worker ran, by job type. */
+  async viewReplaysForTests(docRef: string): Promise<Record<string, number> | undefined> {
+    const i = this.affinity.get(docRef)
+    if (!this.testHooks || i === undefined) return undefined
+    const slot = this.slots[i]!
+    return this.exclusive(slot, async () => {
+      const r = await this.post(slot, { type: 'sheet-view-replays', id: this.nextId++ })
+      if (r === 'timeout' || !r.ok) throw new RenderFailed('view replays unavailable')
+      return r.result as Record<string, number>
+    })
+  }
+
   /** Fix round 1: throws the remembered `SheetPrepRefused` of the port, if any (before any admission or worker).
    * Final review R3: every caller checks again once it holds the worker's exclusive slot, before reopening or
    * preparing, so a job that queued behind the refused prep does not run it again. */
@@ -627,11 +652,13 @@ export class Pool {
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         // Again after the (re)open: a socket that closed while the document was parsed gets no tile.
         if (signal?.aborted) throw new ShowCancelled()
-        // Fix round 1: a tile under a view reads the port (its derived view); a cold one is prepared first.
-        if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, job.clock!, signal)
         let r: unknown
-        try { r = await this.runJob(slot, admitted, { type: 'tile', id: this.nextId++, docKey, job: tile, ...this.hooks(hangMs, crash) }) }
-        finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, job.clock, [job.view]) }
+        try {
+          // Fix round 1: a tile under a view reads the port (its derived view); a cold one is prepared first, and
+          // (owner decision 2026-11-28) the prep derives the view, so the tile only reads it.
+          if (port) await this.sheetPrep(slot, admitted, docRef, docKey, contentPolicy, job.sheetIndex, job.clock!, [job.view], signal)
+          r = await this.runJob(slot, admitted, { type: 'tile', id: this.nextId++, docKey, job: tile, ...this.hooks(hangMs, crash) })
+        } finally { await this.evictUnheld(slot, docRef, contentPolicy, job.sheetIndex, job.clock, [job.view]) }
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as RenderedTile
       })
