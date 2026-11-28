@@ -11,6 +11,7 @@ import { parseXlsx } from '../../src/xlsx/parse'
 import { viewerControls } from '../../src/components/xlsx/viewerControlsClient'
 import type { CacheIdentity, FilterRange, FilterSpec, SheetView, SortSpec } from '../../src/xlsx/view/contracts'
 import { MainMemoryLedger } from '../../src/xlsx/view/mainLedger'
+import type { FilterContext } from '../../src/xlsx/view/filter'
 import { createIdentityOrder } from '../../src/xlsx/view/order'
 import { emptyGridSelection } from '../../src/xlsx/view/selection'
 import { createObjectWorkbookSource } from '../../src/xlsx/view/source'
@@ -146,7 +147,8 @@ async function oracleDoc(bytes: Uint8Array, drop: (row: number, col: number) => 
 /** `sortGrid` as the oracle sees it under `visible-only`. */
 const gridOracle = (bytes: Uint8Array) => oracleDoc(bytes, (r, c) => c === SORT_GRID.zeroWidthCol || r === SORT_GRID.zeroHeightRow || r === SORT_GRID.hiddenRow)
 
-async function oracle(doc: XlsxDocument) {
+/** `context`: the filter context the local rules compile under (unset, the local default: the host zone and `Date.now()`). */
+async function oracle(doc: XlsxDocument, context?: () => FilterContext) {
   const source = createObjectWorkbookSource(doc, 'oracle')
   const sheetId = source.sheets[0]!.sheetId
   const baseHidden = source.geometry(sheetId).baseHidden
@@ -156,7 +158,7 @@ async function oracle(doc: XlsxDocument) {
   const owner = (): CacheIdentity => ({ docId: 'oracle', sheetId, valueGen: source.store(sheetId).stamp.valueGen, fontGen: 0, viewGen })
   const snapshot = () => ({ owner: owner(), filter: view.filter, sort: view.sort, records: { visible: 0, total: 0, completeness: 'complete' as const } })
   const publish = (next: Pick<SheetView, 'order' | 'visibility' | 'filter' | 'sort'>) => { view = { ...view, ...next }; viewGen++; return snapshot() }
-  const controls = await viewerControls({ doc, source, sheetId, snapshot, view: () => view, publish, ledger: new MainMemoryLedger() }, signal())
+  const controls = await viewerControls({ doc, source, sheetId, snapshot, view: () => view, publish, ledger: new MainMemoryLedger(), ...(context ? { context } : {}) }, signal())
   return {
     async sort(spec: SortSpec) { return (await controls.client.sort(owner(), spec, signal())).kind },
     async filter(spec: FilterSpec | null) { return (await controls.client.filter(owner(), spec, signal())).kind },
@@ -654,6 +656,95 @@ describe('Task 9 fix round 1: the sort clear and the head view fields', () => {
     const rows = s.store.sheetOps(a.sid).length
     expect((await a.sort({ viewGen: 4, range: { ...GRID, r1: 1_048_576 }, keys: [] })).end).toMatchObject({ type: 'refused', code: 'policy-refused' })
     expect(s.store.sheetOps(a.sid)).toHaveLength(rows)
+    a.c.close(); await s.h.stop()
+  }, 30_000)
+})
+
+// ---- typed conditions under `full` (S4 §9 4c): date, datePreset on the session clock, compound ---------------------
+
+/** 2026-12-10 12:00 UTC: a session clock in another month (and on another day) than T0's 2026-11-27. */
+const T_DEC = Date.UTC(2026, 11, 10, 12)
+const DATE_COL = 5, SCORE_COL = 1
+const BODY = [1, SORT_GRID.rows - 1] as const
+
+/**
+ * A `full` session opened at `at` filters `GRID` column `col` by `rule`; the local oracle runs the same rule under the
+ * filter context `at` gives (UTC, `nowMs = at`). Returns the shown source rows after checking they, the counts and the
+ * summary agree with the oracle row for row.
+ */
+async function fullParity(at: number, col: number, rule: Record<string, unknown>): Promise<Set<number>> {
+  const bytes = await sortGrid()
+  const s = await serverOn(bytes, { policy: { contentPolicy: 'full' } })
+  s.clock.t = at
+  const a = await s.open()
+  try {
+    const day = new Date(at).toISOString().slice(0, 10)
+    expect(s.h.stream.sheetClockOf(a.sid)).toEqual({ day, timeZone: 'UTC' })
+    const r = await a.filter({ range: GRID, columns: [[col, rule]] })
+    expect(r.end).toBeUndefined()
+    expect(r.order!.head).toMatchObject({ viewGen: 1, filterSummary: [{ col }] })
+    const or = await oracle(await oracleDoc(bytes), () => ({ locale: 'en-US', dateSystem: '1900', timeZone: 'UTC', nowMs: at }))
+    try {
+      expect(await or.filter({ range: local(GRID), columns: new Map([[col, rule as never]]) })).toBe('committed')
+      const shown = shownSources(r.order!, ...BODY)
+      expect(shown).toEqual(or.shown(...BODY))
+      expect(r.order!.head.counts).toEqual(or.counts(GRID))
+      return shown
+    } finally { await or.dispose() }
+  } finally { a.c.close(); await s.h.stop() }
+}
+/** 0-based source rows of `GRID` whose F date lies in `[from, to]` (`YYYY-MM-DD`, UTC); under `full` a match shows an
+ * authored-hidden row too. */
+function dateRows(from: string, to: string): Set<number> {
+  const out = new Set<number>()
+  for (let i = BODY[0]; i <= BODY[1]; i++) {
+    const iso = new Date(Date.UTC(1899, 11, 30) + (SORT_GRID.dateBase + i + 1) * 86_400_000).toISOString().slice(0, 10)
+    if (from <= iso && iso <= to) out.add(i)
+  }
+  return out
+}
+
+describe('typed conditions under full match local (S4 §9 4c)', () => {
+  test('date between', async () => {
+    const shown = await fullParity(T0, DATE_COL, { kind: 'date', op: 'between', first: { year: 2026, month: 11, day: 20 }, second: { year: 2026, month: 12, day: 5 } })
+    expect(shown).toEqual(dateRows('2026-11-20', '2026-12-05'))
+  }, 30_000)
+
+  test('datePreset today and thisMonth follow the session clock', async () => {
+    const today = { kind: 'datePreset', preset: 'today' }, month = { kind: 'datePreset', preset: 'thisMonth' }
+    const todayNov = await fullParity(T0, DATE_COL, today), todayDec = await fullParity(T_DEC, DATE_COL, today)
+    expect(todayNov).toEqual(dateRows('2026-11-27', '2026-11-27'))
+    expect(todayDec).toEqual(dateRows('2026-12-10', '2026-12-10'))
+    const monthNov = await fullParity(T0, DATE_COL, month), monthDec = await fullParity(T_DEC, DATE_COL, month)
+    expect(monthNov).toEqual(dateRows('2026-11-01', '2026-11-30'))
+    expect(monthDec).toEqual(dateRows('2026-12-01', '2026-12-31'))
+    expect(monthNov.size).toBeGreaterThan(0)
+    expect(monthDec.size).toBeGreaterThan(0)
+  }, 60_000)
+
+  test('compound(number, text)', async () => {
+    const shown = await fullParity(T0, SCORE_COL, { kind: 'compound', connective: 'or', first: { kind: 'number', op: 'gt', first: 70 }, second: text('begins', '1') })
+    expect(shown.size).toBeGreaterThan(0)
+    expect(shown.size).toBeLessThan(SORT_GRID.rows - 3)
+  }, 30_000)
+
+  test('compound(text, datePreset): the typed child second, on the session clock', async () => {
+    // The text child matches no date cell, so the rows shown are the second child's alone.
+    const rule = { kind: 'compound', connective: 'or', first: text('eq', 'none'), second: { kind: 'datePreset', preset: 'thisMonth' } }
+    expect(await fullParity(T0, DATE_COL, rule)).toEqual(dateRows('2026-11-01', '2026-11-30'))
+    expect(await fullParity(T_DEC, DATE_COL, rule)).toEqual(dateRows('2026-12-01', '2026-12-31'))
+  }, 60_000)
+
+  test('visible-only refuses compound(number, text): the typed child first', async () => {
+    const seam = seamPool()
+    const s = await serverOn(await sortGrid(), { pool: seam.proxy })
+    const a = await s.open()
+    const r = await a.filter({ range: GRID, columns: [[SCORE_COL, { kind: 'compound', connective: 'or', first: { kind: 'number', op: 'gt', first: 70 }, second: text('begins', '1') }]] })
+    expect(r.end).toMatchObject({ type: 'refused', code: 'filter-condition-refused' })
+    expect((await a.order()).order?.head.viewGen).toBe(0)
+    expect(okRows(s.store.sheetOps(a.sid))).toEqual([])
+    expect(s.store.sheetOps(a.sid).at(-1)).toMatchObject({ kind: 'filter', outcome: 'filter-condition-refused' })
+    expect(seam.ops().filter((op) => op === 'filter')).toEqual([])
     a.c.close(); await s.h.stop()
   }, 30_000)
 })
