@@ -11,9 +11,9 @@ import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
 import type { MediaDelivery, MediaRoom, MediaShowAnswer, NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
-import type { SheetFindAnswer, SheetFindHit, SheetFitRequest, SheetResizeRequest, SheetViewChange, StreamSheetLayout, WireSelection } from '../sheet-wire'
+import type { SheetFindAnswer, SheetFindHit, SheetFitRequest, SheetOrder, SheetResizeRequest, SheetViewChange, StreamSheetLayout, ValuesPage, WireDetection, WireFilterSpec, WireSelection, WireSortSpec } from '../sheet-wire'
 import type { DecodedTile, TilesRequest, TilesResult } from './sheet-channel'
-import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
+import type { RemoteRange, TextMessage, TextRequest, ValuesRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
 export type { RemoteRange } from './text-wire'
@@ -60,6 +60,31 @@ export interface RemoteSheets {
   tiles(req: TilesRequest, onTile: (t: DecodedTile) => void, signal?: AbortSignal): Promise<TilesResult>
   /** Stage 4b (P1): present iff `manifest.sheetView === 1`. */
   readonly view?: RemoteSheetOps
+  /** Stage 4c (P1): present iff `manifest.sheetSort === 1`. */
+  readonly sortOps?: RemoteSortOps
+}
+
+/**
+ * Stage 4c (S4 §6.6; P4–P8, P13): a `sheetSort` session's sort ops, every answer checked against its request. A sort or
+ * filter resolves with the `sheet-order` its commit answered (the whole order and mask of the sheet's new view); `order`
+ * fetches the current view's. A refusal rejects `StreamSessionError` with its code; `view-refused` carries `refusal`, the
+ * local `OperationRefusal` rebuilt with local message strings. A malformed or hostile answer rejects that request
+ * `policy-refused` and the session goes on. An abort of a sent sort or filter sends `sheet-cancel {target}`. On resume,
+ * `values`, `detect` and `order` are re-issued; `sort` and `filter` reject `session-rotated` and are never re-sent (P8):
+ * the caller re-fetches the layout and the order.
+ */
+export interface RemoteSortOps {
+  /** `manifest.typedFilters === true`: number and date conditions are served (`'full'` only). */
+  readonly typedFilters: boolean
+  /** A spec with `keys: []` clears the sheet's sort (the filter stays; Task 9 fix round 1), over its `range` (the sort's
+   * range, recorded in the audit row). `null` names no range: it rejects `unsupported-op` without sending. */
+  sort(sheetId: string, viewGen: number, spec: WireSortSpec | null, signal?: AbortSignal): Promise<SheetOrder>
+  /** `null` has no wire form without a range: it rejects `unsupported-op` without sending (`{range, columns: []}` clears). */
+  filter(sheetId: string, viewGen: number, spec: WireFilterSpec | null, signal?: AbortSignal): Promise<SheetOrder>
+  values(req: ValuesRequest, signal?: AbortSignal): Promise<ValuesPage>
+  /** `viewGen` is the sheet's current one (recorded in the audit row; detection reads the identity view). */
+  detect(sheetId: string, viewGen: number, kind: 'sort' | 'filter', selection: WireSelection, override?: { header: 0 | 1 }, signal?: AbortSignal): Promise<WireDetection>
+  order(sheetId: string, signal?: AbortSignal): Promise<SheetOrder>
 }
 
 /**
@@ -305,6 +330,39 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       },
     } satisfies RemoteSheetOps)
   }
+  /** Stage 4c: the sort ops over `session.text` (the session assembles and checks every answer against its request). */
+  function sortOps(): RemoteSortOps {
+    const ask = (r: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal) =>
+      closed ? Promise.reject(new StreamSessionError('closed')) : session.text(r, on, signal)
+    const orderOf = async (r: TextRequest, signal?: AbortSignal) => {
+      let order: SheetOrder | undefined
+      await ask(r, (x) => { if (x.type === 'sheet-order') order = x.order }, signal)
+      return order!
+    }
+    const noWire = (what: string) => Promise.reject(new StreamSessionError('unsupported-op', `${what} has no wire form`))
+    return Object.freeze({
+      get typedFilters() { return session.manifest.typedFilters === true },
+      sort(sheetId, viewGen, spec, signal) {
+        if (!spec) return noWire('a sort clear without its range')
+        return orderOf({ type: 'sheet-sort', sheetId, viewGen, range: spec.range, keys: spec.keys, caseSensitive: spec.caseSensitive }, signal)
+      },
+      filter(sheetId, viewGen, spec, signal) {
+        if (!spec) return noWire('a filter without its range')
+        return orderOf({ type: 'sheet-filter', sheetId, viewGen, range: spec.range, columns: spec.columns }, signal)
+      },
+      async values(req, signal) {
+        let page: ValuesPage | undefined
+        await ask({ ...req, type: 'filter-values' }, (x) => { if (x.type === 'filter-values-result') page = x.page }, signal)
+        return page!
+      },
+      async detect(sheetId, viewGen, kind, selection, override, signal) {
+        let detection: WireDetection | undefined
+        await ask({ type: 'range-detect', sheetId, viewGen, kind, selection, ...(override ? { override } : {}) }, (x) => { if (x.type === 'range-detect-result') detection = x.detection }, signal)
+        return detection!
+      },
+      order(sheetId, signal) { return orderOf({ type: 'sheet-order', sheetId }, signal) },
+    } satisfies RemoteSortOps)
+  }
   // Stage 4a: tiles mode is fixed for the sid (a resume that changes it ends the session), so it is read once.
   const m = session.manifest
   if (m.sheetMode === 'tiles' && m.sheets && session.sheetLayout && session.tiles) {
@@ -315,6 +373,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       layout: (sheetId, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.sheetLayout(sheetId, signal),
       tiles: (req, onTile, signal) => closed ? Promise.reject(new StreamSessionError('closed')) : s.tiles(req, onTile, signal),
       ...(m.sheetView === 1 ? { view: sheetOps() } : {}),
+      ...(m.sheetView === 1 && m.sheetSort === 1 ? { sortOps: sortOps() } : {}),
     }
   }
   // A terminal end invalidates every pending paint: nothing commits pixels after it.

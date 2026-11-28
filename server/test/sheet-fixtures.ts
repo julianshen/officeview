@@ -8,6 +8,7 @@
  * Every fixture's bytes are deterministic: `finishXlsx` rewrites every entry with one fixed date, so the
  * same call returns the same bytes in every run (JSZip otherwise stamps the wall clock).
  */
+import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { buildXlsx, type XlsxCellSpec, type XlsxSheetSpec } from '../../src/testdata/ooxml-builders'
 import { encodePng } from '../src/mark/png'
@@ -838,4 +839,235 @@ export async function zeroHeightRow(): Promise<Uint8Array> {
     { r: 3, cells: [textCell(st, 'A3', ZERO_HEIGHT.below)] },
   ]
   return sheetWorkbook(rows, st.list, (zip) => patchSheetXml(zip, 0, (xml) => setRowAttrs(xml, [2], { ht: '0', customHeight: '1' })))
+}
+
+// ---- Stage 4c Task 1: key-view fixtures ----------------------------------------------------------------------
+
+/** `sortGrid`: its shape, 0-based. Row 1 is the header; `hiddenRow` is authored `hidden="1"`, `zeroHeightRow` is
+ * authored `ht="0"` (not hidden), `zeroWidthCol` (E) is authored `width="0"`. */
+export const SORT_GRID = Object.freeze({
+  rows: 40, cols: 6, hiddenRow: 8, zeroHeightRow: 11, zeroWidthCol: 4,
+  headers: Object.freeze(['Name', 'Score', 'Amount', 'Word', 'Zero', 'Date']),
+  words: Object.freeze(['apple', 'berry', 'cherry', 'plum', 'banana', 'melon', 'fig', 'grape']),
+  /** F holds `dateBase + r` (1-based r): r 5 is 2026-11-19 (46345), r 11 is 2026-11-25 (46351). */
+  dateBase: 46340,
+})
+/** `sortGrid` B{r} (1-based r ≥ 2): distinct values in 1..89, so `sortWithheld`'s `cellIs > 90` rule hides none of them. */
+export const sortGridScore = (r: number) => ((r * 37) % 89) + 1
+/** `sortWithheld`'s withheld cells, 1-based refs, as built. */
+export const SORT_WITHHELD = Object.freeze({ covered: 'B20', coveredValue: 1, hiddenFormat: 'B21', hiddenFormatValue: 5, cfHidden: 'B22', cfHiddenValue: 95, table: 'C30:C34', masked: 'D23', maskedText: 'MASKED', maskedDisplay: '****' })
+
+/** A picture body (`<xdr:pic>`) over the flat PNG at `rIdImg1`, its xfrm at `offPx` of `extPx` CSS px. */
+function pictureXml(id: number, offPx: [number, number], extPx: [number, number]): string {
+  const [x, y] = offPx.map((v) => Math.round(v * EMU_PER_PX)), [cx, cy] = extPx.map((v) => Math.round(v * EMU_PER_PX))
+  return `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="Picture ${id}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`
+}
+/** Add a drawing holding `anchorsXml` (pictures reference `rIdImg1`) and the flat PNG it embeds. */
+async function addPictureDrawing(zip: JSZip, sheetIndex: number, anchorsXml: string): Promise<void> {
+  const ct = await textOf(zip, '[Content_Types].xml')
+  if (!ct.includes('Extension="png"')) zip.file('[Content_Types].xml', ct.replace('<Default Extension="xml"', '<Default Extension="png" ContentType="image/png"/><Default Extension="xml"'))
+  zip.file('xl/media/flat.png', flatPng())
+  const part = await addDrawing(zip, sheetIndex, anchorsXml)
+  const name = part.slice(part.lastIndexOf('/') + 1)
+  zip.file(`xl/drawings/_rels/${name}.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/flat.png"/></Relationships>`)
+}
+/** Add table part `xl/tables/table{id}.xml` (`tableXml`, its root element) to worksheet `sheetIndex`. */
+async function addTable(zip: JSZip, sheetIndex: number, id: number, tableXml: string): Promise<void> {
+  zip.file(`xl/tables/table${id}.xml`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${tableXml}`)
+  const relsPath = `xl/worksheets/_rels/sheet${sheetIndex + 1}.xml.rels`
+  const existing = zip.file(relsPath) ? await textOf(zip, relsPath) : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
+  zip.file(relsPath, existing.replace('</Relationships>', `<Relationship Id="rIdT${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table${id}.xml"/></Relationships>`))
+  const ct = await textOf(zip, '[Content_Types].xml')
+  zip.file('[Content_Types].xml', ct.replace('</Types>', `<Override PartName="/xl/tables/table${id}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>`))
+  await patchSheetXml(zip, sheetIndex, (xml) => {
+    const withNs = xml.includes('xmlns:r=') ? xml : xml.replace(`<worksheet xmlns="${SPREADSHEET_NS}"`, `<worksheet xmlns="${SPREADSHEET_NS}" xmlns:r="${REL_NS}"`)
+    return insertSheetElement(withNs, 'tableParts', `<tableParts count="1"><tablePart r:id="rIdT${id}"/></tableParts>`)
+  })
+}
+/** A custom table style named `name` whose wholeTable element is dxf `dxfId`. */
+const wholeTableStyle = (name: string, dxfId: number) => `<tableStyle name="${name}" pivot="0" count="1"><tableStyleElement type="wholeTable" dxfId="${dxfId}"/></tableStyle>`
+const tableStylesXml = (styles: string[]) => `<tableStyles count="${styles.length}" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">${styles.join('')}</tableStyles>`
+
+/**
+ * The 4c sort grid on sheet `S`: A1:F40, row 1 the headers SORT_GRID.headers; for r = 2..40, A text `N{r}`, B
+ * `sortGridScore(r)` (General), C `r × 1.25` under `#,##0.0` (style 3), D text `{word}-{r}` (SORT_GRID.words[r % 8]),
+ * E `r × 10` (column E is `width="0"`), F the date `SORT_GRID.dateBase + r` (numFmtId 14, style 4). Row 9 is
+ * `hidden="1"`, row 12 is `ht="0"`. Merge-free. `o` adds the 4c variants' cells, styles and parts.
+ */
+async function sortGridBook(o: { cell?: (ref: string, st: ReturnType<typeof stringTable>) => XlsxCellSpec | undefined; numFmts?: Record<number, string>; xfs?: string[]; merges?: string[]; edit?: (zip: JSZip) => Promise<void> } = {}): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: SORT_GRID.rows }, (_, i) => {
+    const r = i + 1
+    return { r, cells: Array.from({ length: SORT_GRID.cols }, (_, c): XlsxCellSpec => {
+      const ref = `${colName(c)}${r}`
+      const override = o.cell?.(ref, st)
+      if (override) return override
+      if (r === 1) return textCell(st, ref, SORT_GRID.headers[c]!)
+      switch (c) {
+        case 0: return textCell(st, ref, `N${r}`)
+        case 1: return { ref, v: sortGridScore(r) }
+        case 2: return { ref, v: r * 1.25, style: 3 }
+        case 3: return textCell(st, ref, `${SORT_GRID.words[r % 8]}-${r}`)
+        case 4: return { ref, v: r * 10 }
+        default: return { ref, v: SORT_GRID.dateBase + r, style: 4 }
+      }
+    }) }
+  })
+  const col = SORT_GRID.zeroWidthCol + 1
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addStyles(zip, { 165: '#,##0.0', ...o.numFmts }, [
+      '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+      '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+      ...(o.xfs ?? []),
+    ])
+    await patchSheetXml(zip, 0, (xml) => setRowAttrs(setRowAttrs(xml, [SORT_GRID.hiddenRow + 1], { hidden: '1' }), [SORT_GRID.zeroHeightRow + 1], { ht: '0', customHeight: '1' }))
+    await o.edit?.(zip)
+  }, { cols: `<col min="${col}" max="${col}" width="0" customWidth="1"/>`, ...(o.merges ? { merges: o.merges } : {}) })
+}
+
+/** The 4c sort grid (see `sortGridBook`). */
+export async function sortGrid(): Promise<Uint8Array> {
+  return sortGridBook()
+}
+
+/**
+ * `sortGrid` plus every withholding class (SORT_WITHHELD): B20 = 1 under an unfilled box strictly inside it (x 72..120,
+ * y 344..356 with rows 9 and 12 collapsed); B21 = 5 under `;;;` (style 5); B22 = 95 under a `cellIs > 90` rule over
+ * B1:B40 whose dxf writes `;;;`; C30:C34 General numbers (style 0) under a headerless table whose custom style's
+ * wholeTable dxf writes `;;;`; and D23 = `MASKED` under `;;;"****"` (style 6), which paints `****`.
+ */
+export async function sortWithheld(): Promise<Uint8Array> {
+  const tableRows = [30, 31, 32, 33, 34]
+  return sortGridBook({
+    numFmts: { 166: ';;;', 167: ';;;&quot;****&quot;' },
+    xfs: ['<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>', '<xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'],
+    cell: (ref, st) => {
+      if (ref === SORT_WITHHELD.covered) return { ref, v: SORT_WITHHELD.coveredValue }
+      if (ref === SORT_WITHHELD.hiddenFormat) return { ref, v: SORT_WITHHELD.hiddenFormatValue, style: 5 }
+      if (ref === SORT_WITHHELD.cfHidden) return { ref, v: SORT_WITHHELD.cfHiddenValue }
+      if (tableRows.some((r) => ref === `C${r}`)) return { ref, v: Number(ref.slice(1)) * 1.25 }
+      if (ref === SORT_WITHHELD.masked) return { ...textCell(st, ref, SORT_WITHHELD.maskedText), style: 6 }
+      return undefined
+    },
+    edit: async (zip) => {
+      await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', `</cellXfs><dxfs count="1"><dxf><numFmt numFmtId="166" formatCode=";;;"/></dxf></dxfs>${tableStylesXml([wholeTableStyle('OVHide4c', 0)])}`))
+      await patchSheetXml(zip, 0, (xml) => insertSheetElement(xml, 'conditionalFormatting',
+        '<conditionalFormatting sqref="B1:B40"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>90</formula></cfRule></conditionalFormatting>'))
+      await addTable(zip, 0, 1, `<table xmlns="${SPREADSHEET_NS}" id="1" name="Hidden4c" displayName="Hidden4c" ref="C30:C34" headerRowCount="0" totalsRowCount="0"><tableColumns count="1"><tableColumn id="1" name="Amount"/></tableColumns><tableStyleInfo name="OVHide4c" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>`)
+      await addDrawing(zip, 0, twoCellAnchorXml({ col: 1, row: 19, colOffPx: 8, rowOffPx: 4 }, { col: 1, row: 19, colOffPx: 56, rowOffPx: 16 },
+        rectShapeXml({ id: 2, name: 'Unfilled', offPx: [72, 344], extPx: [48, 12], fill: null, line: '404040' })))
+    },
+  })
+}
+
+/** `sortGrid` plus a `oneCellAnchor` picture at A15 of 48 × 30 CSS px (x 8..56, y 244..274 with rows 9 and 12
+ * collapsed): it covers A15 and A16, inside the sort range. */
+export async function sortUnderShape(): Promise<Uint8Array> {
+  return sortGridBook({ edit: (zip) => addPictureDrawing(zip, 0, oneCellAnchorXml({ col: 0, row: 14, colOffPx: 8, rowOffPx: 4 }, [48, 30], pictureXml(2, [8, 244], [48, 30]))) })
+}
+
+/** `sortGrid` with B5:B6 merged (B6 keeps its authored value in the package). */
+export async function sortMerges(): Promise<Uint8Array> {
+  return sortGridBook({ merges: ['B5:B6'] })
+}
+
+/** `oneMillionSort`: its row count. */
+export const ONE_MILLION_ROWS = 1_048_576
+/** A1:A1048576 hold 1048576 .. 1 (descending, General). The sheet XML is written directly (no cell objects). */
+export async function oneMillionSort(): Promise<Uint8Array> {
+  return patchXlsx(await buildXlsx([{ name: 'S', rows: [] }], []), (zip) => patchSheetXml(zip, 0, (xml) => {
+    const parts: string[] = []
+    for (let r = 1; r <= ONE_MILLION_ROWS; r++) parts.push(`<row r="${r}"><c r="A${r}"><v>${ONE_MILLION_ROWS + 1 - r}</v></c></row>`)
+    const out = xml.replace(/<sheetData>\s*<\/sheetData>/, `<sheetData>${parts.join('')}</sheetData>`)
+    if (out === xml) throw new Error('sheet-fixtures: no empty sheetData')
+    return out
+  }))
+}
+
+/** `hiddenPivotCache`: the sentinels its caches hold. */
+export const HIDDEN_PIVOT = Object.freeze({ pivotItem: 'PIVOT-SECRET', slicerItem: 'SLICER-SECRET', hiddenSourceRow: 3 })
+/**
+ * The committed `tests/fixtures/xlsx-pivots/slicer-light1.xlsx` (sheet `Report`: a pivot table, a visible Product
+ * slicer drawing and a timeline; sheet `Data`: the A1:E41 source) with its source row 3 (1-based) `hidden="1"` and its
+ * Region text replaced by `PIVOT-SECRET`, which the pivot cache also lists as a Region item; and `SLICER-SECRET` added
+ * to the cache's Product items and, as `<i x="4"/>`, to the slicer cache (pivotCacheId 1, the hidden-row source's).
+ */
+export async function hiddenPivotCache(): Promise<Uint8Array> {
+  const bytes = readFileSync(new URL('../../tests/fixtures/xlsx-pivots/slicer-light1.xlsx', import.meta.url))
+  return patchXlsx(bytes, async (zip) => {
+    const edit = async (path: string, f: (xml: string) => string) => {
+      const xml = await textOf(zip, path), out = f(xml)
+      if (out === xml) throw new Error(`sheet-fixtures: ${path} not recognised`)
+      zip.file(path, out)
+    }
+    const row = HIDDEN_PIVOT.hiddenSourceRow
+    await edit('xl/worksheets/sheet2.xml', (xml) => xml.replace(`<row r="${row}">`, `<row r="${row}" hidden="1">`).replace(`<c r="A${row}" t="inlineStr"><is><t>North</t></is></c>`, `<c r="A${row}" t="inlineStr"><is><t>${HIDDEN_PIVOT.pivotItem}</t></is></c>`))
+    await edit('xl/pivotCache/pivotCacheDefinition1.xml', (xml) => xml
+      .replace('<sharedItems count="4"><s v="South"/><s v="North"/><s v="West"/><s v="East"/></sharedItems>', `<sharedItems count="5"><s v="South"/><s v="North"/><s v="West"/><s v="East"/><s v="${HIDDEN_PIVOT.pivotItem}"/></sharedItems>`)
+      .replace('<sharedItems count="4"><s v="Bananas"/><s v="Dates"/><s v="Apples"/><s v="Cherries"/></sharedItems>', `<sharedItems count="5"><s v="Bananas"/><s v="Dates"/><s v="Apples"/><s v="Cherries"/><s v="${HIDDEN_PIVOT.slicerItem}"/></sharedItems>`))
+    await edit('xl/slicerCaches/slicerCache1.xml', (xml) => xml.replace('<items count="4"><i x="2" s="1"/><i x="1"/><i x="3" s="1"/><i x="0"/></items>', '<items count="5"><i x="2" s="1"/><i x="1"/><i x="3" s="1"/><i x="0"/><i x="4"/></items>'))
+  })
+}
+
+/** `filterAutoHidden`: the rows (1-based) its saved autoFilter hides, and its range. */
+export const FILTER_AUTO_HIDDEN = Object.freeze({ ref: 'A1:C20', hidden: Object.freeze([4, 7]) })
+/**
+ * A1:C20 on sheet `S` (row 1 headers `Key`, `Num`, `Note`): A `keep-{r}` (`drop-{r}` in rows 4 and 7), B `r`, C
+ * `C{r}`, under a saved `<autoFilter ref="A1:C20">` whose column-A custom filter (`notEqual drop*`) hid rows 4 and 7,
+ * which are saved `hidden="1"`.
+ */
+export async function filterAutoHidden(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = Array.from({ length: 20 }, (_, i) => {
+    const r = i + 1
+    if (r === 1) return { r, cells: ['Key', 'Num', 'Note'].map((h, c) => textCell(st, `${colName(c)}1`, h)) }
+    return { r, cells: [textCell(st, `A${r}`, `${FILTER_AUTO_HIDDEN.hidden.includes(r) ? 'drop' : 'keep'}-${r}`), { ref: `B${r}`, v: r }, textCell(st, `C${r}`, `C${r}`)] }
+  })
+  return sheetWorkbook(rows, st.list, (zip) => patchSheetXml(zip, 0, (xml) => insertSheetElement(setRowAttrs(xml, FILTER_AUTO_HIDDEN.hidden, { hidden: '1' }), 'autoFilter',
+    `<autoFilter ref="${FILTER_AUTO_HIDDEN.ref}"><filterColumn colId="0"><customFilters><customFilter operator="notEqual" val="drop*"/></customFilters></filterColumn></autoFilter>`)))
+}
+
+/** `paintedFormats`: its cells and what the painter paints for them. */
+export const PAINTED_FORMATS = Object.freeze({ tableValue: 1234, tablePaints: '1K', cfValue: 5678, cfPaints: '5.7K' })
+/**
+ * 4b R1 on the key path, on sheet `S`: a table over B1:B4 (header `AMT`) under the custom style `OVKilo`, whose
+ * wholeTable dxf writes `0,"K"`, over General `1234` in B2:B4 (painted `1K`); C2 = 5678 (General) under a `cellIs > 0`
+ * rule whose dxf writes `0.0,"K"` (painted `5.7K`); column D's default style (`<col style="3">`) and row 6's
+ * (`<row s="3" customFormat="1">`) are `;;;` (style 3, numFmtId 164) over cells with no own style: D2:D4 `DCOL-{r}`,
+ * A6 `ROW6-A` and C6 `ROW6-C`.
+ */
+export async function paintedFormats(): Promise<Uint8Array> {
+  const st = stringTable()
+  const rows: XlsxSheetSpec['rows'] = [
+    { r: 1, cells: [textCell(st, 'B1', 'AMT')] },
+    ...[2, 3, 4].map((r) => ({ r, cells: [{ ref: `B${r}`, v: PAINTED_FORMATS.tableValue }, ...(r === 2 ? [{ ref: 'C2', v: PAINTED_FORMATS.cfValue }] : []), textCell(st, `D${r}`, `DCOL-${r}`)] })),
+    { r: 6, cells: [textCell(st, 'A6', 'ROW6-A'), textCell(st, 'C6', 'ROW6-C')] },
+  ]
+  return sheetWorkbook(rows, st.list, async (zip) => {
+    await addStyles(zip, { 164: ';;;' }, ['<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'])
+    await patchStylesXml(zip, (xml) => xml.replace('</cellXfs>', `</cellXfs><dxfs count="2"><dxf><numFmt numFmtId="168" formatCode="0,&quot;K&quot;"/></dxf><dxf><numFmt numFmtId="169" formatCode="0.0,&quot;K&quot;"/></dxf></dxfs>${tableStylesXml([wholeTableStyle('OVKilo', 0)])}`))
+    await patchSheetXml(zip, 0, (xml) => {
+      const styledRow = xml.replace('<row r="6">', '<row r="6" s="3" customFormat="1">')
+      if (styledRow === xml) throw new Error('sheet-fixtures: no bare row 6')
+      return insertSheetElement(styledRow, 'conditionalFormatting',
+        '<conditionalFormatting sqref="C2"><cfRule type="cellIs" dxfId="1" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>')
+    })
+    await addTable(zip, 0, 1, `<table xmlns="${SPREADSHEET_NS}" id="1" name="Kilo" displayName="Kilo" ref="B1:B4" headerRowCount="1" totalsRowCount="0"><tableColumns count="1"><tableColumn id="1" name="AMT"/></tableColumns><tableStyleInfo name="OVKilo" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>`)
+  }, { cols: '<col min="4" max="4" width="9" style="3" customWidth="1"/>' })
+}
+
+// ---- Stage 4c Task 5: the display-text merge fixture ----------------------------------------------------------
+
+/** `displayMerge`: B2 and B3 (1-based) hold 1200 and 1204 under `0.0,"K"`, which paints both `1.2K`. */
+export const DISPLAY_MERGE = Object.freeze({ refs: Object.freeze(['B2', 'B3']), values: Object.freeze([1200, 1204]), label: '1.2K' })
+/** `sortGrid` with B2 = 1200 and B3 = 1204 under `0.0,"K"` (style 5). */
+export async function displayMerge(): Promise<Uint8Array> {
+  return sortGridBook({
+    numFmts: { 168: '0.0,&quot;K&quot;' },
+    xfs: ['<xf numFmtId="168" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'],
+    cell: (ref) => {
+      const i = DISPLAY_MERGE.refs.indexOf(ref)
+      return i < 0 ? undefined : { ref, v: DISPLAY_MERGE.values[i]!, style: 5 }
+    },
+  })
 }

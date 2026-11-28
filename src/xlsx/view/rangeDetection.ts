@@ -11,7 +11,10 @@
  * the used extent, whose blank margins would otherwise move styled blank rows),
  * with source 'used'. Two blocks around a blank cell refuse as ambiguous.
  * Disjoint Shift selections are never coerced into a bounding rectangle: only
- * the active cell seeds detection. A derived range (explicit, region or used)
+ * the active cell seeds detection. With `seeThrough` lines (a streamed
+ * protected sheet's author-hidden rows and columns, held blank), region growth
+ * and the header rule step over them, and runs whose only gaps they are form
+ * one rectangle; without them nothing changes. A derived range (explicit, region or used)
  * that intersects any table it does not exactly equal refuses with
  * 'ambiguous-selection' (it would mix table and non-table rows, or slice a
  * table seeded from outside it); one exactly equal to a table takes the table
@@ -48,6 +51,9 @@ export interface RangeDetectionRequest {
    * else the whole sheet. Region growth never stops at it: data beyond the hint
    * still joins. */
   usedRange?: SourceRect
+  /** Author-hidden lines that detection steps over (a streamed protected sheet's collapsed rows and columns, whose
+   * cells the store holds blank). Absent, detection is the local rule. */
+  seeThrough?: SeeThroughLines
   /** Detection work cap: populated scan pages requested plus cells received
    * (default DEFAULT_DETECTION_WORK_BUDGET). Exceeding it refuses with
    * resource-limit; the shared guard's streaming scan is not counted. */
@@ -89,6 +95,115 @@ const STRIP_MAX_LINES = 1024
 const STRIP_MAX_CELLS = 65_536
 const YIELD_EVERY_MS = 4
 const FULL_DOMAIN: SourceRect = { r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }
+
+/** One inclusive run of lines. */
+export interface LineRun { start: number; end: number }
+/** See-through lines (owner 2026-11-27): they neither end nor extend a region, a selection whose only gaps they are
+ * is one rectangle, and the header rule's next body row is the next line not among them. Their cells are never read
+ * as content: region growth runs in the space without them. */
+export interface SeeThroughLines { rows: readonly LineRun[]; cols: readonly LineRun[] }
+
+/** One axis without its see-through lines: source line <-> compact line (the rank among the other lines). */
+class AxisLens {
+  private readonly starts: number[] = []
+  private readonly ends: number[] = []
+  /** before[k]: see-through lines in runs 0..k-1. */
+  private readonly before: number[] = [0]
+  /** Lines that are not see-through. */
+  readonly kept: number
+  constructor(runs: readonly LineRun[], private readonly limit: number) {
+    const sorted = runs
+      .filter(r => Number.isSafeInteger(r.start) && Number.isSafeInteger(r.end) && r.start <= r.end && r.end >= 0 && r.start < limit)
+      .map(r => ({ start: Math.max(0, r.start), end: Math.min(limit - 1, r.end) }))
+      .sort((a, b) => a.start - b.start)
+    for (const r of sorted) {
+      const n = this.starts.length
+      if (n > 0 && r.start <= this.ends[n - 1]! + 1) this.ends[n - 1] = Math.max(this.ends[n - 1]!, r.end)
+      else { this.starts.push(r.start); this.ends.push(r.end) }
+    }
+    for (let k = 0; k < this.starts.length; k++) this.before.push(this.before[k]! + this.ends[k]! - this.starts[k]! + 1)
+    this.kept = limit - this.before[this.starts.length]!
+  }
+  get empty(): boolean { return this.starts.length === 0 }
+  /** Index of the first run ending at or after `line`. */
+  private runAt(line: number): number {
+    let a = 0, b = this.ends.length
+    while (a < b) { const mid = (a + b) >> 1; if (this.ends[mid]! < line) a = mid + 1; else b = mid }
+    return a
+  }
+  /** The compact line of a source line; null on a see-through line. */
+  compact(line: number): number | null {
+    const k = this.runAt(line)
+    if (k < this.starts.length && this.starts[k]! <= line) return null
+    return line - this.before[k]!
+  }
+  /** The source line of a compact line; null past the last kept line. */
+  source(line: number): number | null {
+    if (line < 0 || line >= this.kept) return null
+    let a = 0, b = this.starts.length
+    while (a < b) { const mid = (a + b) >> 1; if (this.starts[mid]! - this.before[mid]! <= line) a = mid + 1; else b = mid }
+    return line + this.before[a]!
+  }
+  /** The first kept source line at or after `line`, or null. */
+  atOrAfter(line: number): number | null {
+    const k = this.runAt(line)
+    const out = k < this.starts.length && this.starts[k]! <= line ? this.ends[k]! + 1 : line
+    return out < this.limit ? out : null
+  }
+  /** The last kept source line at or before `line`, or null. */
+  atOrBefore(line: number): number | null {
+    const k = this.runAt(line)
+    const out = k < this.starts.length && this.starts[k]! <= line ? this.starts[k]! - 1 : line
+    return out >= 0 ? out : null
+  }
+  /** True when every gap between consecutive spans holds only see-through lines. */
+  bridges(spans: readonly { lo: number; hi: number }[]): boolean {
+    for (let i = 1; i < spans.length; i++) {
+      const a = this.compact(spans[i - 1]!.hi), b = this.compact(spans[i]!.lo)
+      if (a === null || b === null || a + 1 !== b) return false
+    }
+    return true
+  }
+}
+/** Both axes of a see-through set. Compact rects and cells are in the space without the see-through lines. */
+class SeeThroughLens {
+  readonly rows: AxisLens
+  readonly cols: AxisLens
+  constructor(lines: SeeThroughLines) {
+    this.rows = new AxisLens(lines.rows, MAX_ROWS)
+    this.cols = new AxisLens(lines.cols, MAX_COLS)
+  }
+  /** The source rect a compact rect spans (see-through lines inside it included); null when it starts past the
+   * last kept line. */
+  toSource(rect: SourceRect): SourceRect | null {
+    const r0 = this.rows.source(rect.r0), c0 = this.cols.source(rect.c0)
+    if (r0 === null || c0 === null) return null
+    return { r0, r1: this.rows.source(Math.min(rect.r1, this.rows.kept - 1))!, c0, c1: this.cols.source(Math.min(rect.c1, this.cols.kept - 1))! }
+  }
+  /** A source cell in compact space; null on a see-through line. */
+  toCompact(cell: SourceCell): SourceCell | null {
+    const row = this.rows.compact(cell.row), col = this.cols.compact(cell.col)
+    return row === null || col === null ? null : { row, col }
+  }
+  /** The compact rect of a source rect's kept lines; null when it keeps none. */
+  compactRect(rect: SourceRect): SourceRect | null {
+    const r0 = this.rows.atOrAfter(rect.r0), r1 = this.rows.atOrBefore(rect.r1)
+    const c0 = this.cols.atOrAfter(rect.c0), c1 = this.cols.atOrBefore(rect.c1)
+    if (r0 === null || r1 === null || c0 === null || c1 === null || r0 > r1 || c0 > c1) return null
+    return { r0: this.rows.compact(r0)!, r1: this.rows.compact(r1)!, c0: this.cols.compact(c0)!, c1: this.cols.compact(c1)! }
+  }
+  /** Cells of a source page in compact space; cells on see-through lines are dropped. */
+  cells(items: readonly SourceCell[]): SourceCell[] {
+    const out: SourceCell[] = []
+    for (const cell of items) { const at = this.toCompact(cell); if (at !== null) out.push(at) }
+    return out
+  }
+}
+function seeThroughLens(lines: SeeThroughLines | undefined): SeeThroughLens | undefined {
+  if (lines === undefined) return undefined
+  const lens = new SeeThroughLens(lines)
+  return lens.rows.empty && lens.cols.empty ? undefined : lens
+}
 
 /** Typed source failure raised by scan pages; mapped to a source-error refusal. */
 class ScanFailure extends Error {
@@ -218,12 +333,19 @@ export class Scanner {
     private readonly options: ReadOptions,
     readonly pacer: Pacer,
     private readonly budget: number,
+    /** Present, `page` takes and answers compact rects and cells (see-through lines skipped). */
+    private readonly lens?: SeeThroughLens,
   ) {}
-  async page(rect: SourceRect, limit: number, cursor?: string): Promise<Page<SourceCell>> {
+  async page(compactRect: SourceRect, limit: number, cursor?: string): Promise<Page<SourceCell>> {
     if (this.work + 1 > this.budget) throw new WorkBudgetExceeded(`Detection exceeded its work budget of ${this.budget}`)
     this.work++
     const held = cursor === undefined ? undefined : this.held.get(cursor)
     await this.pacer.tick()
+    const lens = this.lens
+    const rect = lens ? lens.toSource(compactRect) : compactRect
+    // Past the last kept line: nothing there.
+    if (rect === null) return { items: [], completeness: 'complete', stamp: this.options.stamp }
+    const view = (page: Page<SourceCell>): Page<SourceCell> => lens ? { ...page, items: lens.cells(page.items) } : page
     const scope = `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}:${limit}`
     let iterator: AsyncIterator<Page<SourceCell>>
     let step: IteratorResult<Page<SourceCell>>
@@ -263,11 +385,11 @@ export class Scanner {
       try { if (this.pacer.spend(end - at)) await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error }
       at = end
     }
-    if (first.nextCursor !== undefined || first.completeness === 'incomplete') { void iterator.return?.(); return first }
+    if (first.nextCursor !== undefined || first.completeness === 'incomplete') { void iterator.return?.(); return view(first) }
     try { await this.pacer.tick() } catch (error) { void iterator.return?.(); throw error }
     const ahead = await iterator.next()
     this.options.signal.throwIfAborted()
-    if (ahead.done) return first
+    if (ahead.done) return view(first)
     const token = `detect:${++this.serial}`
     this.held.set(token, { iterator, ahead, scope })
     while (this.held.size > MAX_HELD_SCANS) {
@@ -275,7 +397,7 @@ export class Scanner {
       this.held.delete(oldest)
       void scan.iterator.return?.()
     }
-    return { ...first, nextCursor: token }
+    return { ...view(first), nextCursor: token }
   }
   /** Releases continuations a caller abandoned (e.g. an existence probe that found a cell). */
   close(): void {
@@ -468,8 +590,10 @@ type HeaderProbe =
  * are permanently unavailable (§4.4): they refuse with a count and the first
  * address instead of a wait that can never resolve. A pending page waits
  * first, so the reported count and address are exact once coverage is full. */
-async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: Pacer, rect: SourceRect): Promise<HeaderProbe> {
-  const band: SourceRect = { r0: rect.r0, r1: Math.min(rect.r0 + 1, MAX_ROWS - 1), c0: rect.c0, c1: rect.c1 }
+async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: Pacer, rect: SourceRect, lens?: SeeThroughLens): Promise<HeaderProbe> {
+  // See-through rows are skipped: the next body row is the next kept row of the range.
+  const next = lens ? lens.rows.atOrAfter(rect.r0 + 1) : null
+  const band: SourceRect = { r0: rect.r0, r1: next !== null && next <= rect.r1 ? next : Math.min(rect.r0 + 1, MAX_ROWS - 1), c0: rect.c0, c1: rect.c1 }
   let row0Text = false, row0NonText = false, row1NonText = false
   let pending = false
   let unavailable = 0
@@ -495,6 +619,8 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
         if (cell.row < band.r0 || cell.row > band.r1 || cell.col < band.c0 || cell.col > band.c1) {
           throw contractViolation('Read cell outside the requested band')
         }
+        // Only the two rows the rule reads count; rows between them are see-through.
+        if (item.row !== band.r0 && item.row !== band.r1) continue
         if (cell.unavailable) {
           unavailable++
           if (firstUnavailable === null || cell.row < firstUnavailable.row
@@ -530,6 +656,8 @@ interface DetectionContext {
   pacer: Pacer
   /** Source owner captured before the first await; the result is stamped with it. */
   owner: SourceStamp
+  /** `request.seeThrough` as a lens; absent when it names no line. */
+  lens?: SeeThroughLens
 }
 /** Shared tail: resolve protected header/totals first, then refuse child-only
  * slices over the body band only (protected rows never move, §6.3), then the
@@ -556,7 +684,7 @@ async function finishRect(
     totalsRows = 0
     header = 'heuristic'
   } else {
-    const probe = await probeHeaderRows(request.store, request.options, context.pacer, rect)
+    const probe = await probeHeaderRows(request.store, request.options, context.pacer, rect, context.lens)
     if (probe.kind === 'incomplete') return { kind: 'incomplete', missing: probe.missing }
     if (probe.kind === 'refused') return refused(probe.refusal)
     headerRows = probe.headerRows
@@ -639,19 +767,45 @@ function rowRun(rows: CompactSourceRowSet): AxisRun {
  * unsupported here, and disjoint membership seeds from the active cell. A
  * contiguous selection that does not contain the active cell (single cells and
  * full rows/columns included) is ambiguous: neither seed is silently chosen. */
-function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' | 'unsupported' | 'ambiguous' {
+function explicitRect(selection: GridSelection, active: SourceCell, lens?: SeeThroughLens): SourceRect | null | 'invalid' | 'unsupported' | 'ambiguous' {
   if (selection.ranges.length !== 1) return null
   const part = selection.ranges[0]
-  const rows = rowRun(part.rows)
-  const cols = spanRun(part.cols.map(span => ({ lo: span.c0, hi: span.c1 })), MAX_COLS)
+  const colSpans = part.cols.map(span => ({ lo: span.c0, hi: span.c1 }))
+  let rows = rowRun(part.rows)
+  let cols = spanRun(colSpans, MAX_COLS)
   if (rows === 'invalid' || cols === 'invalid') return 'invalid'
   if (rows === 'unsupported') return 'unsupported'
+  // Runs whose only gaps are see-through lines are one run.
+  if (lens !== undefined && rows === 'disjoint') rows = bridged(rowSpans(part.rows), lens.rows)
+  if (lens !== undefined && cols === 'disjoint') cols = bridged(colSpans, lens.cols)
   if (rows === 'disjoint' || cols === 'disjoint') return null
   const rect = { r0: rows.lo, r1: rows.hi, c0: cols.lo, c1: cols.hi }
   if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return 'ambiguous'
   if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return null
   if ((rect.r0 === 0 && rect.r1 === MAX_ROWS - 1) || (rect.c0 === 0 && rect.c1 === MAX_COLS - 1)) return null
   return rect
+}
+/** The ascending spans of a validated, non-ref row set. */
+function rowSpans(rows: CompactSourceRowSet): { lo: number; hi: number }[] {
+  if (rows.kind === 'intervals') return rows.intervals.map(span => ({ lo: span.r0, hi: span.r1 }))
+  const spans: { lo: number; hi: number }[] = []
+  const add = (row: number) => {
+    const last = spans[spans.length - 1]
+    if (last !== undefined && last.hi + 1 === row) last.hi = row
+    else spans.push({ lo: row, hi: row })
+  }
+  if (rows.kind === 'list') for (const row of rows.rows) add(row)
+  else if (rows.kind === 'bitset') {
+    for (let index = 0; index < rows.words.length; index++) {
+      const word = rows.words[index]
+      if (word === 0) continue
+      for (let bit = 0; bit < 32; bit++) if (((word >>> bit) & 1) !== 0) add(rows.r0 + index * 32 + bit)
+    }
+  }
+  return spans
+}
+function bridged(spans: readonly { lo: number; hi: number }[], axis: AxisLens): { lo: number; hi: number } | 'disjoint' {
+  return axis.bridges(spans) ? { lo: spans[0]!.lo, hi: spans[spans.length - 1]!.hi } : 'disjoint'
 }
 function finishTable(context: DetectionContext, table: TableExtent): Promise<RangeDetection> | RangeDetection {
   if (!isValidSourceRectInput(table.range)
@@ -716,8 +870,11 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   }
   if (structure.completeness !== 'complete') return structuralWait(structure)
   const pageLimit = request.pageLimit ?? 4096
-  const context: DetectionContext = { request, pacer, owner }
-  const scanner = new Scanner(store, options, pacer, request.workBudget ?? DEFAULT_DETECTION_WORK_BUDGET)
+  const lens = seeThroughLens(request.seeThrough)
+  const context: DetectionContext = lens ? { request, pacer, owner, lens } : { request, pacer, owner }
+  // Region growth runs in compact space under a lens: `out` maps its rects back to source rects.
+  const scanner = new Scanner(store, options, pacer, request.workBudget ?? DEFAULT_DETECTION_WORK_BUDGET, lens)
+  const out = (rect: SourceRect): SourceRect => lens ? lens.toSource(rect)! : rect
   // Probes may stop following a continuation early (a found cell decides).
   try {
     const activeRect = { r0: active.row, r1: active.row, c0: active.col, c1: active.col }
@@ -731,44 +888,47 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
       }
       return finishTable(context, tableHit.record)
     }
-    const explicit = explicitRect(selection, active)
+    const explicit = explicitRect(selection, active, lens)
     if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
     if (explicit === 'ambiguous') {
       return refused({ reason: 'ambiguous-selection', message: 'Contiguous selection does not contain the active cell' })
     }
     if (explicit === 'unsupported') return refused({ reason: 'unsupported', message: 'Row-set refs are resolved by the worker, not range detection' })
     if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
-    const region = await probeCurrentRegion(active, scanner, pageLimit)
-    if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
-    if (region.kind === 'region') return finishDerived(context, region.rect, { kind: 'region' })
+    const seed = lens ? lens.toCompact(active) : active
+    const region: RegionProbe = seed === null ? { kind: 'blank' } : await probeCurrentRegion(seed, scanner, pageLimit)
+    if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing.map(out) }
+    if (region.kind === 'region') return finishDerived(context, out(region.rect), { kind: 'region' })
     // Blank seed: the used range applies only when it holds exactly one current
     // region; two blocks around a blank cell must never become one range (§6.1).
     // The hint is optional: without one, the same limit-1 probes run over the
     // whole sheet (bounded by the work budget), so a proven-empty source refuses
     // instead of waiting on a hint that may never arrive.
-    const used = request.usedRange ?? store.extent.used ?? FULL_DOMAIN
-    if (!isValidSourceRectInput(used)) {
+    const hint = request.usedRange ?? store.extent.used ?? FULL_DOMAIN
+    if (!isValidSourceRectInput(hint)) {
       return refused({ reason: 'invalid-range', message: 'Used range is outside the worksheet domain' })
     }
-    const first = await scanner.first(used)
-    if (first === 'unknown') return { kind: 'incomplete', missing: [{ ...used }] }
-    if (first === 'blank') {
+    const used = lens ? lens.compactRect(hint) : hint
+    const first = used === null ? 'blank' : await scanner.first(used)
+    if (first === 'unknown') return { kind: 'incomplete', missing: [{ ...hint }] }
+    if (first === 'blank' || used === null) {
       return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and no data in the used range' })
     }
     const sole = await probeCurrentRegion(first, scanner, pageLimit)
-    if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing }
+    if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing.map(out) }
     if (sole.kind === 'blank') throw contractViolation('Populated cell vanished during detection')
     // A region that outgrew the hint proves the hint stale, so the sole-region
     // check then covers the whole sheet (still limit-1 probes, at most four).
     const inside = sole.rect.r0 >= used.r0 && sole.rect.r1 <= used.r1 && sole.rect.c0 >= used.c0 && sole.rect.c1 <= used.c1
-    for (const rect of outsideRegion(inside ? used : FULL_DOMAIN, sole.rect)) {
+    const domain = lens ? lens.compactRect(FULL_DOMAIN)! : FULL_DOMAIN
+    for (const rect of outsideRegion(inside ? used : domain, sole.rect)) {
       const answer = await scanner.exists(rect)
-      if (answer === 'unknown') return { kind: 'incomplete', missing: [rect] }
+      if (answer === 'unknown') return { kind: 'incomplete', missing: [out(rect)] }
       if (answer === 'occupied') {
         return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and the used range holds more than one region' })
       }
     }
-    return finishDerived(context, sole.rect, { kind: 'used' })
+    return finishDerived(context, out(sole.rect), { kind: 'used' })
   } finally {
     scanner.close()
   }

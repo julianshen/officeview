@@ -77,12 +77,18 @@ jobs:
       - name: Corpus report (fails on degraded or unexpected failures)
         run: bun scripts/corpus-report.ts
 
-  # The whole stream server suite (bun test, one process), media tests included (sandboxed ffmpeg, required).
-  # Its own job since it took most of the `check` job's 25 minutes (~22 min together).
+  # The stream server suite (bun test), media tests included (sandboxed ffmpeg, required).
+  # Its own job since it took most of the `check` job's 25 minutes (~22 min together). Stage 4c (PR #115):
+  # one runner reached the 25-minute limit (about 24 min on main after 4b), so `--shard` splits it by file
+  # across two runners, as the vitest suite is split below. The limit is unchanged.
   server:
-    name: stream server tests
+    name: stream server tests (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -124,7 +130,7 @@ jobs:
         run: bun scripts/fetch-corpus.ts
 
       - name: Stream server test suite (sandboxed ffmpeg, required)
-        run: cd server && OV_MEDIA_REQUIRED=1 bun test
+        run: cd server && OV_MEDIA_REQUIRED=1 bun test --shard=${{ matrix.shard }}/2
 
   # The vitest suite, split across three runners (PR #89: one runner took 30 min of a 45-min job, about
   # 2670 s of per-file time; the CF oracle file alone is ~330 s). `--shard` splits by file, so each

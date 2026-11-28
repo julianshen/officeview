@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import type { TilePalette } from '../../src/stream/sheet-wire'
 import type { SheetClock } from './sheet/clock'
 import type { WireSizes } from './sheet/view-state'
+import { canonicalView, type CanonicalView } from './sheet/view-spec'
 
 export const RENDER_CACHE_BYTES = 512 * 1024 * 1024
 export const DOCUMENT_CACHE_BYTES = 1024 * 1024 * 1024
@@ -49,11 +50,22 @@ export function renderKey(f: RenderKeyFields): string {
 }
 
 /** Stage 4a (S4 §6.3, §6.5): the view a sheet tile is drawn under, with the session clock. Stage 4b: `sizes` are the
- * session's canonical sizes (`[]` is the identity view, which hashes exactly as in 4a). */
-export interface SheetViewState { sort: null; filters: []; sizes: WireSizes; authorHiddenTier: 'none'; clock: SheetClock }
-/** The SHA-256 hex of the canonical JSON of `v` (only its listed fields): `policyDetails.viewStateHash` of a tile key. */
+ * session's canonical sizes (`[]` is the identity view, which hashes exactly as in 4a). Stage 4c (P2, F2): the 4b form
+ * stays, and the 4c form carries the canonical sort and filter view and the C1 tier (`'c1'` iff `visible-only` and a
+ * filter is set). An identity view in the 4c form hashes exactly as the 4b form. */
+export type SheetViewState =
+  | { sort: null; filters: []; sizes: WireSizes; authorHiddenTier: 'none'; clock: SheetClock }
+  | { view: CanonicalView; sizes: WireSizes; authorHiddenTier: 'none' | 'c1'; clock: SheetClock }
+/** The SHA-256 hex of the canonical JSON of `v` (only its listed fields): `policyDetails.viewStateHash` of a tile key.
+ * The 4c form hashes `{sort: {spec, under: sortFilter} | null, filters: [filter] | [], …}` over the normal form. */
 export function viewStateHash(v: SheetViewState): string {
-  const view = { sort: v.sort, filters: v.filters, sizes: v.sizes.map((e) => ({ axis: e.axis, index: e.index, px: e.px })), authorHiddenTier: v.authorHiddenTier, clock: { day: v.clock.day, timeZone: v.clock.timeZone } }
+  let sort: unknown = null, filters: unknown[] = []
+  if ('view' in v) {
+    const c = canonicalView(v.view)
+    sort = c.sort && { spec: c.sort, under: c.sortFilter }
+    filters = c.filter ? [c.filter] : []
+  }
+  const view = { sort, filters, sizes: v.sizes.map((e) => ({ axis: e.axis, index: e.index, px: e.px })), authorHiddenTier: v.authorHiddenTier, clock: { day: v.clock.day, timeZone: v.clock.timeZone } }
   return createHash('sha256').update(canonical(view)).digest('hex')
 }
 
@@ -72,6 +84,7 @@ export class LruBytes<V> {
     return e.value
   }
   has(key: string) { return this.map.has(key) }
+  bytesOf(key: string): number { return this.map.get(key)?.bytes ?? 0 }
   put(key: string, value: V, bytes: number): boolean {
     if (bytes > this.limit) return false
     const old = this.map.get(key)
@@ -103,19 +116,53 @@ export const createRenderCache = <V>(limit = RENDER_CACHE_BYTES) => new LruBytes
  * BEFORE a parse and on every request (so a reparse after eviction is charged
  * again); an entry that can never fit is refused, never held uncharged.
  * Eviction calls `drop` so the pool releases the parse (bytes are kept).
- * Charge = input bytes × 8 [call] — a parsed-model estimate, not a measurement. */
+ * Charge = input bytes × 8 [call] — a parsed-model estimate, not a measurement.
+ *
+ * Stage 4c (P11): a derived sheet view is admitted by `hold(key, bytes)`, a pinned, reference-counted entry that is
+ * never evicted; unpinned parses may be evicted to make room. What cannot fit beside the held bytes is refused up
+ * front, evicting nothing. */
 export class DocumentLedger {
-  private lru: LruBytes<{ docRef: string; policy: string }>
+  private lru: LruBytes<{ docRef: string; policy: string } | { view: string }>
+  private readonly holders = new Map<string, number>()
+  private held = 0
   constructor(drop: (docRef: string, policy: string) => void, readonly limit = DOCUMENT_CACHE_BYTES) {
-    this.lru = new LruBytes(limit, (_k, v) => drop(v.docRef, v.policy))
+    this.lru = new LruBytes(limit, (_k, v) => { if ('docRef' in v) drop(v.docRef, v.policy) })
   }
   static charge(inputBytes: number) { return inputBytes * 8 }
-  /** false = refused (the document alone exceeds the ceiling). */
+  /** false = refused (the document alone, or beside the held views, exceeds the ceiling). */
   touch(docRef: string, policy: string, inputBytes: number): boolean {
     const key = `${docRef}|${policy}`
     if (this.lru.get(key)) return true
-    return this.lru.put(key, { docRef, policy }, DocumentLedger.charge(inputBytes))
+    const bytes = DocumentLedger.charge(inputBytes)
+    if (this.held + bytes > this.limit) return false
+    return this.lru.put(key, { docRef, policy }, bytes)
   }
+  /** Holds the derived view `key` (P11): a new key is charged `bytes` and pinned, a held one gains a holder and is
+   * charged nothing more. false = refused (it cannot fit beside the held views); nothing changes. */
+  hold(key: string, bytes: number): boolean {
+    const k = `view\u0000${key}`
+    const n = this.holders.get(k)
+    if (n !== undefined) { this.holders.set(k, n + 1); this.lru.get(k); return true }
+    if (this.held + bytes > this.limit) return false
+    if (!this.lru.put(k, { view: key }, bytes)) return false
+    this.lru.pin(k)
+    this.holders.set(k, 1)
+    this.held += bytes
+    return true
+  }
+  /** Drops one holder of `key`; the last one unpins and deletes it. A key not held is a no-op. */
+  release(key: string): void {
+    const k = `view\u0000${key}`
+    const n = this.holders.get(k)
+    if (n === undefined) return
+    if (n > 1) { this.holders.set(k, n - 1); return }
+    this.holders.delete(k)
+    this.held -= this.lru.bytesOf(k)
+    this.lru.unpin(k)
+    this.lru.delete(k)
+  }
+  /** Whether derived view `key` has a holder (final review R2: its worker may keep it only then). */
+  isHeld(key: string): boolean { return this.holders.has(`view\u0000${key}`) }
   get size() { return this.lru.size }
   get evictions() { return this.lru.evictions }
 }

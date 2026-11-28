@@ -5,7 +5,7 @@
  * τ for the total candidate count. Fails closed: a re-rendered reference that
  * differs from what was served is never decoded. */
 import { createHash } from 'node:crypto'
-import type { AuditStore, DeliveryRecord, StoredRow, TileDeliveryRecord } from '../audit-store'
+import { sheetViewSpecOf, type AuditStore, type DeliveryRecord, type StoredRow, type TileDeliveryRecord } from '../audit-store'
 import { docRefOf, type Keys } from '../keys'
 import { basis, deriveBasisKey } from '../mark/basis'
 import { extendedCodeword } from '../mark/bch'
@@ -18,6 +18,7 @@ import { notesBasisLabel } from '../notes'
 import { DocumentHost, type MarkSpec } from '../render'
 import type { SheetClock } from '../sheet/clock'
 import type { WireSizes } from '../sheet/view-state'
+import { canonicalViewHash, isIdentityView, type CanonicalView } from '../sheet/view-spec'
 import { tileBasisLabel } from '../sheet/tile'
 import { TILE_BATCH_MAX, TILE_PX, type TilePalette } from '../../../src/stream/sheet-wire'
 import { MAX_CANDIDATES, tauFor } from './tau'
@@ -188,7 +189,7 @@ export function tileWindowProblem(w: TileTraceInput['window']): string | undefin
 }
 
 /** One sid's marked tiles of the window under one reference key (a candidate; one score). */
-interface TileCandidate { sid: string; row: StoredRow; gen: number; docRef: string; clock: SheetClock; viewGen: number; /** Stage 4b: the stored view's sizes. */ sizes: WireSizes; tiles: TileDeliveryRecord[] }
+interface TileCandidate { sid: string; row: StoredRow; gen: number; docRef: string; clock: SheetClock; viewGen: number; /** Stage 4b: the stored view's sizes. */ sizes: WireSizes; /** Stage 4c: the stored sort and filter view. */ view: CanonicalView; tiles: TileDeliveryRecord[] }
 
 /**
  * Stage 4a (R10): traces a capture of a pane of sheet tiles. The candidates are the sids with a marked
@@ -196,8 +197,9 @@ interface TileCandidate { sid: string; row: StoredRow; gen: number; docRef: stri
  * every status; R10's filter is here). One candidate per sid (per reference key), so `MAX_CANDIDATES` and τ count
  * sessions, not tile rows.
  *
- * One reference per `(contentPolicy, visibleMark, clock, sizes)` key, in first-delivery order: every tile of the
- * window is rebuilt through `host.renderTile` under the row's visible mark and the clock and sizes (Stage 4b) of the
+ * One reference per `(contentPolicy, visibleMark, clock, sizes, view)` key, in first-delivery order: every tile of the
+ * window is rebuilt through `host.renderTile` under the row's visible mark and the clock, sizes (Stage 4b) and sort and
+ * filter view (Stage 4c, P9; a 4a/4b row reads as the identity view, `sheetViewSpecOf`) of the
  * sid's `sheet_views` row for the delivery's `viewGen`, and every marked row's `refSha256` must equal its rebuilt tile's hash, before anything is decoded (else
  * `no-signal: reference-mismatch`). The tiles are composited into one window reference, and its chips are each tile's
  * own basis (`tileBasisLabel`), offset by the tile's origin in whole 512-chip blocks. The capture is registered once
@@ -206,6 +208,8 @@ interface TileCandidate { sid: string; row: StoredRow; gen: number; docRef: stri
  */
 /** A view's sizes as a reference-key part (canonical order is the stored order). */
 const sizesKey = (sizes: WireSizes) => sizes.map((e) => [e.axis, e.index, e.px])
+/** A view's sort and filter as a reference-key part (its canonical hash). */
+const viewKey = (view: CanonicalView) => canonicalViewHash(view)
 
 export async function traceTiles(input: TileTraceInput): Promise<TraceAnswer> {
   const { capture, doc, sheetId, zoomStep, dpr, window: w, keys, store } = input
@@ -229,7 +233,8 @@ export async function traceTiles(input: TileTraceInput): Promise<TraceAnswer> {
       if (have) { have.tiles.push(c.delivery); continue }
       const view = store.sheetView(c.sid, sheetId, c.delivery.viewGen)
       if (!view) throw new Error(`marked tile delivery for ${c.sid} without its sheet view`)
-      bySid.set(id, { sid: c.sid, row: c.row, gen, docRef, clock: view.clock, viewGen: c.delivery.viewGen, sizes: view.spec.sizes ?? [], tiles: [c.delivery] })
+      const spec = sheetViewSpecOf(view.spec)
+      bySid.set(id, { sid: c.sid, row: c.row, gen, docRef, clock: view.clock, viewGen: c.delivery.viewGen, sizes: spec.sizes ?? [], view: { sort: spec.sort, sortFilter: spec.sortFilter, filter: spec.filter }, tiles: [c.delivery] })
     }
   }
   const marked = [...bySid.values()]
@@ -239,8 +244,9 @@ export async function traceTiles(input: TileTraceInput): Promise<TraceAnswer> {
 
   const byRef = new Map<string, Map<number, TileCandidate[]>>()
   for (const c of marked) {
-    // Stage 4b: keyed by the view's sizes, not its viewGen (two sids at one viewGen may hold different sizes).
-    const key = JSON.stringify([c.row.contentPolicy, markKey(c.row.visibleMark), c.clock.day, c.clock.timeZone, sizesKey(c.sizes)])
+    // Stage 4b: keyed by the view's sizes, not its viewGen (two sids at one viewGen may hold different sizes); Stage 4c:
+    // and by its sort and filter view.
+    const key = JSON.stringify([c.row.contentPolicy, markKey(c.row.visibleMark), c.clock.day, c.clock.timeZone, sizesKey(c.sizes), viewKey(c.view)])
     let gens = byRef.get(key)
     if (!gens) byRef.set(key, gens = new Map())
     const g = gens.get(c.gen)
@@ -262,7 +268,7 @@ export async function traceTiles(input: TileTraceInput): Promise<TraceAnswer> {
     // Rebuild every tile of the window and check every marked row against it before decoding any.
     const pngs: Uint8Array[] = [], hashes = new Map<string, string>()
     for (let r = w.r0; r <= w.r1; r++) for (let c = w.c0; c <= w.c1; c++) {
-      const t = await host.renderTile(docKey, { sheetIndex, viewGen: head.viewGen, zoomStep, dpr, palette, col: c, row: r, mark: head.row.visibleMark, clock: head.clock, sizes: head.sizes })
+      const t = await host.renderTile(docKey, { sheetIndex, viewGen: head.viewGen, zoomStep, dpr, palette, col: c, row: r, mark: head.row.visibleMark, clock: head.clock, sizes: head.sizes, ...(isIdentityView(head.view) ? {} : { view: head.view }) })
       pngs.push(t.png); hashes.set(`${c},${r}`, sha256(t.png))
     }
     for (const group of gens.values()) for (const cand of group) for (const d of cand.tiles) if (d.refSha256 !== hashes.get(`${d.col},${d.row}`)) return { kind: 'no-signal', reason: 'reference-mismatch' }
@@ -274,7 +280,7 @@ export async function traceTiles(input: TileTraceInput): Promise<TraceAnswer> {
     })
     pngs.length = 0
     const reference: Bitmap = { width: W, height: H, data }
-    const clockKey = JSON.stringify([head.clock.day, head.clock.timeZone, sizesKey(head.sizes)])
+    const clockKey = JSON.stringify([head.clock.day, head.clock.timeZone, sizesKey(head.sizes), viewKey(head.view)])
     for (const [gen, group] of gens) {
       const first = group[0]!
       // Each tile's own 512 chips, offset by its origin: whole blocks, so scoring's code[n % 512] reads each tile's symbols.

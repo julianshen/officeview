@@ -3,7 +3,7 @@ import type { CacheIdentity, ColumnRule, FilterRange, FilterSpec, OperationRefus
 import { reduceSortCommand } from '../../xlsx/view/sort'
 import { canonicalSearchKey, type ColumnClassification, type FilterContext } from '../../xlsx/view/filter'
 import { detectOperationRange, admitSortRange, type RangeDetection, type RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
-import { ValueSelectionDraft, ValueIndexError, type ValueSearchResult, type ValueColumnSource, type ValueEntryView, type ValueIndexCache, type ValueIndexIdentity, type ValueLabeler, type ValueSelectedCount, type ValueSelectionState } from '../../xlsx/view/valueIndex'
+import { ValueSelectionDraft, ValueIndexError, VALUE_LABEL_LIMIT, VALUE_PAGE_LIMIT, type ValueSearchResult, type ValueColumnSource, type ValueEntryView, type ValueIndexCache, type ValueIndexIdentity, type ValueLabeler, type ValueSelectedCount, type ValueSelectionState } from '../../xlsx/view/valueIndex'
 import type { ValueRunStore } from '../../xlsx/view/valueRuns'
 
 export interface ControlSnapshot {
@@ -34,6 +34,12 @@ export interface ValuesDraftPort {
   inspect(ordinal: number, signal: AbortSignal): Promise<string>
   transfer(): void
   cancel(): void
+  /** A stream draft whose list the server re-listed (`stale-filter-values`): the new list's first page, once. */
+  relisted?(): DraftPage | null
+  /** The streaming server's display-text grouping (stream final review R1): up to VALUE_PAGE_LIMIT entries of the
+   * whole universe (or of `query`'s search) from ordinal (rank) `query.offset`, past the display limit. Charged like a
+   * read page; the caller settles it. Local drafts only. */
+  universe?(query: DraftQuery, signal: AbortSignal): Promise<{ entries: readonly ValueEntryView[]; total: number }>
 }
 export interface ControlsClient {
   owner(): CacheIdentity
@@ -142,22 +148,38 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
       const domain = options.domain(owner, range, col), index = options.cache.open(domain.identity, domain.source)
       let draft = await ValueSelectionDraft.open(index, applied, options.runs, signal), closed = false
       let search: ValueSearchResult | undefined, queryKey = '', latestRule = applied
+      /** Searches this port no longer shows that a Select All layer of the draft still holds (released when it closes). */
+      const layered = new Set<ValueSearchResult>()
+      /** A search this port dropped: once the draft released it, its lifetime charge ends now rather than at collection. */
+      const dropSearch = (result: ValueSearchResult) => {
+        if (options.allocation?.owns(result)) { options.allocation.settle?.(result); layered.delete(result) }
+        else layered.add(result)
+      }
+      /** The draft closed (cancel or commit): every search it held is released, so each lifetime charge ends now. */
+      const settleSearches = () => {
+        for (const result of [...layered, ...(search ? [search] : [])]) if (options.allocation?.owns(result)) options.allocation.settle?.(result)
+        layered.clear()
+      }
       const owned = new Map<string, NonNullable<ReturnType<typeof ruleRef>>>()
       const check = (input: AbortSignal) => { assert(owner, input); if (closed) throw new ValueIndexError('closed', 'Draft closed') }
       const page = (): DraftPage => {
         const result = index.page({ offset: currentQuery.offset, limit: 200, search, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}) })
         const account = options.allocation?.reserve()
-        account?.charge(160 + result.entries.length * 160)
+        // The output keeps the index page's labels (up to VALUE_LABEL_LIMIT units each) and drops its entry objects.
+        account?.charge(160 + result.entries.length * (160 + VALUE_LABEL_LIMIT * 2))
         try {
         const count = draft.selectedCount()
         const output = { ...result, entries: result.entries.map(entry => ({ ...entry, selected: draft.isSelected(entry.ordinal) })), count, blanks: draft.blanks,
           complete: count.complete && (!search || search.complete) && index.completeness === 'complete' }
         if (account) adoptAllocation(account, output)
+        // The index page is copied into the output, which now carries its charge: end the page's lease at once.
+        options.allocation?.settle?.(result)
         return output
         } finally { account?.release() }
       }
       let currentQuery: DraftQuery = { text: '', offset: 0 }
-      const read = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<DraftPage> => {
+      /** Builds the index, prepares the draft and runs `query`'s search, as every read does before its page. */
+      const ensure = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<void> => {
         check(input)
         await index.build({ signal: input, onProgress: p => progress?.({ ...p, message: 'Loading all values' }) })
         check(input)
@@ -165,15 +187,24 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
         check(input)
         const key = JSON.stringify([query.text, query.wildcards])
         if (index.completeness !== 'loading' && (key !== queryKey || search?.searchedEntries !== index.size)) {
+          const replaced = search
           search = await draft.search({ text: query.text, wildcards: query.wildcards, locale: options.context().locale }, { signal: input, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}), onProgress: p => progress?.({ completed: p.searched, total: p.total, message: 'Searching all values' }) })
           queryKey = key
+          if (replaced && replaced !== search) dropSearch(replaced)
         }
         check(input)
+      }
+      const read = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<DraftPage> => {
+        await ensure(query, input, progress)
         currentQuery = query
         return page()
       }
       return {
         identity: domain.identity, read,
+        async universe(query, input) {
+          await ensure(query, input)
+          return index.universePage({ offset: query.offset, limit: VALUE_PAGE_LIMIT, search: canonicalSearchKey(query.text, options.context().locale) ? search : undefined, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}) })
+        },
         async change(action, query, input) {
           await read(query, input)
           if (action.kind === 'toggle') draft.toggle(action.ordinal, action.selected)
@@ -186,6 +217,7 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
         async candidate(input) {
           check(input)
           const result = await draft.commit(input)
+          settleSearches()
           if (result.kind === 'committed' && ruleRef(result.rule)) owned.set(ruleRef(result.rule)!.refId, ruleRef(result.rule)!)
           try {
             check(input)
@@ -214,7 +246,7 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
           owned.clear()
         },
         cancel() {
-          closed = true; draft.cancel()
+          closed = true; draft.cancel(); settleSearches()
           for (const ref of owned.values()) void options.runs.release(ref)
           owned.clear()
         },

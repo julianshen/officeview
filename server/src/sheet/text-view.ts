@@ -5,10 +5,12 @@
  *
  * Under `'visible-only'` the view is the snapshot's (base-blanked) sheet with these cells also blank, every one by
  * `blankCell` semantics (value removed, style kept):
- * - P5, current-view coverage: `baseCoverage` over the projected sheet with its drawings placed by the session sizes;
+ * - P5, current-view coverage: `baseCoverage` over the projected sheet with its drawings placed by the session sizes,
+ *   and (Stage 4c, P9) in the session's sort and filter order and visibility, so a cell a sort slides under a fixed
+ *   drawing is blank;
  * - P3, merge tails: every merge cell but the anchor;
  * - zero-height rows (PR #112 review): every cell of a row the geometry collapses at the session sizes (authored `ht="0"`, hidden or
- *   not), but an anchor whose merge reaches a drawn row;
+ *   not; Stage 4c: or hidden by the view), but an anchor whose merge reaches a drawn row;
  * - P4, undrawn: a non-empty value whose display text under its CF-effective painted style (`TextView.styleAt`, the table
  *   or pivot region style over its own, through the CF scope) is `''` (`;;;` and the like); a cell
  *   whose CF bar or icon has `showValue="0"` (from the snapshot's CF batch); and, fail closed, every cell of every CF
@@ -25,19 +27,23 @@ import { regionStylesFor } from '../../../src/xlsx/tableStyleLoader'
 import type { RegionStyleLayer } from '../../../src/xlsx/tableStyles/regionLayer'
 import { hasSessionSizes, type SessionSizes } from '../../../src/xlsx/view/axisSizes'
 import { coverCellsToRects, type SourceRect } from '../../../src/xlsx/view/coordinates'
+import type { RowOrder, RowVisibility } from '../../../src/xlsx/view/contracts'
 import type { EffectiveFormatScope, FormatBudget } from '../../../src/xlsx/view/formatWorkspace'
 import { cellSourceRow } from '../../../src/xlsx/view/sheetCells'
 import { buildSheetGeometry, type SheetGeometryResult } from '../../../src/xlsx/view/viewport'
 import { clockEpochMs, type SheetClock } from './clock'
 import { baseCoverage } from './coverage'
-import type { SheetSnapshot } from './snapshot'
+import { blankCell, holdsContent, type SheetSnapshot } from './snapshot'
 
 export interface TextView {
   sheetIndex: number
   /** The sheet text answers read: `projected` under `'full'`, else the snapshot's sheet with P3–P5 blanking applied. */
   sheet: XlsxSheet
-  /** Built over `sheet` with the session sizes. */
+  /** Built over `sheet` with the session sizes (Stage 4c: and `derived`'s order and visibility). */
   geometry: SheetGeometryResult
+  /** Stage 4c (P9): the derived order and display-space visibility of the session's sort and filter view; absent for
+   * the identity view. Every text op reads them in place of the identity order and the authored visibility. */
+  derived?: { order: RowOrder; visibility: RowVisibility }
   /** Unknown coverage (base or current view): every cell is blank. */
   blankAll: boolean
   /** Cells holding content in the projected sheet that hold none here (0 under `'full'`). */
@@ -50,13 +56,6 @@ export interface TextView {
   styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
   /** Disposes the scope (idempotent). The snapshot is the host's: a view never releases it. */
   release(): void
-}
-
-const holdsContent = (cell: XlsxCell) => (cell.value !== null && cell.value !== undefined) || cell.formula !== undefined
-
-/** `blankCell` (snapshot.ts) semantics: position and style only. */
-function blankCell(cell: XlsxCell): XlsxCell {
-  return { ref: cell.ref, row: cell.row, col: cell.col, value: null, styleIndex: cell.styleIndex, ...(cell.style ? { style: cell.style } : {}) }
 }
 
 /** A copy of `sheet` with every content cell `blank(row, col, cell)` names blanked (`sheet` itself when none is). Rows
@@ -137,10 +136,11 @@ function regionStyleAt(region: RegionStyleLayer | undefined): TextView['styleAt'
   return (row, col, own) => region?.styleAt(row, col, own, 'screen') ?? own
 }
 
-function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, projected: XlsxSheet, blankAll: boolean, scope: EffectiveFormatScope | undefined, styleAt: TextView['styleAt']): TextView {
+type Derived = TextView['derived']
+function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, derived: Derived, projected: XlsxSheet, blankAll: boolean, scope: EffectiveFormatScope | undefined, styleAt: TextView['styleAt']): TextView {
   let released = false
   return {
-    sheetIndex: snap.sheetIndex, sheet, geometry: buildSheetGeometry(sheet, { sizes }), blankAll,
+    sheetIndex: snap.sheetIndex, sheet, geometry: buildSheetGeometry(sheet, { sizes, ...derived }), ...(derived ? { derived } : {}), blankAll,
     withheld: sheet === projected ? 0 : contentCount(projected) - contentCount(sheet), scope, styleAt,
     release() { if (!released) { released = true; scope?.dispose() } },
   }
@@ -149,22 +149,27 @@ function view(snap: SheetSnapshot, sheet: XlsxSheet, sizes: SessionSizes, projec
 /**
  * The text view of `snap` (built from the cached snapshot: P4 reads its CF batch) under the session `sizes`.
  * `projected` is the projected (unblanked) sheet the snapshot was built from; `workbook` is the servable workbook (every
- * slot its blanked sheet), which CF's cross-sheet rules read; `budget` admits the scope until `release`.
+ * slot its blanked sheet), which CF's cross-sheet rules read; `budget` admits the scope until `release`. Stage 4c (P9):
+ * `order` and `visibility` (both or neither) are the derived view of the session's sort and filter view.
  */
-export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, sizes: SessionSizes, o: { workbook: XlsxDocument; clock: SheetClock; budget: FormatBudget }): Promise<TextView> {
+export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, sizes: SessionSizes, o: { workbook: XlsxDocument; clock: SheetClock; budget: FormatBudget; order?: RowOrder; visibility?: RowVisibility }): Promise<TextView> {
   const ranges = (sheet: XlsxSheet) => (sheet.conditionalFormatting?.rules ?? []).flatMap((rule) => rule.ranges)
-  if (snap.contentPolicy === 'full') return view(snap, projected, sizes, projected, false, await prepareScope(projected, scopeRects(projected, ranges(projected)), o), regionStyleAt(regionStylesFor(projected)))
+  if ((o.order === undefined) !== (o.visibility === undefined)) throw new RangeError('sheetTextView: order and visibility come together')
+  const derived: Derived = o.order && o.visibility ? { order: o.order, visibility: o.visibility } : undefined
+  if (snap.contentPolicy === 'full') return view(snap, projected, sizes, derived, projected, false, await prepareScope(projected, scopeRects(projected, ranges(projected)), o), regionStyleAt(regionStylesFor(projected)))
 
-  const blankEverything = () => view(snap, blankWhere(projected, () => true), sizes, projected, true, undefined, regionStyleAt(regionStylesFor(projected)))
+  const blankEverything = () => view(snap, blankWhere(projected, () => true), sizes, derived, projected, true, undefined, regionStyleAt(regionStylesFor(projected)))
   if (snap.coverage === 'off' || snap.coverage.kind !== 'known' || snap.geometry.kind !== 'ready') return blankEverything()
   const merges = snap.geometry.merges
 
-  // P5: current-view coverage, over the unblanked sheet (spill reads its cells) with the drawings the sizes place.
+  // P5: current-view coverage, over the unblanked sheet (spill reads its cells) with the drawings the sizes place, in the
+  // view's order and visibility (Stage 4c, P9).
   let currentCovered: ((row: number, col: number) => boolean) | undefined
-  // The row sizes the viewer draws at: a zero-height row draws no cell (zero-height rows, below).
+  // The row sizes the viewer draws at, by display slot: a zero-height row draws no cell (zero-height rows, below).
   let rows = snap.geometry.metrics.rows
-  if (hasSessionSizes(sizes)) {
-    const sized = buildSheetGeometry(projected, { sizes })
+  const slot = (row: number) => derived ? derived.order.sourceToDisplay(row) : row
+  if (hasSessionSizes(sizes) || derived) {
+    const sized = buildSheetGeometry(projected, { sizes, ...derived })
     if (sized.kind === 'ready') rows = sized.metrics.rows
     const placed = sized.kind === 'ready' ? sized.sizedDrawings ?? projected.drawings : projected.drawings
     const current = baseCoverage({ ...projected, ...(placed ? { drawings: placed as XlsxSheet['drawings'] } : {}) }, sized)
@@ -194,7 +199,7 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
       // Zero-height rows: a row the geometry collapses (an authored `ht="0"` without `hidden`, which `baseHidden`
       // does not hold; a session size never reopens it) draws none of its cells, unless it anchors a merge that reaches
       // a drawn row.
-      if (rows.size(row) === 0 && !(merge && rows.start(merge.maxRow) + rows.size(merge.maxRow) > rows.start(row))) return true
+      if (rows.size(slot(row)) === 0 && !(merge && rows.start(slot(merge.maxRow)) + rows.size(slot(merge.maxRow)) > rows.start(slot(row)))) return true
       if (scopeUnavailable && inRanges(cfRanges, row, col)) return true
       if (batch && (batch.barAt(row, col)?.showValue === false || batch.iconAt(row, col)?.showValue === false)) return true
       if (hiddenValueRanges.length && inRanges(hiddenValueRanges, row, col)) return true
@@ -205,7 +210,7 @@ export async function sheetTextView(snap: SheetSnapshot, projected: XlsxSheet, s
       const painted = batch?.layer.styleAt(row, col, cell.style, 'screen')
       return painted !== undefined && painted !== base && paintsNothing(formatSheet, cell, painted)
     })
-    return view(snap, out, sizes, projected, false, scope, styleAt)
+    return view(snap, out, sizes, derived, projected, false, scope, styleAt)
   } catch (e) {
     scope?.dispose()
     throw e

@@ -7,13 +7,16 @@ import { TILE_DPRS, TILE_PALETTES, TILE_PX, TILE_ZOOM_STEPS, type TilePalette } 
 import { THEME_DEFAULTS, type CanvasToken } from '../../../src/styles/tokens'
 import type { MarkSpec } from '../mark/visible'
 import type { SheetClock } from './clock'
+import type { CanonicalView } from './view-spec'
 import type { WireSizes } from './view-state'
 
 /** One tile of sheet `sheetIndex` (an index into the visible sheets, R12) at `(TILE_ZOOM_STEPS[zoomStep], dpr)`: the
  * 512² device-px square at `(col·512, row·512)` of the sheet's global device grid (`tileRangeFor`), painted at the
  * session's `sizes` (Stage 4b, canonical `WireSizes`). A job without `sizes` is the 4a identity job: its `viewGen`
- * must be 0. With `sizes` (even `[]`, a reset view) `viewGen` is any u32: the paint reads the sizes, never the number. */
-export interface TileJob { sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; col: number; row: number; mark: MarkSpec; clock: SheetClock; sizes?: WireSizes }
+ * must be 0. With `sizes` (even `[]`, a reset view) `viewGen` is any u32: the paint reads the sizes, never the number.
+ * Stage 4c (P9): `view` is the session's sort and filter view (absent: the identity view); with it, `viewGen` is any u32
+ * too, and the tile paints the snapshot's sheet over its geometry at `sizes` in the view's derived order and visibility. */
+export interface TileJob { sheetIndex: number; viewGen: number; zoomStep: number; dpr: 1 | 2; palette: TilePalette; col: number; row: number; mark: MarkSpec; clock: SheetClock; sizes?: WireSizes; view?: CanonicalView }
 /** What a tile job returns: the canonical (pre-forensic) PNG, and the palette it was painted under (F24: audited). */
 export interface RenderedTile { png: Uint8Array; w: typeof TILE_PX; h: typeof TILE_PX; palette: TilePalette }
 
@@ -67,14 +70,23 @@ function sizesProblem(sizes: unknown): boolean {
   return false
 }
 
-/** Why `job` is malformed (every check that needs no sheet), or undefined. A job without `sizes` has `viewGen` 0 (4a);
- * with them, any u32. The sheet index and the tile bounds are checked against the snapshot. */
+/** `view` has the canonical view's shape: `sort`, `sortFilter` and `filter`, each `null` or an object (the derive job
+ * checks the rest, and refuses what it cannot replay). */
+function viewProblem(view: unknown): boolean {
+  if (!view || typeof view !== 'object' || Array.isArray(view)) return true
+  const v = view as Record<string, unknown>
+  return (['sort', 'sortFilter', 'filter'] as const).some((k) => v[k] !== null && (typeof v[k] !== 'object' || Array.isArray(v[k])))
+}
+
+/** Why `job` is malformed (every check that needs no sheet), or undefined. A job with neither `sizes` nor `view` has
+ * `viewGen` 0 (4a); with either, any u32 (F5). The sheet index and the tile bounds are checked against the snapshot. */
 export function tileJobProblem(job: unknown): string | undefined {
   if (!job || typeof job !== 'object') return 'job'
   const j = job as Partial<TileJob>
   if (!nonNegInt(j.sheetIndex)) return 'sheetIndex'
-  if (j.sizes === undefined ? j.viewGen !== 0 : !nonNegInt(j.viewGen) || j.viewGen! > 0xffffffff) return 'viewGen'
+  if (j.sizes === undefined && j.view === undefined ? j.viewGen !== 0 : !nonNegInt(j.viewGen) || j.viewGen! > 0xffffffff) return 'viewGen'
   if (j.sizes !== undefined && sizesProblem(j.sizes)) return 'sizes'
+  if (j.view !== undefined && viewProblem(j.view)) return 'view'
   if (!nonNegInt(j.zoomStep) || j.zoomStep! >= TILE_ZOOM_STEPS.length) return 'zoomStep'
   if (!(TILE_DPRS as readonly unknown[]).includes(j.dpr)) return 'dpr'
   if (!(TILE_PALETTES as readonly unknown[]).includes(j.palette)) return 'palette'

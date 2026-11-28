@@ -128,10 +128,14 @@ export type ServerSheetLayout = StreamSheetLayout & { coverageUnknown?: true }
  * `sessionRows`/`sessionCols` (`[index, px]`, ascending), each present only when non-empty, so an identity view is the
  * 4a layout key for key. `rows`/`cols` stay the authored sizes: the client merges the session's over them
  * (`streamSheetGeometry`), as `buildSheetGeometry` does.
+ *
+ * Stage 4c (P1, P7): `summary` is the session's sort and filter summary, given only when its view is not the identity
+ * view; it replaces the identity's `sort: null, filterSummary: []`, so the client knows to fetch `sheet-order`.
  */
-export function sessionLayout(base: StreamSheetLayout, viewGen: number, sizes: WireSizes): StreamSheetLayout {
+export interface ViewSummary { sort: StreamSheetLayout['sort']; filterSummary: StreamSheetLayout['filterSummary'] }
+export function sessionLayout(base: StreamSheetLayout, viewGen: number, sizes: WireSizes, summary?: ViewSummary): StreamSheetLayout {
   const { coverageUnknown: _c, sessionRows: _r, sessionCols: _k, ...rest } = base as ServerSheetLayout
   const sessionCols = sizes.filter((e) => e.axis === 'col').map((e): [number, number] => [e.index, e.px])
   const sessionRows = sizes.filter((e) => e.axis === 'row').map((e): [number, number] => [e.index, e.px])
-  return { ...rest, viewGen, ...(sessionRows.length ? { sessionRows } : {}), ...(sessionCols.length ? { sessionCols } : {}) }
+  return { ...rest, viewGen, ...(summary ? { sort: summary.sort, filterSummary: summary.filterSummary } : {}), ...(sessionRows.length ? { sessionRows } : {}), ...(sessionCols.length ? { sessionCols } : {}) }
 }

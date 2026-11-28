@@ -555,6 +555,8 @@ async function prepare(
           }
         }
         budget.release(pageBytes, !cooperative.options.allocation)
+        // Every entry is copied into the key lanes: the page's own charge ends with this read.
+        store.settle?.(page)
         cursor = page.nextCursor
         if (cursor !== undefined) {
           if (cursors.has(cursor) || ++pages > CHUNK) throw sourceError('invalid-cursor', 'Column cursor made no progress')

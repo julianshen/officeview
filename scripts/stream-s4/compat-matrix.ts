@@ -1,14 +1,14 @@
 /**
  * Stage 4a Task 16: the compatibility matrix over REAL builds, old/new client x old/new server.
  *
- *   bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d [--keep] [--tmp <dir>]
+ *   bun scripts/stream-s4/compat-matrix.ts --base 53668e81 --base4a 1e2fbf4d --base4b fb624989 [--keep] [--tmp <dir>]
  *
- * Every temp file (the two worktrees, fixtures, the server launcher) lives in one run directory: a fresh `mkdtemp`
+ * Every temp file (the three worktrees, fixtures, the server launcher) lives in one run directory: a fresh `mkdtemp`
  * under `os.tmpdir()`, or a new subdirectory of `--tmp <dir>`.
  *
  * `--base` is the pre-4a build (main before Stage 4a); `--base4a` is the 4a build (Stage 4b's base, main with 4a
- * merged). The script adds a detached worktree of each, links this checkout's `node_modules` into it, starts the
- * BASE, the 4A and the CURRENT server from source (each a separate `bun` process on an OS-picked free port, same
+ * merged); `--base4b` is the 4b build (Stage 4c's base, main with 4b merged). The script adds a detached worktree of
+ * each, links this checkout's `node_modules` into it, starts the BASE, the 4A, the 4B and the CURRENT server from source (each a separate `bun` process on an OS-picked free port, same
  * docs dir, same origin), runs the legs and prints one PASS/FAIL line per leg. Exit code is non-zero on any FAIL
  * (or a setup failure). Each worktree is removed (`git worktree remove --force`, that exact path only, then
  * `git worktree prune`) unless `--keep` is given; no other worktree is touched.
@@ -31,6 +31,16 @@
  *   (f') the current client with `streamSheets: 'tiles'` (HELLO exactly `['sheet-tiles@1']`) x 4a server: tiles mode,
  *       `doc.sheets.view === undefined`, one tile decodes;
  *   (g) the current client with `streamSheets: 'units'` (no `features`) x current server: units, a Stage 3 copy works.
+ *
+ * Stage 4c Task 12 (P1):
+ *   (h) the 4B client (`fb624989`'s default, HELLO `['sheet-view@1']`) x current server: the raw manifest carries
+ *       `sheetSort: 1` which the 4b `validateManifest` ignores (it opens, `sheetSort` is not on its manifest), its own
+ *       `decodeSheetLayout` decodes the `sheet-layout` and the raw layout parts are byte-identical to the 4b server's
+ *       for the same document, and a find and a resize work;
+ *   (i) the current DEFAULT client x 4b server: `sheetView === 1`, no `sheetSort` on the raw or parsed manifest,
+ *       `doc.sheets.sortOps === undefined`, and a find still works;
+ *   (j) the current client x current server: `sheetSort === 1`, a sort round-trips (the answered order, the layout's sort
+ *       summary, a clear by `keys: []`) and one tile at the new `viewGen` decodes.
  *
  * KNOWN BUG B1 (predates 4a, not fixed here): in UNITS mode a sheet whose static unit is over 8192 px gets a
  * manifest the client's `validateManifest` rejects (`units.list[i]` is capped 1..8192). `grid500x100` is 6400 x
@@ -61,10 +71,11 @@ const argv = process.argv.slice(2)
 const argOf = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
 const BASE = argOf('--base')
 const BASE4A = argOf('--base4a')
+const BASE4B = argOf('--base4b')
 const KEEP = argv.includes('--keep')
 /** `--tmp <dir>`: the parent of this run's directory (must exist or be creatable). Default: a fresh `mkdtemp` under `os.tmpdir()`. */
 const TMP = argOf('--tmp')
-if (!BASE || BASE.startsWith('--') || !BASE4A || BASE4A.startsWith('--')) { console.error('usage: bun scripts/stream-s4/compat-matrix.ts --base <rev> --base4a <rev> [--keep] [--tmp <dir>]'); process.exit(2) }
+if (!BASE || BASE.startsWith('--') || !BASE4A || BASE4A.startsWith('--') || !BASE4B || BASE4B.startsWith('--')) { console.error('usage: bun scripts/stream-s4/compat-matrix.ts --base <rev> --base4a <rev> --base4b <rev> [--keep] [--tmp <dir>]'); process.exit(2) }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -390,14 +401,108 @@ async function legG(cur: Server): Promise<string> {
   } finally { doc.close() }
 }
 
+// ── Stage 4c legs ────────────────────────────────────────────────────────────
+
+/** The raw `sheet-layout` text frames with the envelope's `reqId` dropped, parsed. */
+const layoutParts = (t: ReturnType<typeof tap>): unknown[] => t.layouts.map((l) => JSON.parse(l))
+
+/** (h) the 4B client (its default HELLO) x the CURRENT server, with the 4B server as the byte-for-byte reference. */
+async function legH(cur: Server, s4b: Server, tree4b: string): Promise<string> {
+  const { openRemoteDocument: open4b } = await import(resolve(tree4b, 'src/stream/remote/open.ts')) as { openRemoteDocument: typeof openRemoteDocument }
+  const { decodeSheetLayout: decode4b } = await import(resolve(tree4b, 'src/stream/sheet-wire.ts')) as { decodeSheetLayout: (parts: unknown[]) => { sheetId: string; viewGen: number } }
+  check(open4b !== openRemoteDocument, 'the 4b openRemoteDocument is the current function (wrong module)')
+  const ref = tap()
+  const refDoc: RemoteOfficeDoc = await open4b(src(s4b, 'grid500x100.xlsx'), { client: ref.factory as never, faces: async () => [] })
+  try {
+    await refDoc.sheets!.layout('0')
+  } finally { refDoc.close() }
+  const t = tap()
+  // `open` runs the 4b client's own `validateManifest`; a manifest it rejects fails the open.
+  const doc: RemoteOfficeDoc = await open4b(src(cur, 'grid500x100.xlsx'), { client: t.factory as never, faces: async () => [] })
+  try {
+    check(helloFeatures(t) === JSON.stringify(['sheet-view@1']), `the 4b HELLO features ${helloFeatures(t)}`)
+    const raw = await t.rawManifest()
+    check(raw.sheetView === 1 && raw.sheetSort === 1, `the current server's raw sheetView ${String(raw.sheetView)} / sheetSort ${String(raw.sheetSort)}`)
+    check(!('sheetSort' in doc.manifest) && !('typedFilters' in doc.manifest), 'the 4b-parsed manifest carries a 4c key')
+    check((doc.manifest as { sheetView?: unknown }).sheetView === 1, 'the 4b-parsed manifest has no sheetView')
+    check(doc.sheets !== undefined && doc.sheets.view !== undefined, 'the 4b doc has no sheet view ops')
+    check(!('sortOps' in doc.sheets!), 'the 4b doc has sortOps')
+    const layout = await doc.sheets.layout('0')
+    check(layout.sheetId === '0' && layout.defaults.colPx > 0, 'the 4b client did not decode the sheet-layout')
+    check(t.layouts.length >= 1 && ref.layouts.length >= 1, `layout frames: current ${t.layouts.length}, 4b ${ref.layouts.length}`)
+    check(t.layouts.length === ref.layouts.length && t.layouts.every((l, i) => l === ref.layouts[i]), `the sheet-layout bytes differ from the 4b server's (${t.layouts.length} vs ${ref.layouts.length} part(s))`)
+    const direct = decode4b(layoutParts(t))
+    check(direct.sheetId === '0' && direct.viewGen === layout.viewGen, `the 4b decodeSheetLayout on the raw parts: sheetId ${direct.sheetId} viewGen ${direct.viewGen}`)
+    const found = await doc.sheets.view!.find({ query: 'R1C1' })
+    check(found.total >= 1 && found.hits.length >= 1, `find total ${found.total}`)
+    const change = await doc.sheets.view!.resize({ sheetId: '0', viewGen: layout.viewGen, axis: 'row', index: 1, size: 48 })
+    check(change.sheetId === '0' && change.viewGen > layout.viewGen && 'axis' in change.change && change.change.axis === 'row' && change.change.index === 1 && change.change.size === 48, `resize answered ${JSON.stringify(change)}`)
+    return `4b client (HELLO sheet-view@1) x current server: 4b validateManifest accepted sheetSort:1 and dropped it, 4b decodeSheetLayout decoded ${t.layouts.length} sheet-layout part(s) byte-identical to the 4b server's, find ${found.total} hit(s), resize row 1 -> 48 at viewGen ${layout.viewGen} -> ${change.viewGen}`
+  } finally { doc.close() }
+}
+
+/** (i) the CURRENT default client x the 4B server: sheet view, no sort ops, find works. */
+async function legI(s4b: Server): Promise<string> {
+  const t = tap()
+  const doc: RemoteOfficeDoc = await openRemoteDocument(src(s4b, 'grid500x100.xlsx'), { client: t.factory as never, faces: async () => [] })
+  try {
+    check(helloFeatures(t) === JSON.stringify(['sheet-view@1']), `the default HELLO features ${helloFeatures(t)}`)
+    check(s4b.proc.exitCode === null, 'the 4b server is gone')
+    const raw = await t.rawManifest()
+    check(raw.sheetView === 1 && doc.manifest.sheetView === 1, `sheetView raw ${String(raw.sheetView)} / parsed ${String(doc.manifest.sheetView)}`)
+    for (const k of ['sheetSort', 'typedFilters']) check(!(k in raw) && !(k in doc.manifest), `the manifest carries ${k}`)
+    check(doc.manifest.sheetSort === undefined, `manifest.sheetSort ${String(doc.manifest.sheetSort)}`)
+    check(doc.sheets !== undefined && doc.sheets.view !== undefined, 'doc.sheets.view is absent against a 4b server')
+    check(doc.sheets.sortOps === undefined, 'doc.sheets.sortOps is set against a 4b server')
+    const found = await doc.sheets.view.find({ query: 'R1C1' })
+    check(found.total >= 1 && found.hits.length >= 1, `find total ${found.total}`)
+    return `current default client x 4b server: sheetView 1, no sheetSort on the raw or parsed manifest, sortOps undefined, find ${found.total} hit(s)`
+  } finally { doc.close() }
+}
+
+/** (j) the CURRENT client x the CURRENT server: a sort round-trips, and one tile at the new viewGen decodes. */
+async function legJ(cur: Server): Promise<string> {
+  const t = tap()
+  const doc: RemoteOfficeDoc = await openRemoteDocument(src(cur, 'grid500x100.xlsx'), { client: t.factory as never, faces: async () => [] })
+  try {
+    const raw = await t.rawManifest()
+    check(raw.sheetView === 1 && raw.sheetSort === 1 && doc.manifest.sheetSort === 1, `sheetSort raw ${String(raw.sheetSort)} / parsed ${String(doc.manifest.sheetSort)}`)
+    check(!('typedFilters' in raw), 'the visible-only manifest carries typedFilters')
+    const ops = doc.sheets?.sortOps
+    check(ops !== undefined && ops.typedFilters === false, 'doc.sheets.sortOps is absent, or typedFilters is set on a protected stream')
+    const before = await doc.sheets!.layout('0')
+    check(before.sort === null, 'the identity layout carries a sort')
+    const range = { r0: 0, r1: 499, c0: 0, c1: 99, header: 1 as const, totals: 0 as const }
+    const order = await ops!.sort('0', before.viewGen, { range, keys: [{ col: 1, order: 'desc' }], caseSensitive: false })
+    check(order.head.sheetId === '0' && order.head.viewGen > before.viewGen, `the order's viewGen ${order.head.viewGen} (layout ${before.viewGen})`)
+    check(order.head.sort?.keys.length === 1 && order.head.sort.keys[0]!.col === 1 && order.head.sort.keys[0]!.order === 'desc', `the order head sort ${JSON.stringify(order.head.sort)}`)
+    check(order.head.counts.visible === 499 && order.head.counts.total === 499, `order counts (the header row is outside the body) ${JSON.stringify(order.head.counts)}`)
+    const band = order.bands.find((b) => b.r0 <= 1 && b.r1 >= 1)
+    check(band !== undefined && band.sourceAtOffset[1 - band.r0] === 499, `display row 1 shows source ${band ? band.sourceAtOffset[1 - band.r0] : 'none'} (expected 499: B descending)`)
+    const sorted = await doc.sheets!.layout('0')
+    check(sorted.viewGen === order.head.viewGen && sorted.sort?.keys[0]?.col === 1 && sorted.sort.keys[0].order === 'desc', `the sorted layout viewGen ${sorted.viewGen} sort ${JSON.stringify(sorted.sort)}`)
+    const got: Array<{ col: number; row: number; png: Uint8Array }> = []
+    const res = await doc.sheets!.tiles({ sheetId: '0', viewGen: order.head.viewGen, zoomStep: 5, dpr: 1, palette: 'light', tiles: [{ col: 0, row: 0 }] }, (x) => got.push(x))
+    check(res.refused.length === 0 && !res.cancelled, `the tile at viewGen ${order.head.viewGen} was refused ${JSON.stringify(res.refused)}`)
+    check(got.length === 1 && PNG_MAGIC.every((b, i) => got[0]!.png[i] === b), `tiles delivered ${got.length}`)
+    const { loadImage } = await import('@napi-rs/canvas')
+    const img = await loadImage(Buffer.from(got[0]!.png))
+    check(img.width === 512 && img.height === 512, `tile decoded as ${img.width}x${img.height}`)
+    const cleared = await ops!.sort('0', order.head.viewGen, { range, keys: [], caseSensitive: false })
+    check(cleared.head.sort === null && cleared.head.viewGen > order.head.viewGen, `the cleared order head ${JSON.stringify(cleared.head)}`)
+    return `current client x current server: sheetSort 1 (no typedFilters on visible-only), sort B desc answered at viewGen ${before.viewGen} -> ${order.head.viewGen} (display row 1 = source 499), layout sort summary matches, tile (0,0) at the new viewGen decoded ${img.width}x${img.height}, clear by keys [] -> viewGen ${cleared.head.viewGen}`
+  } finally { doc.close() }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 
 const runDir = TMP ? resolve(TMP, `compat-matrix-${process.pid}-${Date.now()}`) : mkdtempSync(join(tmpdir(), 'compat-matrix-'))
 const baseTree = resolve(runDir, 'base')
 const tree4a = resolve(runDir, 'base4a')
+const tree4b = resolve(runDir, 'base4b')
 /** The worktrees this run added (by path), so cleanup removes exactly those and nothing else. */
 const added: string[] = []
-let cur: Server | undefined, base: Server | undefined, s4a: Server | undefined
+let cur: Server | undefined, base: Server | undefined, s4a: Server | undefined, s4b: Server | undefined
 let failed = false
 
 try {
@@ -411,18 +516,18 @@ try {
   ], [A1, 'east quay', 'second sheet text']))
   const launcher = resolve(runDir, 'serve.ts'); writeFileSync(launcher, LAUNCHER)
 
-  for (const [tree, rev] of [[baseTree, BASE], [tree4a, BASE4A]] as const) {
+  for (const [tree, rev] of [[baseTree, BASE], [tree4a, BASE4A], [tree4b, BASE4B]] as const) {
     const add = await run('git', ['worktree', 'add', '--detach', tree, rev])
     if (add.code !== 0) throw new Error(`git worktree add ${rev} failed:\n${add.out}`)
     added.push(tree)
     symlinkSync(resolve(ROOT, 'node_modules'), resolve(tree, 'node_modules'))
     const head = (await run('git', ['rev-parse', '--short=8', 'HEAD'], tree)).out.trim()
-    note(`${tree === baseTree ? 'base' : '4a'} worktree ${tree} @ ${head}`)
+    note(`${tree === baseTree ? 'base' : tree === tree4a ? '4a' : '4b'} worktree ${tree} @ ${head}`)
   }
   note(`current ${ROOT}`)
 
-  ;[base, s4a, cur] = await Promise.all([startServer('base', baseTree, launcher, docs), startServer('4a', tree4a, launcher, docs), startServer('current', ROOT, launcher, docs)])
-  note(`base server ${base.url}; 4a server ${s4a.url}; current server ${cur.url}`)
+  ;[base, s4a, s4b, cur] = await Promise.all([startServer('base', baseTree, launcher, docs), startServer('4a', tree4a, launcher, docs), startServer('4b', tree4b, launcher, docs), startServer('current', ROOT, launcher, docs)])
+  note(`base server ${base.url}; 4a server ${s4a.url}; 4b server ${s4b.url}; current server ${cur.url}`)
 
   const legs: Array<[string, () => Promise<string>]> = [
     ['(a)', () => legA(cur!, baseTree)],
@@ -433,6 +538,9 @@ try {
     ['(f)', () => legF(s4a!)],
     ["(f')", () => legF2(s4a!)],
     ['(g)', () => legG(cur!)],
+    ['(h)', () => legH(cur!, s4b!, tree4b)],
+    ['(i)', () => legI(s4b!)],
+    ['(j)', () => legJ(cur!)],
   ]
   for (const [name, fn] of legs) {
     try { console.log(`PASS ${name} ${await withTimeout(fn(), LEG_MS, name)}`) }
@@ -441,12 +549,12 @@ try {
       console.log(`FAIL ${name} ${e instanceof Fail ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
     }
   }
-  if (failed) for (const s of [base, s4a, cur]) if (s) note(`--- ${s.name} server log (tail) ---\n${s.log().split('\n').slice(-15).join('\n')}`)
+  if (failed) for (const s of [base, s4a, s4b, cur]) if (s) note(`--- ${s.name} server log (tail) ---\n${s.log().split('\n').slice(-15).join('\n')}`)
 } catch (e) {
   failed = true
   console.log(`FAIL setup ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
 } finally {
-  await stopServer(base); await stopServer(s4a); await stopServer(cur)
+  await stopServer(base); await stopServer(s4a); await stopServer(s4b); await stopServer(cur)
   if (added.length && !KEEP) {
     for (const tree of added) {
       const rm = await run('git', ['worktree', 'remove', '--force', tree])

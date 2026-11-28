@@ -369,3 +369,307 @@ describe('layout session sizes', () => {
     expect(() => encodeSheetLayout(layout({ sessionCols: Array.from({ length: LAYOUT_LIMITS.intervals + 1 }, (_, i): [number, number] => [i % 16_384, 20]) }))).toThrow(LayoutTooLarge)
   })
 })
+
+// ---- Stage 4c: sort, filter, value-list, range-detect and order codecs ----
+import {
+  decodeDetection, decodeSheetOrder, decodeValuesPage, detectArgs, encodeSheetOrder, filterArgs, FILTER_TEXT_UNITS, ORDER_LIMITS,
+  orderArgs, SORT_FILTER_MAX_RULES, sortArgs, VALUE_LIST_LIMITS, valuesArgs, type SheetOrder, type WireRange,
+} from '../../src/stream/sheet-wire'
+
+const wr = (o: Partial<Record<keyof WireRange, number>> = {}): WireRange => ({ r0: 0, r1: 9, c0: 0, c1: 4, header: 1, totals: 0, ...o } as WireRange)
+const threeKeys = (): Array<{ col: number; order: 'asc' | 'desc' }> => [{ col: 0, order: 'asc' }, { col: 2, order: 'desc' }, { col: 4, order: 'asc' }]
+const sortMsg = (o: Record<string, unknown> = {}): Record<string, unknown> => ({ reqId: 3, type: 'sheet-sort', sheetId: '0', viewGen: 2, range: wr(), keys: threeKeys(), caseSensitive: true, ...o })
+const filterMsg = (columns: unknown[], o: Record<string, unknown> = {}): Record<string, unknown> => ({ reqId: 4, type: 'sheet-filter', sheetId: '0', viewGen: 2, range: wr(), columns, ...o })
+const text = { kind: 'text', op: 'contains', first: 'ab', wildcards: false }
+const num = { kind: 'number', op: 'between', first: 1, second: 9.5 }
+const values = (o: Record<string, unknown> = {}) => ({ kind: 'values', list: 'l-1', mode: 'include', ids: [[0, 3], [5, 5]], blanks: true, ...o })
+
+describe('sort and filter args', () => {
+  it('accepts a 3-key sort and a 4-column filter', () => {
+    expect(sortArgs(sortMsg(), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), keys: threeKeys(), caseSensitive: true })
+    expect(sortArgs(sortMsg({ caseSensitive: undefined }), 1)?.caseSensitive).toBe(false)
+    const columns: Array<[number, unknown]> = [
+      [0, text], [1, num], [2, { kind: 'compound', connective: 'or', first: text, second: { kind: 'number', op: 'gt', first: 3 } }], [4, values()],
+    ]
+    expect(filterArgs(filterMsg(columns), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), columns })
+    const rest: Array<[number, unknown]> = [
+      [0, { kind: 'date', op: 'between', first: { year: 2024, month: 2, day: 29 }, second: { year: 2025, month: 1, day: 1 } }],
+      [1, { kind: 'datePreset', preset: 'thisWeek' }], [2, { kind: 'committed' }], [3, values({ mode: 'exclude', ids: [], blanks: false })],
+    ]
+    expect(filterArgs(filterMsg(rest), 1)?.columns).toEqual(rest)
+    expect(filterArgs(filterMsg([]), 1)?.columns).toEqual([])
+  })
+
+  it('refuses every malformed sort', () => {
+    expect(SORT_FILTER_MAX_RULES).toBe(64)
+    const key = (col: number) => ({ col, order: 'asc' })
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['65 keys', sortMsg({ range: wr({ c1: 100 }), keys: Array.from({ length: 65 }, (_, i) => key(i)) })],
+      ['no keys', sortMsg({ keys: [] })],
+      ['key column outside the range', sortMsg({ keys: [key(5)] })],
+      ['key column left of the range', sortMsg({ range: wr({ c0: 1 }), keys: [key(0)] })],
+      ['header 2', sortMsg({ range: wr({ header: 2 }) })],
+      ['totals 2', sortMsg({ range: wr({ totals: 2 }) })],
+      ['body of 0 rows', sortMsg({ range: wr({ r0: 3, r1: 3, header: 1 }) })],
+      ['body of 0 rows under header and totals', sortMsg({ range: wr({ r0: 3, r1: 4, header: 1, totals: 1 }) })],
+      ['range past the grid', sortMsg({ range: wr({ r1: 1_048_576 }) })],
+      ['columns past the grid', sortMsg({ range: wr({ c1: 16_384 }) })],
+      ['inverted range', sortMsg({ range: wr({ r0: 5, r1: 2 }) })],
+      ['unknown order', sortMsg({ keys: [{ col: 0, order: 'up' }] })],
+      ['extra key field', sortMsg({ keys: [{ col: 0, order: 'asc', x: 1 }] })],
+      ['non-boolean caseSensitive', sortMsg({ caseSensitive: 1 })],
+      ['sheet out of range', sortMsg({ sheetId: '1' })],
+      ['bad viewGen', sortMsg({ viewGen: -1 })],
+      ['extra range field', sortMsg({ range: { ...wr(), x: 1 } })],
+    ]
+    for (const [name, m] of cases) expect(sortArgs(m, 1), name).toBeUndefined()
+  })
+
+  it('refuses every malformed filter', () => {
+    const col = (c: number, rule: unknown): [number, unknown] => [c, rule]
+    const many = Array.from({ length: 65 }, (_, i) => col(i, { kind: 'committed' }))
+    const wide = wr({ c1: 100 })
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['65 columns', filterMsg(many, { range: wide })],
+      ['column outside the range', filterMsg([col(5, text)])],
+      ['header 2', filterMsg([col(0, text)], { range: wr({ header: 2 }) })],
+      ['body of 0 rows', filterMsg([col(0, text)], { range: wr({ r0: 2, r1: 2 }) })],
+      ['257-unit first', filterMsg([col(0, { ...text, first: 'a'.repeat(FILTER_TEXT_UNITS + 1) })])],
+      ['ids interval i1 < i0', filterMsg([col(0, values({ ids: [[4, 3]] }))])],
+      ['overlapping intervals', filterMsg([col(0, values({ ids: [[0, 3], [3, 5]] }))])],
+      ['descending intervals', filterMsg([col(0, values({ ids: [[5, 6], [0, 1]] }))])],
+      ['4,097 intervals', filterMsg([col(0, values({ ids: Array.from({ length: VALUE_LIST_LIMITS.intervals + 1 }, (_, i) => [i * 2, i * 2]) }))])],
+      ['duplicate columns', filterMsg([col(1, text), col(1, num)])],
+      ['descending columns', filterMsg([col(2, text), col(1, num)])],
+      ['compound with a values child', filterMsg([col(0, { kind: 'compound', connective: 'and', first: text, second: values() })])],
+      ['compound with a committed child', filterMsg([col(0, { kind: 'compound', connective: 'and', first: text, second: { kind: 'committed' } })])],
+      ['nested compound', filterMsg([col(0, { kind: 'compound', connective: 'and', first: text, second: { kind: 'compound', connective: 'or', first: text, second: text } })])],
+      ['unknown connective', filterMsg([col(0, { kind: 'compound', connective: 'xor', first: text, second: text })])],
+      ['unknown kind', filterMsg([col(0, { kind: 'regex', first: 'a' })])],
+      ['NaN first', filterMsg([col(0, { kind: 'number', op: 'gt', first: NaN })])],
+      ['Infinity first', filterMsg([col(0, { kind: 'number', op: 'gt', first: Infinity })])],
+      ['between without second', filterMsg([col(0, { kind: 'number', op: 'between', first: 1 })])],
+      ['second on a single-operand op', filterMsg([col(0, { kind: 'number', op: 'gt', first: 1, second: 2 })])],
+      ['unknown text op', filterMsg([col(0, { ...text, op: 'regex' })])],
+      ['text wildcards not boolean', filterMsg([col(0, { ...text, wildcards: 'y' })])],
+      ['impossible date', filterMsg([col(0, { kind: 'date', op: 'eq', first: { year: 2023, month: 2, day: 29 } })])],
+      ['unknown preset', filterMsg([col(0, { kind: 'datePreset', preset: 'lastYear' })])],
+      ['values without a list', filterMsg([col(0, values({ list: '' }))])],
+      ['values mode', filterMsg([col(0, values({ mode: 'all' }))])],
+      ['committed with a field', filterMsg([col(0, { kind: 'committed', x: 1 })])],
+      ['column not a pair', filterMsg([{ col: 0, rule: text }])],
+      ['columns not a list', filterMsg([], { columns: {} })],
+    ]
+    for (const [name, m] of cases) expect(filterArgs(m, 1), name).toBeUndefined()
+  })
+})
+
+describe('values args', () => {
+  it('accepts a first page and a cursor page', () => {
+    const first = { reqId: 5, type: 'filter-values', sheetId: '0', viewGen: 1, range: wr(), col: 2 }
+    expect(valuesArgs(first, 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 1, range: wr(), col: 2 })
+    expect(valuesArgs({ ...first, search: { text: 'a*', wildcards: true } }, 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 1, range: wr(), col: 2, search: { text: 'a*', wildcards: true } })
+    expect(valuesArgs({ reqId: 6, type: 'filter-values', sheetId: '0', viewGen: 1, cursor: 'c-1' }, 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 1, cursor: 'c-1' })
+  })
+
+  it('refuses both forms at once, a long search and a bad column', () => {
+    const first = { sheetId: '0', viewGen: 1, range: wr(), col: 2 }
+    expect(valuesArgs({ ...first, cursor: 'c-1' }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '0', viewGen: 1, cursor: 'c-1', col: 2 }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '0', viewGen: 1, cursor: 'c-1', search: { text: 'a', wildcards: false } }, 1)).toBeUndefined()
+    expect(valuesArgs({ ...first, search: { text: 'a'.repeat(FILTER_TEXT_UNITS + 1), wildcards: false } }, 1)).toBeUndefined()
+    expect(valuesArgs({ ...first, search: { text: 'a' } }, 1)).toBeUndefined()
+    expect(valuesArgs({ ...first, col: 5 }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '0', viewGen: 1, range: wr() }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '0', viewGen: 1 }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '0', viewGen: 1, cursor: '' }, 1)).toBeUndefined()
+    expect(valuesArgs({ sheetId: '9', viewGen: 1, cursor: 'c-1' }, 1)).toBeUndefined()
+    expect(VALUE_LIST_LIMITS).toEqual({ entries: 10_000, page: 500, intervals: 4_096 })
+  })
+})
+
+describe('range-detect and order args', () => {
+  const sel = { active: [1, 1], anchor: [1, 1], ranges: [{ rows: [[1, 1]], cols: [[1, 1]] }] }
+  it('accepts and refuses range-detect', () => {
+    const m = { sheetId: '0', viewGen: 1, kind: 'sort', selection: sel }
+    expect(detectArgs(m, 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 1, kind: 'sort', selection: sel })
+    expect(detectArgs({ ...m, kind: 'filter', override: { header: 0 } }, 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 1, kind: 'filter', selection: sel, override: { header: 0 } })
+    for (const bad of [{ kind: 'pivot' }, { override: { header: 2 } }, { override: { header: 1, x: 1 } }, { override: 1 }, { selection: { ...sel, kind: 'x' } }, { selection: undefined }, { viewGen: 'a' }, { sheetId: '4' }]) {
+      expect(detectArgs({ ...m, ...bad }, 1), JSON.stringify(bad)).toBeUndefined()
+    }
+  })
+  it('accepts and refuses sheet-order', () => {
+    expect(orderArgs({ sheetId: '1' }, 2)).toEqual({ sheetId: '1', sheetIndex: 1 })
+    expect(orderArgs({ sheetId: '2' }, 2)).toBeUndefined()
+    expect(orderArgs({ sheetId: 1 }, 2)).toBeUndefined()
+  })
+})
+
+const orderHead = (o: Partial<SheetOrder['head']> = {}): SheetOrder['head'] => ({
+  sheetId: '0', viewGen: 3, counts: { visible: 5, total: 8 }, sort: { range: wr({ r0: 0, r1: 7, header: 0 }), keys: [{ col: 1, order: 'desc' }] },
+  filterSummary: [{ col: 2, kind: 'values' }], ...o,
+})
+const orderWire = (o: SheetOrder) => encodeSheetOrder(o).map((p) => JSON.parse(JSON.stringify({ reqId: 4_294_967_295, ...p })) as Record<string, any>)
+const b64 = (words: number[]): string => {
+  const bytes = new Uint8Array(words.length * 4), v = new DataView(bytes.buffer)
+  words.forEach((w, i) => v.setUint32(i * 4, w, true))
+  return btoa(String.fromCharCode(...bytes))
+}
+const smallOrder = (): SheetOrder => ({
+  head: orderHead(), bands: [{ r0: 0, r1: 7, sourceAtOffset: Uint32Array.from([7, 6, 5, 4, 3, 2, 1, 0]) }], mask: { r0: 0, r1: 7, words: Uint32Array.of(0b10110101) },
+})
+const orderBad = (parts: unknown[]) => expect(() => decodeSheetOrder(parts)).toThrow(InvalidOperand)
+
+describe('order parts', () => {
+  it('pins the caps', () => expect(ORDER_LIMITS).toEqual({ parts: 160, bands: 1, rows: 1_048_576 }))
+
+  it('round-trips a small order and an order with no band', () => {
+    const o = smallOrder()
+    const parts = orderWire(o)
+    expect(parts[0]!.head).toBeDefined()
+    expect(parts.at(-1)!.last).toBe(true)
+    expect(decodeSheetOrder(parts)).toEqual(o)
+    const bare: SheetOrder = { head: orderHead({ sort: null, filterSummary: [] }), bands: [], mask: null }
+    expect(decodeSheetOrder(orderWire(bare))).toEqual(bare)
+  })
+
+  it('encodes a 1,048,576-row reverse band in at most 160 parts of at most 64 KiB, and decodes equal', () => {
+    const n = 1_048_576
+    const sourceAtOffset = new Uint32Array(n).map((_, i) => n - 1 - i)
+    const words = new Uint32Array(Math.ceil(n / 32)).map((_, i) => (i * 2_654_435_761) >>> 0)
+    const o: SheetOrder = { head: orderHead({ counts: { visible: n - 7, total: n }, sort: { range: wr({ r0: 0, r1: n - 1, header: 0 }), keys: [{ col: 0, order: 'desc' }] } }), bands: [{ r0: 0, r1: n - 1, sourceAtOffset }], mask: { r0: 0, r1: n - 1, words } }
+    const parts = orderWire(o)
+    expect(parts.length).toBeLessThanOrEqual(ORDER_LIMITS.parts)
+    for (const p of parts) expect(new TextEncoder().encode(JSON.stringify(p)).length).toBeLessThanOrEqual(65_536)
+    const back = decodeSheetOrder(parts)
+    expect(back.head).toEqual(o.head)
+    expect(back.bands).toHaveLength(1)
+    expect(back.bands[0]!.sourceAtOffset).toEqual(sourceAtOffset)
+    expect(back.mask!.words).toEqual(words)
+  }, 30_000)
+
+  it('throws for a dropped part, a duplicate entry, a gap, an overlap, a reorder and 161 parts', () => {
+    const big = (): SheetOrder => {
+      const n = 40_000
+      return { head: orderHead({ counts: { visible: n, total: n }, sort: null }), bands: [{ r0: 0, r1: n - 1, sourceAtOffset: new Uint32Array(n).map((_, i) => n - 1 - i) }], mask: null }
+    }
+    const parts = orderWire(big())
+    expect(parts.length).toBeGreaterThanOrEqual(4)
+    expect(decodeSheetOrder(parts).bands[0]!.sourceAtOffset).toHaveLength(40_000)
+    orderBad(parts.filter((_, i) => i !== 2))
+    orderBad(parts.slice(0, -1))
+    const swapped = [...parts]; [swapped[1], swapped[2]] = [swapped[2]!, swapped[1]!]
+    orderBad(swapped)
+    const gap = orderWire(big()); gap[2]!.band.from += 1; orderBad(gap)
+    const overlap = orderWire(big()); overlap[2]!.band.from -= 1; orderBad(overlap)
+    const lastLate = orderWire(big()); lastLate[1]!.last = true; orderBad(lastLate)
+    const headTwice = orderWire(big()); headTwice[1]!.head = headTwice[0]!.head; orderBad(headTwice)
+    const reqIdDrift = orderWire(big()); reqIdDrift[1]!.reqId = 9; orderBad(reqIdDrift)
+    const dup = orderWire(smallOrder()); dup[1]!.band.data = b64([0, 1, 1, 3, 4, 5, 6, 7]); orderBad(dup)
+    const outside = orderWire(smallOrder()); outside[1]!.band.data = b64([0, 1, 2, 3, 4, 5, 6, 8]); orderBad(outside)
+    const short = orderWire(smallOrder()); short[1]!.band.data = b64([7, 6, 5, 4]); orderBad(short)
+    const junk = orderWire(smallOrder()); junk[1]!.band.data = '!!!!'; orderBad(junk)
+    const extra = orderWire(smallOrder()); extra[0]!.bogus = 1; orderBad(extra)
+    orderBad(Array.from({ length: ORDER_LIMITS.parts + 1 }, (_, i) => ({ type: 'sheet-order', seq: i, last: i === ORDER_LIMITS.parts, ...(i === 0 ? { head: orderHead() } : {}) })))
+    orderBad([])
+  })
+
+  it('refuses an over-cap order on encode and a bad head on decode', () => {
+    const band = (r0: number, r1: number) => ({ r0, r1, sourceAtOffset: Uint32Array.from({ length: r1 - r0 + 1 }, (_, i) => r0 + i) })
+    expect(() => encodeSheetOrder({ head: orderHead(), bands: [band(0, 1), band(2, 3)], mask: null })).toThrow(InvalidOperand)
+    expect(() => encodeSheetOrder({ head: orderHead(), bands: [{ r0: 0, r1: 3, sourceAtOffset: Uint32Array.of(0, 1) }], mask: null })).toThrow(InvalidOperand)
+    const heads: Array<(h: Record<string, any>) => void> = [
+      (h) => { h.counts.visible = 99 }, (h) => { h.sheetId = '01' }, (h) => { h.sort.keys[0].col = 99 }, (h) => { h.filterSummary = [{ col: 0 }] }, (h) => { h.viewGen = -1 },
+    ]
+    for (const edit of heads) { const parts = orderWire(smallOrder()); edit(parts[0]!.head); orderBad(parts) }
+  })
+})
+
+describe('values page', () => {
+  const page = (o: Record<string, unknown> = {}) => ({
+    reqId: 8, type: 'filter-values-result', list: 'l-1', items: [[0, 'a', 1], [1, 'b', 0], [2, '#N/A', 3]], blanks: { present: true, selected: false }, total: 3, truncated: false,
+    cursor: 'c-2', classification: { kind: 'text', hasNumeric: true }, ...o,
+  })
+  it('decodes flags into selected and error', () => {
+    const p = decodeValuesPage(page())
+    expect(p.items).toEqual([{ id: 0, text: 'a', selected: true, error: false }, { id: 1, text: 'b', selected: false, error: false }, { id: 2, text: '#N/A', selected: true, error: true }])
+    expect(p).toMatchObject({ list: 'l-1', total: 3, truncated: false, cursor: 'c-2', blanks: { present: true, selected: false }, classification: { kind: 'text', hasNumeric: true } })
+    const bare = decodeValuesPage(page({ cursor: undefined, classification: undefined }))
+    expect('cursor' in bare).toBe(false)
+    expect('classification' in bare).toBe(false)
+  })
+  it('throws for an id outside [0, total) and for other off-contract pages', () => {
+    const bad = (o: Record<string, unknown>) => expect(() => decodeValuesPage(page(o))).toThrow(InvalidOperand)
+    bad({ items: [[3, 'a', 0]] })
+    bad({ items: [[-1, 'a', 0]] })
+    bad({ items: [[0, 'a', 4]] })
+    bad({ items: [[0, 'a']] })
+    bad({ items: [[0, 'a'.repeat(FILTER_TEXT_UNITS + 1), 0]] })
+    bad({ items: Array.from({ length: VALUE_LIST_LIMITS.page + 1 }, (_, i) => [i, 'x', 0]), total: 600 })
+    bad({ total: VALUE_LIST_LIMITS.entries + 1 })
+    bad({ list: '' })
+    bad({ truncated: 1 })
+    bad({ blanks: { present: true } })
+    bad({ classification: { kind: 'bool', hasNumeric: false } })
+    bad({ bogus: 1 })
+    expect(() => decodeValuesPage(null)).toThrow(InvalidOperand)
+  })
+})
+
+describe('range detection answer', () => {
+  const ans = (o: Record<string, unknown> = {}) => ({ reqId: 9, type: 'range-detect-result', range: wr(), source: 'region', header: 'heuristic', overrideIgnored: false, ...o })
+  it('decodes and refuses', () => {
+    expect(decodeDetection(ans())).toEqual({ range: wr(), source: 'region', header: 'heuristic', overrideIgnored: false })
+    for (const bad of [{ source: 'guess' }, { header: 'auto' }, { overrideIgnored: 0 }, { range: wr({ header: 2 }) }, { bogus: 1 }]) {
+      expect(() => decodeDetection(ans(bad)), JSON.stringify(bad)).toThrow(InvalidOperand)
+    }
+    expect(() => decodeDetection(undefined)).toThrow(InvalidOperand)
+  })
+})
+
+describe('sheet-layout carries the sort (F1)', () => {
+  const sorted = () => layout({ sort: { range: wr({ r0: 0, r1: 8 }), keys: [{ col: 1, order: 'desc' }, { col: 0, order: 'asc' }] }, filterSummary: [{ col: 2, kind: 'values' }] })
+  it('round-trips a sort, and a null sort stays null', () => {
+    const l = sorted()
+    expect(decodeSheetLayout(wire(l))).toEqual(l)
+    expect(wire(layout())[0]!.head.sort).toBeNull()
+    expect(decodeSheetLayout(wire(layout())).sort).toBeNull()
+  })
+  it('refuses a malformed sort', () => {
+    const edits: Array<(s: Record<string, any>) => void> = [
+      (s) => { s.keys[0].col = 99 }, (s) => { s.keys = [] }, (s) => { s.range.header = 2 }, (s) => { s.x = 1 }, (s) => { s.keys[0].order = 'up' },
+      (s) => { s.keys = Array.from({ length: 65 }, () => ({ col: 0, order: 'asc' })) },
+    ]
+    for (const edit of edits) {
+      const parts = wire(sorted())
+      edit(parts[0]!.head.sort)
+      rejects(parts)
+    }
+  })
+})
+
+// ---- Task 9 fix round 1: the sort clear and the head's view fields ----
+import { sortClearArgs } from '../../src/stream/sheet-wire'
+
+describe('sort clear (Task 9 fix round 1)', () => {
+  it('keys: [] clears the sort; sortArgs still refuses it', () => {
+    expect(sortArgs(sortMsg({ keys: [] }), 1)).toBeUndefined()
+    expect(sortClearArgs(sortMsg({ keys: [] }), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), keys: [] })
+    expect(sortClearArgs(sortMsg({ keys: [], caseSensitive: undefined }), 1)).toEqual({ sheetId: '0', sheetIndex: 0, viewGen: 2, range: wr(), keys: [] })
+    for (const m of [sortMsg(), sortMsg({ keys: undefined }), sortMsg({ keys: [], range: wr({ r1: 1_048_576 }) }), sortMsg({ keys: [], range: undefined }), sortMsg({ keys: [], caseSensitive: 1 }), sortMsg({ keys: [], sheetId: '1' }), sortMsg({ keys: [], viewGen: -1 })]) {
+      expect(sortClearArgs(m, 1)).toBeUndefined()
+    }
+  })
+
+  it('the order head carries caseSensitive and the filter range, and stays as before without them', () => {
+    const o = { ...smallOrder(), head: orderHead({ caseSensitive: true, filterRange: wr({ r0: 0, r1: 7, header: 0 }) }) }
+    expect(decodeSheetOrder(orderWire(o)).head).toEqual(o.head)
+    expect(Object.keys(orderWire(smallOrder())[0]!.head)).toEqual(['sheetId', 'viewGen', 'counts', 'sort', 'filterSummary'])
+    expect(decodeSheetOrder(orderWire(smallOrder())).head).toEqual(orderHead())
+    const bad: Array<(h: Record<string, any>) => void> = [
+      (h) => { h.caseSensitive = 1 }, (h) => { h.sort = null; h.caseSensitive = false },
+      (h) => { h.filterRange = wr({ r1: 1_048_576 }) }, (h) => { h.filterSummary = []; h.filterRange = wr() }, (h) => { h.filterRange = { ...wr(), x: 1 } },
+    ]
+    for (const edit of bad) { const parts = orderWire(smallOrder()); edit(parts[0]!.head); orderBad(parts) }
+  })
+})

@@ -12,7 +12,7 @@ import type { StructuralIndex } from '../../xlsx/view/structure'
 import { CHECK_WORK_UNITS } from '../../xlsx/view/scheduler'
 import { MainControlMemory, controlSourceStore, controlStructure, controlView } from '../../xlsx/view/mainControlMemory'
 import { MainMemoryLedger, estimatePayloadBytes } from '../../xlsx/view/mainLedger'
-import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
+import type { RangeDetection, RangeDetectionRequest, SeeThroughLines } from '../../xlsx/view/rangeDetection'
 import { awaitAbortable } from '../../worker/viewerAbort'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
@@ -113,6 +113,11 @@ export interface ViewerControlsOptions {
   ledger?: MainMemoryLedger
   /** Explicit migration for callback-only resources: callbacks remain observers. */
   resourceUsage?: 'observer'
+  /** The filter context (locale, date system, time zone, `nowMs`) every rule compiles and evaluates under; a streamed
+   * sheet passes its session clock. Absent, the sheet's semantics and the wall clock. */
+  context?: () => FilterContext
+  /** Author-hidden lines range detection steps over (a streamed protected sheet's collapsed rows and columns). */
+  seeThrough?: SeeThroughLines
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -127,7 +132,7 @@ export interface ViewerControls { client: ControlsClient; dispose(): void }
 export async function viewerControls(options: ViewerControlsOptions, signal: AbortSignal): Promise<ViewerControls> {
   const { doc, source, sheetId } = options
   const sheet = doc.sheets[source.sheets.findIndex(s => s.sheetId === sheetId)]
-  const context = (): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() })
+  const context = options.context ?? ((): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() }))
   const resources = options.resources ?? createViewerControlResources('D', undefined, options.ledger)
   if (options.ledger) resources.bindLedger(options.ledger, options.resourceUsage)
   if (resources.closed) throw new ValueIndexError('cancelled', 'Controls resources disposed')
@@ -396,7 +401,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       // Cancel the local reply promptly, as the worker kernel does. The session
       // operation and evaluator keep their own charges until the producer drains.
       const work = kind === 'sort' ? engine.sort(engine.identity(sheetId), spec as Parameters<ControlsClient['sort']>[1], abort, hooks)
-        : engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], Date.now(), abort, hooks)
+        : engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], options.context ? filterContext.nowMs : Date.now(), abort, hooks)
       // The input view is still borrowed by a held sort/filter continuation.
       // Its hold ends with that operation, not with the cancelled local reply.
       operation = work.finally(releaseBefore)
@@ -459,6 +464,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       jobs.delete(controller)
       metadata.adopt([controller, controller.signal])
       metadata.release()
+      // Unaborted, the staged operation has ended: nothing keeps its controller.
+      if (!controller.signal.aborted) memory.settle(controller)
     }
   }
   const client = createControlsClient({ allocation: memory, snapshot: options.snapshot, context, cache, runs,
@@ -469,7 +476,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       // single-cell selection is no explicit range (S7.1), and kept here it
       // would refuse as a selection that does not contain the active cell.
       const ranges = col !== undefined && isSingleCell(selection) ? [] : selection.ranges
-      return { store, structure, selection: { ...selection, active, ranges } }
+      return { store, structure, selection: { ...selection, active, ranges }, ...(options.seeThrough ? { seeThrough: options.seeThrough } : {}) }
     },
     ...(isRemoteStore(store) ? { detectRange: (kind: 'filter' | 'sort', request: RangeDetectionRequest) => store.detectRange(kind, request.selection, request.override ?? null, request.options) } : {}),
     domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }, 4096, memory), label: (kind, value, styleIndex, account) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }, account ? {

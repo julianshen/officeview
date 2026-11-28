@@ -7,7 +7,7 @@
  * focused read and a copy draw on one session quota, measured against the caps in force when the turn starts.
  */
 import type { A11yMode, CopyPolicy } from '../hooks'
-import { AdmissionRefused } from '../pool'
+import { AdmissionRefused, SheetPrepRefused } from '../pool'
 import { type CopyRefusal, TEXT_MESSAGE_BYTES, type TextSlot } from '../text/ops'
 import type { SourceRectRecord } from './copy-turn'
 import type { SheetTextReply } from './text-ops'
@@ -38,6 +38,9 @@ export interface SheetA11yContext {
   alive: () => boolean
   send: (msg: object) => void
   refuse: (code: SheetA11yRefusal, nums?: { limit?: number; requested?: number }) => void
+  /** Task 14a fix round 1: the sheet's sort data could not be prepared (`SheetPrepRefused`): answer `view-refused
+   * {reason: 'too-large'}`. */
+  tooLarge: () => void
 }
 
 export interface SheetA11yResultMessage { reqId: number; type: 'sheet-a11y-result'; seq: number; cells: Array<[number, number, string]>; last: boolean }
@@ -120,6 +123,7 @@ async function sheetA11yTurn(c: SheetA11yContext): Promise<void> {
     let reply: SheetTextReply
     try { reply = await c.job(view.sizes) } catch (e) {
       if (!c.alive()) return
+      if (e instanceof SheetPrepRefused) { answered = true; return c.tooLarge() }
       return refuse(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
     }
     if (!c.alive()) return

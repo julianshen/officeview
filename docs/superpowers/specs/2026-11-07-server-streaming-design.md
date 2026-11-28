@@ -397,6 +397,18 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    mode with Stage 3 text there. The server closes a resume whose
    `features` differ `auth-failed` (4a); the client also ends a session
    whose resumed manifest changes `sheetView`, `layout-changed`.
+   *Amendment (2026-11-28, Stage 4c, as built; S4 design "As built (4c)"
+   P1, owner confirmation of plan Open item 1 on 2026-11-27):* there is no
+   new HELLO feature. A 4c server adds `sheetSort: 1` to every `sheetView`
+   manifest, plus `typedFilters: true` when the content policy is
+   `'full'`. The client rejects `sheetSort` other than `1` or without
+   `sheetView`, and `typedFilters` without `sheetSort`; a 4b client ignores
+   both keys. Only a `sheetView` session is served `sheet-sort`,
+   `sheet-filter`, `filter-values`, `range-detect` and `sheet-order`;
+   every other session refuses them `unsupported-op`, uncharged. A
+   `sheetView` session's `sheet-layout` keeps 4b's bytes until it sorts or
+   filters, and every other session's manifest and layout are 4b's, key for
+   key.
 2. **Version compatibility is set intersection** — the server picks a version
    it supports **from the client's set**; the empty intersection closes with
    `unsupported-version` (never a downgraded guess).
@@ -507,12 +519,19 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `print-too-large` | op refusal, never a CLOSE (added 2026-11-13, Stage 3b); carries `limit` and `requested` over `maxPages`, neither when the job fits at no print scale | a print job over `maxPages`, or one whose pages fit neither scale 2 nor scale 1 (`planPrint`); the client also fails a job locally with this code (no `limit`) over its 192 MiB blob ceiling (Stage 3 design §4.2) |
    | `print-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-13) | a print job that would take the session's printed pages past `maxSessionPages` |
    | `invalid-unit` | op refusal, never a CLOSE (added 2026-11-14, Stage 3c) | a `notes` request for a unit out of range, not an integer, or a hidden slide (Stage 3 design §4.3) |
-   | `unsupported-op` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | an op the session's sheet mode does not serve: `unit`, `search`, `select`, `copy` or `a11y` on an XLSX tiles session, or `tiles`, `sheet-layout` or `sheet-cancel` on a units session (S4 design R6); widened 2026-11-24 (Stage 4b): `sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` on a session without `sheetView` |
-   | `stale-view` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a well-formed `tiles` request whose `viewGen` is not the session's current view (always 0 in 4a); widened 2026-11-24 (Stage 4b): a `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` whose `viewGen` is not the sheet's current one. It never advances `viewGen`, and a refused copy or a11y read is neither counted nor audited |
+   | `unsupported-op` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | an op the session's sheet mode does not serve: `unit`, `search`, `select`, `copy` or `a11y` on an XLSX tiles session, or `tiles`, `sheet-layout` or `sheet-cancel` on a units session (S4 design R6); widened 2026-11-24 (Stage 4b): `sheet-find`, `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` on a session without `sheetView`; widened 2026-11-28 (Stage 4c): `sheet-sort`, `sheet-filter`, `filter-values`, `range-detect` or `sheet-order` on a session without `sheetView` (uncharged) |
+   | `stale-view` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a well-formed `tiles` request whose `viewGen` is not the session's current view (always 0 in 4a); widened 2026-11-24 (Stage 4b): a `sheet-copy`, `sheet-a11y`, `sheet-fit` or `sheet-resize` whose `viewGen` is not the sheet's current one. It never advances `viewGen`, and a refused copy or a11y read is neither counted nor audited; widened 2026-11-28 (Stage 4c): a `sheet-sort`, `sheet-filter` or `filter-values` page whose `viewGen` is not the sheet's current one (`range-detect` has no `stale-view`), and a `sheet-order` whose view moved while it was served |
    | `layout-too-large` | op refusal, never a CLOSE (added 2026-11-23, Stage 4a) | a `sheet-layout` over a list cap (65,536 entries per list, 1,024 filter ranges) or over 64 messages (S4 design R14) |
-   | `hidden-target` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` or `sheet-fit` of an author-hidden (collapsed) row or column, as locally ("is hidden; it cannot be resized") |
-   | `coverage-unknown` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` under `visible-only` on a sheet whose drawing coverage is unknown (unresolved anchors, an unbounded effect, an uncomputable transform); 4c adds sort and filter |
-   | `view-state-limit` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` past 4,096 sized indices per axis per sheet, or past the 16 MiB process view-state ledger (§14 amendment) |
+   | `hidden-target` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` or `sheet-fit` of an author-hidden (collapsed) row or column, as locally ("is hidden; it cannot be resized"); widened 2026-11-28 (Stage 4c): a sort key, filter column, or the range's edge column `c0` or `c1` that is collapsed in the authored layout, and a `filter-values` column that is |
+   | `coverage-unknown` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` under `visible-only` on a sheet whose drawing coverage is unknown (unresolved anchors, an unbounded effect, an uncomputable transform); 4c adds sort and filter (as built 2026-11-28: `sheet-sort` and `sheet-filter` under `visible-only`; `filter-values` lists only blanks there instead) |
+   | `view-state-limit` | op refusal, never a CLOSE (added 2026-11-24, Stage 4b) | a `sheet-resize` past 4,096 sized indices per axis per sheet, or past the 16 MiB process view-state ledger (§14 amendment); widened 2026-11-28 (Stage 4c): a sort or filter that would order a third sheet of the sid (`MAX_ORDERED_SHEETS` = 2), or whose derived view cannot be held on the document-cache ledger |
+   | `stale-filter-values` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | a `values` filter rule whose list was not issued to this sid for this `(sheetId, range, col)` at the current `viewGen`, whose list was evicted (16 per sid), or whose positions are out of range; a `filter-values` cursor from an older search |
+   | `filter-condition-refused` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | under `visible-only`, a `number`, `date` or `datePreset` filter rule, or a `compound` rule with such a child ("This filter isn't available in this viewing mode."); allowed under `'full'` |
+   | `view-refused` | op refusal, never a CLOSE, carries the local `reason` (+ `range`, `count`, `at`) (added 2026-11-28, Stage 4c) | the local engine refused a sort or filter (`OperationRefusal`: merge, array, spill, `drawing-impact`, `outside-column-data`, `source-error`, …); the client rebuilds the local string from `reason` |
+   | `cancelled` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | a `sheet-cancel` reached a sort or filter before its commit point; nothing committed |
+   | `pivot-refused` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | any `pivot*` or `control*` worker command kind, on every stream and in every mode, before any token check ("Pivot tables can't be changed in this viewing mode.") |
+   | `server-prepared` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | a `prepareColumns` command: the server prepares columns itself |
+   | `stream-no-cell-data` | op refusal, never a CLOSE (added 2026-11-28, Stage 4c) | a raw `read` command: a stream sends no cell data |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -655,6 +674,38 @@ confirmation of 2026-11-23, "As built (4b)" P2–P5):*
   every cell of every CF range of that sheet; a CF batch that is missing
   blanks every cell of each `showValue="0"` rule.
 - Under `'full'` the text view is the identity.
+
+*Amendment (2026-11-28, Stage 4c, as built; S4 design §10 items 1 and 3,
+"As built (4c)" P5, P14, owner confirmation of plan Open item 3 on
+2026-11-27):*
+- **The key view.** Sort keys, filter evaluation, filter value lists and
+  range-detect occupancy read one accessor, `sheetKeyView`
+  (`server/src/sheet/key-view.ts`): the text view at the identity view
+  (base coverage only, never the session's sizes or order). Under
+  `visible-only` it also gives each content cell its painted,
+  CF-effective style in its own style table, so labels, display lanes and
+  the date classification are what the tile paints (a table DXF `0,"K"`
+  over `1234` lists `1K`, never `1234`), and it blanks every cell of a
+  collapsed (zero-width) authored column. A withheld cell sorts as blank,
+  matches only a blanks filter or a blank-matching condition, and lists
+  only as "(Blanks)".
+- **Masked strings, a new withheld class.** Under `visible-only` a string
+  cell whose painted display text does not contain its raw string (a text
+  section without `@`, such as `;;;"****"`) is read as that display text
+  with no number format: it sorts, lists and matches as `****`. A format
+  that contains the string (`"ID-"@`) is untouched.
+- **Under `'full'`** the key view is the identity, with own styles (local
+  parity).
+- **Known gap.** A cell under a column or row default style with no style
+  of its own is painted and served with its value, because the parser keeps
+  no column or row style; a column default `;;;` therefore does not
+  withhold it (Excel would paint it empty).
+- **The pivot row as built.** Pivot and control commands are refused on
+  **every** stream (`'full'` included, units mode included), not only on
+  protected 4c streams: `pivot-refused` for every `pivot*` and `control*`
+  command kind, `server-prepared` for `prepareColumns` and
+  `stream-no-cell-data` for `read` (refusal table). The strip of
+  hidden-backed pivot caches and slicer items is asserted on the wire.
 
 The client never participates; it renders what arrives.
 
@@ -1216,6 +1267,26 @@ tiles; the presenter notes sidecar namespace
   document, the server caches 8 sized geometries and 16 text views (keyed
   by sheet, clock and `sha256(sizes)`); the stream server keeps 16
   identity layouts for its size checks.
+- *Amendment (2026-11-28, Stage 4c, as built; S4 design §6.3, "As built
+  (4c)" P2, P3, P11, rulings F2 and Task 4):* the view a tile is drawn
+  under is the canonical view `{sort, sortFilter, filter}` with the sizes,
+  the tier and the clock. `sortFilter` is the filter committed when the
+  current sort ran (a local sort pins the rows that filter hid), and is
+  `null` whenever `sort` is, so the derived row order and mask are a pure
+  function of `(key view, sort, sortFilter, filter)`. The hash is over
+  `{sort: {spec: sort, under: sortFilter} | null, filters: [filter] | [],
+  sizes, authorHiddenTier, clock}`; values rules are hashed as their list
+  positions. An identity view hashes exactly as 4b's (a golden pins it),
+  and the sid is never in it. `authorHiddenTier` is `'c1'` under
+  `visible-only` when the view has a filter or a `sortFilter`, else
+  `'none'` (a `sortFilter` pins rows an earlier filter hid, so they need
+  C1 too). The
+  server derives a view by replaying the three ops through the local
+  engine from the identity view, and caches 8 derived views per document
+  (LRU, by `(sheetIndex, clock, canonical hash)`). Each distinct derived
+  view is held on the document-cache ledger (§14 amendment) while any sid
+  holds it. `sheet_views.spec` becomes `{sort, sortFilter, filter,
+  sizes}`; a 4b row reads back with `null` sort and filters.
 
 ### 9.4 Marks: visible + forensic, per session (normative)
 
@@ -1414,6 +1485,43 @@ pairs.
   command). `sheet-resize` and `sheet-fit` are per-session view state
   (§9.3 amendment); `sheet-find`, `sheet-copy` and `sheet-a11y` are the
   §11 answers. Sort, filter and value lists are 4c.
+
+*Amendment (2026-11-28, Stage 4c, as built; S4 design §6.2 step 2, §6.6,
+"As built (4c)" P3–P5, P10, P13, P14; owner rulings of 2026-11-27):*
+- **C1 as built.** Under `visible-only`, a row in the body of a filter
+  range is visible iff `matches(row) && !authorHidden(row)`, where
+  `authorHidden` is the authored geometry's collapsed rows
+  (`ServerSheetLayout.collapsedRows`): `hidden="1"`, `ht="0"` and the rows
+  a saved autoFilter hid. Clearing a saved filter therefore never shows
+  them, and a tautology (`text neq ""`) leaves them hidden. The tier is
+  immutable for the session. Under `'full'` the filter decides alone, as
+  locally (`src/xlsx/view/visibility.ts`).
+- **Server-side target authorization** runs before any engine run, in this
+  order: the shape check (`policy-refused`, uncharged, no audit row), the
+  `'sheet'` rate (`rate-limited`), then `stale-view`, `hidden-target` (a
+  key or filter column, or the range's edge column, collapsed in the
+  authored layout), `coverage-unknown` (`visible-only`),
+  `filter-condition-refused` (`visible-only`, typed conditions),
+  `stale-filter-values`, `view-state-limit`. Each refusal moves nothing
+  (no `viewGen`, order, count or tile), and each one past the shape check
+  writes its `sheet_ops` row.
+- **Filter values through the join.** Value lists are the local engine's
+  entries over the key view (§6.4 amendment), merged by display text, so a
+  covered or undrawn cell, the rotated-box adversary's cells included, is
+  listed only as "(Blanks)", and an `anchors.unresolved > 0` sheet lists
+  nothing but blanks. Ids are opaque, bound to the sid, sheet, range,
+  column and `viewGen`.
+- **Range detection** reads the key view's occupancy, so covered and
+  undrawn cells count as empty. Under `visible-only`, author-hidden rows
+  and columns are stepped over (owner ruling, 2026-11-27): they neither end
+  nor extend a region and their contents are never read; a selection whose
+  only gaps are author-hidden lines is one rectangle.
+- **Engine refusals** (merges, arrays, spills, `drawing-impact` for a
+  cell-anchored drawing in a sorted band, and the rest) reach the client
+  as `view-refused` with the local reason, and the viewer shows local's
+  string.
+- **Pivot, slicer and timeline commands are refused on every stream**
+  (§6.4 amendment), not only on protected ones.
 
 ## 12a. Presentation mode for streamed decks
 
@@ -1923,6 +2031,40 @@ outcomes.
     steps folded into one pending target; a find sent 250 ms after the last
     keystroke, a newer one superseding it; a11y windows fetched after a
     250 ms rest (unit) or 400 ms (focused), at most 30 requests per 60 s.
+  *Amendment (2026-11-28, Stage 4c, as built; S4 design §6.3, §6.8, §10
+  item 4, "As built (4c)" P4, P6, P7, P11, P16):*
+  - **`'sheet'` completed.** The class (30 per sliding minute, one in
+    flight, refuse-only, never toward 4008, charged before the in-flight
+    check) also covers `sheet-sort`, `sheet-filter`, `range-detect` and the
+    first page of each `filter-values` request; later cursor pages charge
+    only `'message'`. `sheet-order`, the view fetch, is charged to
+    `'unit'`, as `sheet-layout` is. A request refused by its shape check is
+    `policy-refused` and uncharged.
+  - **Admission through `DocumentLedger.hold`.** Each distinct derived view
+    `(docRef, contentPolicy, sheetIndex, clock, canonical hash)` is held on
+    the document-cache ledger at `orderBytes = 8 × body rows + 160 KiB`,
+    the body rows being the union over the view's sort, `sortFilter` and
+    filter ranges. A hold is pinned and reference-counted
+    (`hold(key, bytes)`, `release(key)`): two sids with the same view are
+    charged once, and it is released when the last one drops it. Unpinned
+    parses may be evicted to make room; a hold that cannot fit beside the
+    held views is refused `view-state-limit`, evicting nothing. A tile or
+    text job that must re-derive an evicted view is admitted at its own
+    estimate plus `orderBytes`. `DOCUMENT_CACHE_BYTES` is unchanged.
+  - **`MAX_ORDERED_SHEETS` = 2.** A sid may hold sorted or filtered views
+    on at most two sheets; a third is `view-state-limit`. Resizes stay
+    unlimited by tab (4b).
+  - **Caps.** At most 64 sort keys and 64 filter columns per request
+    (`SORT_FILTER_MAX_RULES`; the local engine commits at most 8 distinct
+    sort keys); text operands and searches ≤ 256 UTF-16 units, run under
+    the local `WorkBudget`; value lists ≤ 10,000 entries
+    (`VALUE_DISPLAY_LIMIT`), pages ≤ 500 entries and ≤ 48 KiB; a values
+    rule ≤ 4,096 id intervals; a `sheet-order` answer ≤ 160 parts of
+    ≤ 64 KiB, one band, ≤ 1,048,576 band rows. Every 4c request is
+    ≤ 64 KiB.
+  - **Client pacing.** One `'sheet'` op in flight per viewer, queued in
+    order; the value-list search is sent 250 ms after the last keystroke,
+    and a newer one supersedes it.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -2429,6 +2571,27 @@ render pipeline.
       may differ from a local browser fit.
     - (g) A host that opted into 4a with `streamSheets: 'tiles'` gets no
       4b text until it drops the option.
+
+15. **Stage 4c sheet sort and filter as built (2026-11-28; S4 design §10
+    item 6 and "As built (4c)"; `docs/validation/streaming-s4c.md`).**
+    - (a) **Sort order reveals the value order of equal display texts.**
+      A sort runs on values (row-order parity), so two cells that both
+      paint `1.2K` are ordered by their hidden precision. It is ordering
+      information only, about drawn cells; covered and undrawn cells sort
+      as blank.
+    - (b) Text filter conditions run on servable text, so repeated text
+      probes can still narrow a drawn cell's text, as find can (item 14b);
+      the `'sheet'` class limits the rate. Typed number and date conditions
+      are refused on protected streams.
+    - (c) A cell under a column or row default style, with no style of its
+      own, is served with its value: the parser keeps no column or row
+      style, so a column default `;;;` does not withhold it.
+    - (d) The wire takes 64 sort keys, but the local engine commits at most
+      8 distinct keys; a longer sort is refused with the local reason.
+    - (e) The current corpus carries no withheld key cell and no collapsed
+      body row on its `visible-only` half, so corpus parity is evidence of
+      engine and wire parity only; withholding and C1 are proven on
+      fixtures.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

@@ -2717,6 +2717,8 @@ export class DocumentSession {
       ensureComplete: (rect, options) => store.ensureComplete(rect, options),
       release: () => store.release(),
       queryColumn: (request, options) => session.pagedColumn(store, request, options),
+      // A consumer that copied a column page out settles it here: the backing page it re-wraps ends its charge.
+      settle: (payload) => store.settle?.(session.columnPages.get(payload) ?? payload),
       // Task 9 worker find prepares CF text scopes through the same wrapper.
       ...(store.readConditionalFormatting ? { readConditionalFormatting: (request, memory, options) => store.readConditionalFormatting!(request, memory, options) } : {}),
     }
@@ -2751,6 +2753,7 @@ export class DocumentSession {
     const prepared = this.prepared.get(key)
     let items: readonly ColumnEntry[]
     let completeness: Page<ColumnEntry>['completeness'] = 'complete'
+    let backing: Page<ColumnEntry> | undefined
     if (prepared) {
       this.prepared.delete(key)
       this.prepared.set(key, prepared)
@@ -2762,6 +2765,7 @@ export class DocumentSession {
       if (!sameStamp(page.stamp, stamp)) return failedPage(stamp, failure('stale-source', 'Column page owner changed', true))
       items = page.items
       completeness = page.completeness
+      backing = page
     }
     // Advance the position by the rows these entries cover; entries must cover the
     // residual membership contiguously, in order, or the page is malformed.
@@ -2775,11 +2779,15 @@ export class DocumentSession {
       if (next > residual[j].r1) { j++; if (j < residual.length) next = residual[j].r0 }
     }
     if (j < residual.length && !items.length) return failedPage(stamp, failure('page-error', 'Column page made no progress'))
-    return {
+    const out: Page<ColumnEntry> = {
       items, completeness, stamp,
       ...(j < residual.length ? { nextCursor: `vq1:${fingerprint}:${at + j}:${next}` } : {}),
     }
+    if (backing) this.columnPages.set(out, backing)
+    return out
   }
+  /** The backing store page each re-wrapped column page carries, for `preparedStore`'s `settle`. */
+  private readonly columnPages = new WeakMap<object, object>()
   /** Structural handles are value-owned and shared by every guard (§6.3). Only a
    * complete index is cached; incomplete coverage is re-queried next time. */
   private async structure(sheetId: string, signal: AbortSignal): Promise<StructuralIndex> {
@@ -2789,6 +2797,8 @@ export class DocumentSession {
     if (cached && sameStamp(cached.stamp, stamp)) return cached
     const result = await store.queryStructural(FULL_SHEET, { signal, stamp })
     const index = this.options.allocation ? controlStructure(result, this.options.allocation) : new StructuralIndex(result)
+    // The index cloned every record: the query result's own charge ends here.
+    if (this.options.allocation) store.settle?.(result)
     // Cache only a complete index for the generation it was queried under.
     if (index.completeness === 'complete' && sameStamp(index.stamp, stamp) && !this.closed) {
       this.dropStructure(sheetId)
@@ -2817,9 +2827,11 @@ export class DocumentSession {
   /** Populated-cell feed for outside-column guards over resident readRows pages.
    * Honors the caller's per-page limit: a store page larger than the limit is
    * served in slices, resuming at an offset within that same store page. With a
-   * slice, each served page (at most 200 source rows) steps the shared budget. */
+   * slice, each served page (at most 200 source rows) steps the shared budget.
+   * Each store page is settled once its cells are copied out: its admission
+   * charge ends with the read, not when the collector reclaims the page. */
   populatedSource(sheetId: string, signal: AbortSignal, slice?: CooperativeSlice<string>): PopulatedCellSource {
-    const store = this.store(sheetId)
+    const store = this.store(sheetId), backing = this.source.store(sheetId)
     return {
       async iterate(range, cursor, limit) {
         if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) throw new RangeError('Invalid populated page limit')
@@ -2837,6 +2849,7 @@ export class DocumentSession {
           .filter(cell => cell.value !== null || cell.formula !== undefined)
           .map(cell => ({ row: cell.row, col: cell.col })))
         const complete = page.completeness === 'complete' && page.error === undefined
+        backing.settle?.(page)
         if (!complete) return { items: [], completeness: 'incomplete', missing: [range] }
         const end = limit === undefined ? all.length : Math.min(all.length, skip + limit)
         const items = all.slice(skip, end)
@@ -2897,6 +2910,8 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(2, VIEW_OPERATION_STAGES)
       const orderBytes = result.ledger.orderBytes + result.ledger.inverseBytes
+      // The kernel's bookkeeping is read: its charge ends here (the order keeps its own).
+      this.options.allocation?.settle?.(result.metadata)
       if (!charge.set(this.options.allocation ? 0 : orderBytes)) return this.refusal(orderBytes)
       const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, this.options.allocation ? 0 : orderBytes)
       if (projected.kind !== 'projected') return projected

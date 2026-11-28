@@ -465,3 +465,69 @@ describe('print audit (Stage 3b Task 2)', () => {
     r.close()
   })
 })
+
+// ---- Stage 4c Task 4 (P12): sheet_ops and the 4c sheet_views spec ----
+import type { SheetOpRecord } from '../src/audit-store'
+
+describe('sort and filter audit (Stage 4c Task 4)', () => {
+  const range = { r0: 0, r1: 9, c0: 0, c1: 2, header: 1 as const, totals: 0 as const }
+  const opRec = (sid: string, o: Partial<SheetOpRecord> = {}): SheetOpRecord => ({ sid, sheetId: '0', kind: 'filter', viewGen: 3, range, rules: [[1, 'text'], [2, 'values']], outcome: 'ok', at: 5, ...o })
+
+  it('sheet_ops', () => {
+    const path = dbPath()
+    // A store created before 4c has no sheet_ops table; opening adds it and keeps its rows.
+    const s0 = AuditStore.open(path); s0.putRow('s1', row()); s0.close()
+    const raw0 = new Database(path, { strict: true }); raw0.exec('DROP TABLE sheet_ops'); raw0.close()
+    const s = AuditStore.open(path), t = new AuditTable({ store: s })
+    expect(s.columnsOf('sheet_ops')).toEqual(['sid', 'sheet_id', 'kind', 'view_gen', 'range', 'rules', 'outcome', 'at'])
+    expect(s.getRow('s1')).toBeDefined()
+    s.putSheetOp(opRec('s1'))
+    s.putSheetOp(opRec('s1', { kind: 'sort', rules: [[2, 'desc'], [0, 'asc']], outcome: 'stale-view' }))
+    s.putSheetOp(opRec('s1', { kind: 'range-detect', rules: [] }))
+    s.putSheetOp(opRec('s1'))                                    // never deduplicated
+    expect(s.sheetOps('s1')).toEqual([opRec('s1'), opRec('s1', { kind: 'sort', rules: [[2, 'desc'], [0, 'asc']], outcome: 'stale-view' }), opRec('s1', { kind: 'range-detect', rules: [] }), opRec('s1')])
+    expect(s.sheetOps('nope')).toEqual([])
+    // Rules carry kinds only: an operand in the kind slot is refused, so no operand text reaches a column.
+    expect(() => s.putSheetOp(opRec('s1', { rules: [[1, 'top secret']] }))).toThrow(/rule kind/)
+    expect(() => s.putSheetOp(opRec('nope'))).toThrow()
+    const { at: _a, ...op } = opRec('s1', { kind: 'filter-values', rules: [[1, 'values']] })
+    t.recordSheetOp(op)
+    expect(s.sheetOps('s1').at(-1)).toEqual({ ...op, at: expect.any(Number) })
+    expect(() => t.recordSheetOp({ ...op, sid: 'nope' })).toThrow(/no audit row/)
+    s.close()
+    const raw = new Database(path, { strict: true })
+    const cells = raw.query<Record<string, unknown>, []>('SELECT * FROM sheet_ops').all().flatMap((r) => Object.values(r).map(String))
+    raw.close()
+    expect(cells.some((c) => c.includes('secret'))).toBe(false)
+    expect(cells).toContain(JSON.stringify([[1, 'text'], [2, 'values']]))
+    // Expiry removes the ops with their row (the foreign key would otherwise block the row's delete).
+    const s2 = AuditStore.open(path), t2 = new AuditTable({ store: s2 })
+    s2.putRow('old', row({ startedAt: 0 })); s2.putSheetOp(opRec('old'))
+    expect(t2.expire(AUDIT_RETENTION_SEC)).toBe(1)
+    expect(s2.sheetOps('old')).toEqual([]); expect(s2.sheetOps('s1')).toHaveLength(5)
+    s2.close()
+    const r = AuditStore.openReadOnlyForTrace(path)
+    expect(() => r.putSheetOp(opRec('s1'))).toThrow(/read-only/)
+    r.close()
+  })
+
+  it('sheet_views spec', () => {
+    const s = AuditStore.open(':memory:'); s.putRow('a', row())
+    const clock = { day: '2026-11-23', timeZone: 'Europe/London' }
+    // A 4b record reads back as written, and its canonical spec has no sortFilter and no filter.
+    const legacy: SheetViewRecord = { sid: 'a', sheetId: '0', viewGen: 1, spec: { sort: null, filters: [], sizes: [{ axis: 'col', index: 1, px: 90 }] }, clock, at: 5 }
+    s.putSheetView(legacy)
+    expect(s.sheetView('a', '0', 1)).toEqual(legacy)
+    expect(sheetViewSpecOf(s.sheetView('a', '0', 1)!.spec)).toEqual({ sort: null, sortFilter: null, filter: null, sizes: [{ axis: 'col', index: 1, px: 90 }] })
+    // A 4c record round-trips its values positions and its text operands in the clear.
+    const filter = { range, columns: [[0, { kind: 'values', list: { range, col: 0 }, positions: [0, 3, 7], mode: 'exclude', blanks: true }], [1, { kind: 'text', op: 'contains', first: 'Ünïcode op', wildcards: true }]] as SheetViewFilter['columns'] }
+    const spec = { sort: { range, keys: [{ col: 1, order: 'desc' as const }], caseSensitive: true }, sortFilter: filter, filter, sizes: [] }
+    const rec: SheetViewRecord = { sid: 'a', sheetId: '0', viewGen: 2, spec, clock, at: 6 }
+    s.putSheetView(rec)
+    expect(s.sheetView('a', '0', 2)).toEqual(rec)
+    expect(sheetViewSpecOf(s.sheetView('a', '0', 2)!.spec)).toEqual(spec)
+    s.close()
+  })
+})
+import { sheetViewSpecOf } from '../src/audit-store'
+import type { ResolvedFilter as SheetViewFilter } from '../src/sheet/view-spec'

@@ -31,6 +31,12 @@ export interface Manifest {
   /** Stage 4b (P1): `1` iff the client sent `sheet-view@1` and the server serves the session in tiles mode with the 4b ops
    * (find, copy, a11y text, fit, resize). Valid only with `sheetMode: 'tiles'`; absent for a 4a server or session. */
   sheetView?: 1
+  /** Stage 4c (P1): `1` iff the server serves sort, filter, value lists, range detection and the view fetch to this
+   * session. Valid only with `sheetView: 1`; absent for a 4b server. */
+  sheetSort?: 1
+  /** Stage 4c (P1): `true` iff typed number and date filter conditions are served (contentPolicy `'full'`). Valid only
+   * with `sheetSort`. */
+  typedFilters?: true
 }
 export interface ManifestSheet { sheetId: string; name: string }
 export interface ManifestTiles { px: 512; zoomSteps: number[]; dprs: [1, 2]; palettes: ['light', 'dark']; maxBatch: 64 }
@@ -52,6 +58,7 @@ const obj = (v: unknown, f: string): Record<string, unknown> => { if (!v || type
 const str = (v: unknown, f: string, max = 256, re?: RegExp): string => { if (typeof v !== 'string' || v.length > max || (re && !re.test(v))) throw new Bad(f); return v }
 const int = (v: unknown, f: string, min: number, max: number): number => { if (!Number.isInteger(v) || (v as number) < min || (v as number) > max) throw new Bad(f); return v as number }
 const bool = (v: unknown, f: string): boolean => { if (typeof v !== 'boolean') throw new Bad(f); return v }
+const literalTrue = (v: unknown, f: string): true => { if (v !== true) throw new Bad(f); return v }
 const oneOf = <T extends string>(v: unknown, f: string, set: readonly T[]): T => { if (!set.includes(v as T)) throw new Bad(f); return v as T }
 const cap = (v: unknown, f: string): number | null => v === null ? null : int(v, f, 1, Number.MAX_SAFE_INTEGER)
 const printCaps = (o: Record<string, unknown>) => ({ maxPages: cap(o.maxPages, 'caps.print.maxPages'), maxSessionPages: cap(o.maxSessionPages, 'caps.print.maxSessionPages') })
@@ -103,6 +110,8 @@ export function validateManifest(json: unknown): ManifestResult {
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
     const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')
     if (m.sheetView !== undefined && m.sheetMode === undefined) throw new Bad('sheetView')
+    if (m.sheetSort !== undefined && m.sheetView === undefined) throw new Bad('sheetSort')
+    if (m.typedFilters !== undefined && m.sheetSort === undefined) throw new Bad('typedFilters')
     const kc = k.copy === null ? null : obj(k.copy, 'caps.copy')
     const canMedia = c.media === undefined ? undefined : bool(c.media, 'can.media')
     const media = mediaCaps(k.media)
@@ -141,7 +150,7 @@ export function validateManifest(json: unknown): ManifestResult {
       },
       limits: { maxUnitPx: int(l.maxUnitPx, 'limits.maxUnitPx', 1, 8192), maxAssetBytes: int(l.maxAssetBytes, 'limits.maxAssetBytes', 1, 1 << 30), wsFrameBytes: int(l.wsFrameBytes, 'limits.wsFrameBytes', 1024, 1 << 20), tilePx: int(l.tilePx, 'limits.tilePx', 16, 8192) },
       notices: arr(m.notices, 'notices', MAX_NOTICES).map((n, i) => str(n, `notices[${i}]`, 128)),
-      ...(m.sheetMode === undefined ? {} : { sheetMode: oneOf(m.sheetMode, 'sheetMode', ['tiles'] as const), sheets: sheetList(m.sheets), tiles: tilesBlock(m.tiles), ...(m.sheetView === undefined ? {} : { sheetView: int(m.sheetView, 'sheetView', 1, 1) as 1 }) }),
+      ...(m.sheetMode === undefined ? {} : { sheetMode: oneOf(m.sheetMode, 'sheetMode', ['tiles'] as const), sheets: sheetList(m.sheets), tiles: tilesBlock(m.tiles), ...(m.sheetView === undefined ? {} : { sheetView: int(m.sheetView, 'sheetView', 1, 1) as 1 }), ...(m.sheetSort === undefined ? {} : { sheetSort: int(m.sheetSort, 'sheetSort', 1, 1) as 1 }), ...(m.typedFilters === undefined ? {} : { typedFilters: literalTrue(m.typedFilters, 'typedFilters') }) }),
     }
     return { ok: true, manifest }
   } catch (e) {

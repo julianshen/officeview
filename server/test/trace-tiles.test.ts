@@ -184,3 +184,48 @@ describe('traceTiles of a resized view (Stage 4b, P11)', () => {
     await h.stop()
   }, 30_000)
 })
+
+import { pool } from './harness'
+import { deriveBasisKey } from '../src/mark/basis'
+import { extendedCodeword } from '../src/mark/bch'
+import { tileBasisLabel } from '../src/sheet/tile'
+import { SORT_GRID, sortGrid } from './sheet-fixtures'
+
+describe('traceTiles of a sorted view (Stage 4c, P9)', () => {
+  test('a capture of a sorted view traces', async () => {
+    const doc = await sortGrid()
+    // Three forensic sids open the sheet at the identity view; each then holds a sorted view at viewGen 1, written as
+    // the socket would write it (its `sheet_views` row, then each tile marked on its own basis and recorded before it
+    // goes out). Two sids share B descending, the third holds B ascending: two references.
+    const s = await serve(doc)
+    const docRef = await docRefOf(keys1.kDoc, doc)
+    const range = { r0: 0, r1: SORT_GRID.rows - 1, c0: 0, c1: SORT_GRID.cols - 1, header: 1 as const, totals: 0 as const }
+    const viewFor = (order: 'asc' | 'desc') => ({ sort: { range, keys: [{ col: 1, order }], caseSensitive: false }, sortFilter: null, filter: null })
+    const views = [viewFor('desc'), viewFor('desc'), viewFor('asc')]
+    const bits = (hex: string) => Uint8Array.from({ length: 40 }, (_, i) => (parseInt(hex.slice((i >> 3) * 2, (i >> 3) * 2 + 2), 16) >> (7 - (i % 8))) & 1)
+    const { docKey } = await host.open(docRef, doc, 'visible-only', { sheetMode: 'tiles' })
+    const sorted = new Map<string, Map<string, Uint8Array>>()
+    for (const [i, sid] of s.sids.entries()) {
+      const row = s.store.getRow(sid)!
+      const clock = s.store.sheetView(sid, '0', 0)!.clock
+      s.store.putSheetView({ sid, sheetId: '0', viewGen: 1, spec: { ...views[i]!, sizes: [] }, clock, at: 0 })
+      const code = extendedCodeword(bits(row.forensic!.msg40))
+      const own = new Map<string, Uint8Array>()
+      for (let r = WINDOW.r0; r <= WINDOW.r1; r++) for (let c = WINDOW.c0; c <= WINDOW.c1; c++) {
+        const t = await host.renderTile(docKey, { sheetIndex: 0, viewGen: 1, zoomStep: ZOOM_STEP, dpr: 1, palette: 'light', col: c, row: r, mark: row.visibleMark, clock, view: views[i]! })
+        const kBasis = deriveBasisKey(keys1.kBasisRoot, docRef, tileBasisLabel('0', ZOOM_STEP, 1, c, r))
+        const m = await pool().encode(sid, { png: t.png, w: t.w, h: t.h, kBasis, code }, t.w * t.h * 16 + 2 * t.png.length)
+        if (!('png' in m)) throw new Error(`unmarked: ${JSON.stringify(m)}`)
+        s.store.putTileDelivery({ sid, sheetId: '0', viewGen: 1, zoomStep: ZOOM_STEP, dpr: 1, palette: 'light', col: c, row: r, status: 'l1', refSha256: sha(t.png), at: 0 })
+        own.set(`${c},${r}`, m.png)
+      }
+      sorted.set(sid, own)
+    }
+    for (const owner of [s.sids[1]!, s.sids[2]!]) {
+      const a = await traceOf(s, doc, paneCapture(sorted.get(owner)!))
+      console.log('[4c task6] sorted lossless', JSON.stringify(brief(a)))
+      expect(a).toMatchObject({ kind: 'traced', sid: owner, target: 'tiles' })
+    }
+    await s.h.stop()
+  }, 120_000)
+})

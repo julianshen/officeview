@@ -8,7 +8,7 @@
  */
 import type { WireSelection } from '../../../src/stream/sheet-wire'
 import type { CopyPolicy } from '../hooks'
-import { AdmissionRefused } from '../pool'
+import { AdmissionRefused, SheetPrepRefused } from '../pool'
 import { chunkText, COPY_MAX_BYTES, type CopyRefusal, type TextSlot } from '../text/ops'
 import type { SheetTextReply } from './text-ops'
 import type { WireSizes } from './view-state'
@@ -35,6 +35,9 @@ export interface SheetCopyContext {
   alive: () => boolean
   send: (msg: object) => void
   refuse: (code: SheetCopyRefusal, nums?: { limit?: number; requested?: number }) => void
+  /** Task 14a fix round 1: the sheet's sort data could not be prepared (`SheetPrepRefused`): answer `view-refused
+   * {reason: 'too-large'}`. */
+  tooLarge: () => void
 }
 
 /** The bounding source rect of `s`'s ranges (undefined for no ranges). */
@@ -78,6 +81,7 @@ async function sheetCopyTurn(c: SheetCopyContext): Promise<void> {
     let reply: SheetTextReply
     try { reply = await c.job(view.sizes, COPY_MAX_BYTES) } catch (e) {
       if (!c.alive()) return
+      if (e instanceof SheetPrepRefused) { answered = true; return c.tooLarge() }
       return refuse(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
     }
     if (!c.alive()) return

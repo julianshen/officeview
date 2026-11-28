@@ -85,6 +85,7 @@ import { domClassBytes, domClassCounts } from './domCost'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
 import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
+import { streamControls, streamFilterPlaceholder } from './streamControls'
 import type { ControlSnapshot } from './controlsClient'
 import { failureText } from './controlUi'
 import { copySelection, copySessionBudget } from '../../xlsx/view/copy'
@@ -883,7 +884,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (shared) {
       // The worker owns a paged sheet's view; its revision is the worker viewGen (a stream's: the server's viewGen).
       const view = shared.view(sheetId)
-      return { revision: view.revision, order: view.order, ...(view.visibility ? { visibility: view.visibility } : {}), filter: view.filter, sort: view.sort }
+      // P15: after a refetch a 4c stream's filter names its columns only; the view holds a placeholder rule per column.
+      const filter = view.filter ?? (stream?.sortOps ? streamFilterPlaceholder(stream, sheetId) : null)
+      return { revision: view.revision, order: view.order, ...(view.visibility ? { visibility: view.visibility } : {}), filter, sort: view.sort }
     }
     const local = localViews.get(sheetId), external = views?.[sheetId]
     return local && (!external || local.revision >= external.revision) ? local : external ?? { revision: 0 }
@@ -990,12 +993,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // shown mask is that mask AND NOT authored-hidden (it never revives a
     // filtered row; source identities are unchanged).
     const visibility = sameStructure ? previous!.view.visibility
-      : input.visibility ? (shared && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
+      // A stream's mask is the server's (it applies C1, and a 'full' filter may show authored-hidden rows): taken as sent.
+      : input.visibility ? (shared && !stream && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
         : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
     const overlay = shared ? undefined : pivotOverlays.get(sheetId)
     // A stream sheet's geometry is the server's layout alone (no cells, no drawings: they are pixels in the tiles).
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : stream ? streamSheetGeometry(stream.wireLayout(sheetId)) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : stream ? streamSheetGeometry(stream.wireLayout(sheetId), input.visibility ? { order, visibility } : undefined) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(shared ? null : order, shared && visibility === input.visibility ? null : visibility)
@@ -2139,10 +2143,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     const abort = new AbortController()
-    const resources = controlResources.current ??= createViewerControlResources(budgetProfile, undefined, mainLedger)
     const sheetId = activeSheetId
-    const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
-      view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),
+    const view = () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection })
+    // Stage 4c (P16): a `sheetSort` stream's controls are the server's (its view is adopted from the server's order);
+    // nothing local is indexed or staged.
+    const ready = stream?.sortOps ? Promise.resolve(streamControls({ stream, sheetId, snapshot: () => snapshot(sheetId), view,
+      publish: () => { cancelCopy(); current.current.entryFor(sheetId); rerender(); return snapshot(sheetId) } }))
+      : viewerControls({ doc, source, resources: controlResources.current ??= createViewerControlResources(budgetProfile, undefined, mainLedger), sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
+      view,
       publish: draft => {
         cancelCopy()
         // A worker-owned view was already adopted from the worker's delta.
@@ -3428,6 +3436,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const resized = Boolean(activeSheetId && (stream ? streamText && streamSized(activeSheetId) : !sizesOf(activeSheetId).empty))
   // P15 (S4 §6.11): the stream notices. A 4a stream always says text is unavailable; a 4b one while copy or a11y is
   // off (this widens S3 item 10's "both"), and an author-hidden sheet says so while it is shown.
+  // The header sort and filter menus: local and paged sheets, and (4c, P16) a stream whose session serves `sheetSort`.
+  const sortFilterMenus = {
+    onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
+  }
   const streamNotices: string[] = stream ? [
     props.remoteChrome && (!streamText || !allowCopy || streamA11yMode === 'off') ? props.remoteChrome.textUnavailable : '',
     streamText && activeSheetId && streamText.wireLayout(activeSheetId).authorHidden ? STREAM_AUTHOR_HIDDEN : '',
@@ -3539,12 +3551,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
-              {...(stream ? streamText ? { positionsOnly: !streamCells, onResize: resizeLine } : { positionsOnly: true, selectable: false } : {
-                onResize: resizeLine,
-                onSortCycle: (col: number, shift: boolean) => void sortCycle(col, shift), onFilter: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'filter', col, invoker }) }, onSortDialog: (col: number, invoker: HTMLElement) => { setPopup({ kind: 'sort', col, invoker }) },
+              {...(stream ? streamText ? { positionsOnly: !streamCells, onResize: resizeLine, ...(stream.sortOps ? sortFilterMenus : {}) } : { positionsOnly: true, selectable: false } : {
+                onResize: resizeLine, ...sortFilterMenus,
               })} pendingSortColumn={sortPending?.col ?? null} onNotice={setAnnouncement}
               popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
-                : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
+                : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} typedConditions={stream ? stream.typedFilters : true} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
               cellControls={scroll && ((pivotUi && pivotController && activePivots?.length) || (pivotUi && slicerController && activeSlicerDrawings.length) || (pivotUi && timelineController && activeTimelineDrawings.length)) ? <>
                 {pivotUi && pivotController && activePivots?.length ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
                   cellText={pivotCellText} isFiltered={(cacheId, field) => slicerController?.isFieldFiltered(cacheId, field) ?? false} /> : null}
